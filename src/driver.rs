@@ -88,8 +88,8 @@ impl Interp {
                 },
                 Top::Grant(x, spec) => {
                     let v = match spec {
-                        HostSpec::Model { in_price, out_price, ceiling } => {
-                            Value::Model(Rc::new(ModelSpec { name: x.clone(), in_price, out_price, ceiling }))
+                        HostSpec::Model { id, in_price, out_price, ceiling, think } => {
+                            Value::Model(Rc::new(ModelSpec { name: x.clone(), id, think, in_price, out_price, ceiling }))
                         }
                         HostSpec::Kernel => self.cap(&x, CapKind::Kernel),
                         HostSpec::Filesystem => self.cap(&x, CapKind::Filesystem),

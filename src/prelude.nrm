@@ -3,7 +3,7 @@
 
 (datatype Role    [System] [User] [Assistant] [Tool])
 (record   Message (role Role) (content Text))
-(datatype Failure [Invalid (raw Text)] [ToolError (message Text)]
+(datatype Failure [Invalid (raw Text)] [ToolError (message Text)] [Refused (category Sym)]
                   [OverBudget] [PastDeadline] [Raised (reason Sym)])
 (datatype Option  [None] [Some (value Any)])
 (record   Pair    (fst Any) (snd Any))

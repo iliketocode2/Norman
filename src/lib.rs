@@ -15,6 +15,7 @@
 //! | `driver`  | definitions (§6.6), extended definitions, unit tests   |
 
 pub mod ast;
+pub mod defaults;
 pub mod driver;
 pub mod host;
 pub mod lexer;

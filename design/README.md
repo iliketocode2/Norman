@@ -273,6 +273,7 @@ Ramsey's point exactly: proofs are most useful when they fail.
 | [`06-algebraic-laws.md`](06-algebraic-laws.md) | laws for every construct; what `==` means; tempting non-laws; two proofs | refactor, optimize, or reason about programs |
 | [`07-small-step-semantics.md`](07-small-step-semantics.md) | the event-by-event machine for concurrency and shared budgets | implement the interpreter, or see who wins a budget race |
 | [`08-implementation-notes.md`](08-implementation-notes.md) | how to run it; rule-to-code map; every deliberate deviation; what the tests found | work on the interpreter |
+| [`09-live-oracle.md`](09-live-oracle.md) | connecting `ask` to a real model: request mapping, types to JSON Schema, reservations from `count_tokens`, refusals, the real clock. **The default model is Claude Sonnet 5, set in one place so it can change.** | connect µNorman to a model API |
 
 Where documents disagree, the later one wins. Each correction is also noted at
 the place it corrects.

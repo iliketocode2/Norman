@@ -641,8 +641,8 @@ already proved about the core, with no new cases.
 ```
 (datatype Role    [System] [User] [Assistant] [Tool])
 (record   Message (role Role) (content Text))
-(datatype Failure [Invalid (raw Text)] [ToolError (message Text)]
-                  [OverBudget] [PastDeadline] [Raised (reason Sym)])
+(datatype Failure [Invalid (raw Text)] [ToolError (message Text)] [Refused (category Sym)]
+                  [OverBudget] [PastDeadline] [Raised (reason Sym)])     ; Refused: 09, decision B
 (datatype Option  [None] [Some (value Any)])
 (record   Pair    (fst Any) (snd Any))
 (record   Resources (cost Any) (time Any))

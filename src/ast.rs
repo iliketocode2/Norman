@@ -212,8 +212,9 @@ pub enum Def {
 /// What a `grant` hands to the program.
 #[derive(Debug, Clone)]
 pub enum HostSpec {
-    /// Prices are integer micro-dollars per token.
-    Model { in_price: i64, out_price: i64, ceiling: u64 },
+    /// Prices are integer micro-dollars per token. Omitted fields take the
+    /// defaults in `crate::defaults` (Claude Sonnet 5).
+    Model { id: String, in_price: i64, out_price: i64, ceiling: u64, think: u64 },
     Kernel,
     Filesystem,
     Http,
@@ -223,6 +224,7 @@ pub enum HostSpec {
 #[derive(Debug, Clone)]
 pub enum Entry {
     Reply { json: String, out: u64, latency: i64 },
+    Refusal { category: String, out: u64, latency: i64 },
     ProviderError { msg: String, latency: i64 },
     Result { text: String, latency: i64 },
     Error { msg: String, latency: i64 },
@@ -232,6 +234,7 @@ impl Entry {
     pub fn latency(&self) -> i64 {
         match self {
             Entry::Reply { latency, .. }
+            | Entry::Refusal { latency, .. }
             | Entry::ProviderError { latency, .. }
             | Entry::Result { latency, .. }
             | Entry::Error { latency, .. } => *latency,
