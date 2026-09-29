@@ -170,7 +170,9 @@ impl<'a> Oracle for LiveOracle<'a> {
                         match self.rx.recv_timeout(Duration::from_millis((l - now) as u64)) {
                             Ok(a) => a,
                             Err(RecvTimeoutError::Timeout) => return Ok(None),
-                            Err(RecvTimeoutError::Disconnected) => return Err("internal error: the worker channel closed".into()),
+                            Err(RecvTimeoutError::Disconnected) => {
+                                return Err("internal error: the worker channel closed".into());
+                            }
                         }
                     }
                 }

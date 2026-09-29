@@ -214,7 +214,13 @@ pub enum Def {
 pub enum HostSpec {
     /// Prices are integer micro-dollars per token. Omitted fields take the
     /// defaults in `crate::defaults` (Claude Sonnet 5).
-    Model { id: String, in_price: i64, out_price: i64, ceiling: u64, think: u64 },
+    Model {
+        id: String,
+        in_price: i64,
+        out_price: i64,
+        ceiling: u64,
+        think: u64,
+    },
     Kernel,
     Filesystem,
     Http,

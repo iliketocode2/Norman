@@ -106,22 +106,71 @@ enum Ctl {
 
 /// Continuation frames: the evaluation contexts `E` of 07 §2, one per hole.
 enum Frame {
-    ConArgs { e: ExpRef, done: Vec<Value>, env: Env },
-    RecordArgs { e: ExpRef, done: Vec<Value>, env: Env },
+    ConArgs {
+        e: ExpRef,
+        done: Vec<Value>,
+        env: Env,
+    },
+    RecordArgs {
+        e: ExpRef,
+        done: Vec<Value>,
+        env: Env,
+    },
     Field(Name),
-    If { e: ExpRef, env: Env },
-    Let { e: ExpRef, env: Env },
-    ApplyFn { e: ExpRef, env: Env },
-    ApplyArgs { e: ExpRef, f: Value, done: Vec<Value>, env: Env },
-    Case { e: ExpRef, env: Env },
-    AskModel { e: ExpRef, env: Env },
-    AskCtx { e: ExpRef, model: Rc<ModelSpec> },
-    CallCap { e: ExpRef, env: Env },
-    CallArgs { e: ExpRef, cap: Cap, done: Vec<Value>, env: Env },
+    If {
+        e: ExpRef,
+        env: Env,
+    },
+    Let {
+        e: ExpRef,
+        env: Env,
+    },
+    ApplyFn {
+        e: ExpRef,
+        env: Env,
+    },
+    ApplyArgs {
+        e: ExpRef,
+        f: Value,
+        done: Vec<Value>,
+        env: Env,
+    },
+    Case {
+        e: ExpRef,
+        env: Env,
+    },
+    AskModel {
+        e: ExpRef,
+        env: Env,
+    },
+    AskCtx {
+        e: ExpRef,
+        model: Rc<ModelSpec>,
+    },
+    CallCap {
+        e: ExpRef,
+        env: Env,
+    },
+    CallArgs {
+        e: ExpRef,
+        cap: Cap,
+        done: Vec<Value>,
+        env: Env,
+    },
     Fail,
-    Catch { e: ExpRef, env: Env },
-    BudgetCost { e: ExpRef, env: Env },
-    BudgetTime { e: ExpRef, cost: Option<i64>, env: Env },
+    Catch {
+        e: ExpRef,
+        env: Env,
+    },
+    BudgetCost {
+        e: ExpRef,
+        env: Env,
+    },
+    BudgetTime {
+        e: ExpRef,
+        cost: Option<i64>,
+        env: Env,
+    },
     /// SCOPE(σ, E): the thread is running inside budget scope σ.
     Scope(usize),
 }
@@ -360,10 +409,7 @@ impl<'a> Machine<'a> {
     /// A thread's current scope: its innermost SCOPE frame, or its base scope.
     fn current_scope(&self, tid: usize) -> usize {
         let t = &self.threads[tid];
-        t.k.iter()
-            .rev()
-            .find_map(|f| if let Frame::Scope(s) = f { Some(*s) } else { None })
-            .unwrap_or(t.base_scope)
+        t.k.iter().rev().find_map(|f| if let Frame::Scope(s) = f { Some(*s) } else { None }).unwrap_or(t.base_scope)
     }
 
     fn chain(&self, mut s: usize) -> Vec<usize> {
@@ -424,7 +470,12 @@ impl<'a> Machine<'a> {
                     return stuck(format!("unknown constructor {}", k));
                 };
                 if def.fields.len() != args.len() {
-                    return stuck(format!("constructor {} expects {} argument(s), got {}", k, def.fields.len(), args.len()));
+                    return stuck(format!(
+                        "constructor {} expects {} argument(s), got {}",
+                        k,
+                        def.fields.len(),
+                        args.len()
+                    ));
                 }
                 if args.is_empty() {
                     self.set(tid, Ctl::Ret(Value::Con(k.clone(), Rc::new(vec![]))));
@@ -630,7 +681,8 @@ impl<'a> Machine<'a> {
                 }
             }
             Frame::Fail => {
-                let is_failure = matches!(&v, Value::Con(k, _) if self.theta.con_type(k).is_some_and(|t| &**t == "Failure"));
+                let is_failure =
+                    matches!(&v, Value::Con(k, _) if self.theta.con_type(k).is_some_and(|t| &**t == "Failure"));
                 if !is_failure {
                     return stuck(format!("fail needs a value of datatype Failure, but got {}", v));
                 }
@@ -695,7 +747,11 @@ impl<'a> Machine<'a> {
             }
         }
         if given.len() != declared.len() {
-            return stuck(format!("record {} has no such field among {:?}", r, fields.iter().map(|(f, _)| f.to_string()).collect::<Vec<_>>()));
+            return stuck(format!(
+                "record {} has no such field among {:?}",
+                r,
+                fields.iter().map(|(f, _)| f.to_string()).collect::<Vec<_>>()
+            ));
         }
         self.set(tid, Ctl::Ret(Value::Record(r.clone(), Rc::new(out))));
         Ok(())
@@ -705,7 +761,11 @@ impl<'a> Machine<'a> {
         match f {
             Value::Closure(c) => {
                 if c.lambda.formals.len() != args.len() {
-                    return stuck(format!("function expects {} argument(s), got {}", c.lambda.formals.len(), args.len()));
+                    return stuck(format!(
+                        "function expects {} argument(s), got {}",
+                        c.lambda.formals.len(),
+                        args.len()
+                    ));
                 }
                 let env = c.lambda.formals.iter().zip(args).fold(c.env.clone(), |env, (x, v)| env.extend(x.clone(), v));
                 self.set(tid, Ctl::Eval(c.lambda.body.clone(), env));
@@ -737,7 +797,14 @@ impl<'a> Machine<'a> {
                     (Num(a), Num(b)) => Num(op(*a, *b).ok_or_else(overflow)?),
                     (Money(a), Money(b)) => Money(op(*a, *b).ok_or_else(overflow)?),
                     (Dur(a), Dur(b)) => Dur(op(*a, *b).ok_or_else(overflow)?),
-                    (a, b) => return stuck(format!("{} needs two numbers, amounts of money or durations of the same kind, got {} and {}", p.name(), a, b)),
+                    (a, b) => {
+                        return stuck(format!(
+                            "{} needs two numbers, amounts of money or durations of the same kind, got {} and {}",
+                            p.name(),
+                            a,
+                            b
+                        ));
+                    }
                 }
             }
             Prim::Mul => {
@@ -825,7 +892,13 @@ impl<'a> Machine<'a> {
         self.sync_clock();
         let parent = self.current_scope(tid);
         let id = self.scopes.len();
-        self.scopes.push(Scope { limit: cost, spent: 0, reserved: 0, deadline: time.map(|t| self.now + t), parent: Some(parent) });
+        self.scopes.push(Scope {
+            limit: cost,
+            spent: 0,
+            reserved: 0,
+            deadline: time.map(|t| self.now + t),
+            parent: Some(parent),
+        });
         self.push(tid, Frame::Scope(id));
         self.set(tid, Ctl::Eval(body, env));
     }
@@ -960,7 +1033,9 @@ impl<'a> Machine<'a> {
                 };
                 match parsed {
                     Some(v) => (input_tokens, output_tokens, Ctl::Ret(v), "ok".to_string()),
-                    None => (input_tokens, output_tokens, raise("Invalid", vec![Value::str(&json)]), "invalid".to_string()),
+                    None => {
+                        (input_tokens, output_tokens, raise("Invalid", vec![Value::str(&json)]), "invalid".to_string())
+                    }
                 }
             }
             Completion::Refusal { category, input_tokens, output_tokens } => {
@@ -971,7 +1046,9 @@ impl<'a> Machine<'a> {
                 (input_tokens, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg))
             }
             Completion::ToolResult { text } => (0, 0, Ctl::Ret(Value::str(&text)), "ok".to_string()),
-            Completion::ToolError { msg } => (0, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg)),
+            Completion::ToolError { msg } => {
+                (0, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg))
+            }
         };
         let charge = in_tokens * price_in + out_tokens * price_out;
         self.settle(r.scope, r.reserve, charge);
@@ -1124,7 +1201,8 @@ impl<'a> Machine<'a> {
                     // M-NODE-DONE: start every node whose dependencies are now done.
                     let ready: Vec<usize> = (0..wf.def.nodes.len())
                         .filter(|&j| {
-                            wf.state[j] == NodeState::Pending && wf.def.nodes[j].deps.iter().all(|&d| wf.state[d] == NodeState::Done)
+                            wf.state[j] == NodeState::Pending
+                                && wf.def.nodes[j].deps.iter().all(|&d| wf.state[d] == NodeState::Done)
                         })
                         .collect();
                     for j in ready {

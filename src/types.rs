@@ -68,9 +68,10 @@ impl TypeEnv {
                 return Err(format!("constructor {} appears twice in {}", c.name, name));
             }
             if let Some((owner, _)) = self.con_owner.get(&c.name)
-                && *owner != name {
-                    return Err(format!("constructor {} already belongs to {}", c.name, owner));
-                }
+                && *owner != name
+            {
+                return Err(format!("constructor {} already belongs to {}", c.name, owner));
+            }
             self.check_fields(&c.fields, &name, &c.name)?;
         }
         if let Some(old) = self.datatypes.get(&name) {
@@ -212,11 +213,7 @@ impl TypeEnv {
                         }
                         alternatives.push(object(props));
                     }
-                    if alternatives.len() == 1 {
-                        alternatives.pop().unwrap()
-                    } else {
-                        json!({"anyOf": alternatives})
-                    }
+                    if alternatives.len() == 1 { alternatives.pop().unwrap() } else { json!({"anyOf": alternatives}) }
                 } else if let Some(fs) = self.records.get(n).cloned() {
                     let mut props = vec![];
                     for (f, t) in fs.iter() {
@@ -279,11 +276,8 @@ impl TypeEnv {
                     if obj.len() != c.fields.len() + 1 {
                         return None;
                     }
-                    let vals = c
-                        .fields
-                        .iter()
-                        .map(|(f, t)| self.validate(obj.get(&**f)?, t))
-                        .collect::<Option<Vec<_>>>()?;
+                    let vals =
+                        c.fields.iter().map(|(f, t)| self.validate(obj.get(&**f)?, t)).collect::<Option<Vec<_>>>()?;
                     Some(Value::Con(c.name.clone(), Rc::new(vals)))
                 } else if let Some(fs) = self.records.get(n) {
                     if obj.len() != fs.len() {

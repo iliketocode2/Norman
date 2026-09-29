@@ -195,7 +195,9 @@ impl Value {
             (Bool(a), Bool(b)) => a == b,
             (Nil, Nil) | (Inf, Inf) => true,
             (Cons(a, b), Cons(c, d)) => a.equal(c) && b.equal(d),
-            (Con(k, xs), Con(j, ys)) => k == j && xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(x, y)| x.equal(y)),
+            (Con(k, xs), Con(j, ys)) => {
+                k == j && xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(x, y)| x.equal(y))
+            }
             (Record(r, xs), Record(s, ys)) => {
                 r == s && xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|((f, x), (g, y))| f == g && x.equal(y))
             }

@@ -116,7 +116,8 @@ pub fn parse_count(status: u16, body: &str) -> Result<i64, Failure> {
     if !(200..300).contains(&status) {
         return Err(classify_error(status, body));
     }
-    let j: J = serde_json::from_str(body).map_err(|e| Failure::Fatal(format!("count_tokens returned malformed JSON: {}", e)))?;
+    let j: J = serde_json::from_str(body)
+        .map_err(|e| Failure::Fatal(format!("count_tokens returned malformed JSON: {}", e)))?;
     j.get("input_tokens")
         .and_then(J::as_i64)
         .ok_or_else(|| Failure::Fatal(format!("count_tokens response has no input_tokens: {}", body)))
@@ -221,7 +222,10 @@ mod tests {
             ConDef { name: Rc::from("Leaf"), fields: vec![] },
             ConDef {
                 name: Rc::from("Node"),
-                fields: vec![(Rc::from("left"), Type::Named(Rc::from("Tree"))), (Rc::from("right"), Type::Named(Rc::from("Tree")))],
+                fields: vec![
+                    (Rc::from("left"), Type::Named(Rc::from("Tree"))),
+                    (Rc::from("right"), Type::Named(Rc::from("Tree"))),
+                ],
             },
         ];
         t.add_datatype(Rc::from("Tree"), tree).unwrap();
@@ -319,7 +323,14 @@ mod tests {
     #[test]
     fn tool_messages_are_user_turns_and_same_role_turns_merge() {
         let r = req(
-            &[("System", "a"), ("User", "task"), ("Assistant", "x = 1"), ("Tool", ""), ("User", "and?"), ("System", "b")],
+            &[
+                ("System", "a"),
+                ("User", "task"),
+                ("Assistant", "x = 1"),
+                ("Tool", ""),
+                ("User", "and?"),
+                ("System", "b"),
+            ],
             Type::Bool,
         );
         let conv = conversation(&r).unwrap();
@@ -354,7 +365,8 @@ mod tests {
 
     #[test]
     fn a_wrapped_answer_is_unwrapped_and_thinking_is_skipped() {
-        let c = parse_response(200, &ok("end_turn", r#"{"value": {"tag": "Sell", "reason": "Margins."}}"#), true).unwrap();
+        let c =
+            parse_response(200, &ok("end_turn", r#"{"value": {"tag": "Sell", "reason": "Margins."}}"#), true).unwrap();
         let Completion::Answer { json, input_tokens, output_tokens, truncated } = c else { panic!("{:?}", c) };
         assert_eq!(serde_json::from_str::<J>(&json).unwrap(), json!({"tag": "Sell", "reason": "Margins."}));
         assert_eq!((input_tokens, output_tokens, truncated), (123, 45, false));
@@ -389,7 +401,10 @@ mod tests {
         let err = |t: &str, m: &str| json!({"type": "error", "error": {"type": t, "message": m}}).to_string();
         let c = parse_response(429, &err("rate_limit_error", "slow down"), false).unwrap();
         assert!(matches!(c, Completion::ProviderError { ref msg, .. } if msg == "429 rate_limit_error: slow down"));
-        assert!(matches!(parse_response(529, &err("overloaded_error", "busy"), false), Ok(Completion::ProviderError { .. })));
+        assert!(matches!(
+            parse_response(529, &err("overloaded_error", "busy"), false),
+            Ok(Completion::ProviderError { .. })
+        ));
         assert!(matches!(parse_response(503, "<html>gateway</html>", false), Ok(Completion::ProviderError { .. })));
         let fatal = parse_response(404, &err("not_found_error", "model: claude-nope"), false).unwrap_err();
         assert!(fatal.contains("404 not_found_error"), "{}", fatal);

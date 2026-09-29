@@ -78,7 +78,11 @@ fn serve(mut s: TcpStream, seen: &Mutex<Vec<Seen>>, queue: &Mutex<VecDeque<Canne
     let (status, text, delay) = if path.ends_with("/count_tokens") {
         (count.0, count.1.clone(), 0)
     } else {
-        queue.lock().unwrap().pop_front().unwrap_or((500, r#"{"type":"error","error":{"type":"api_error","message":"stub is out of replies"}}"#.into(), 0))
+        queue.lock().unwrap().pop_front().unwrap_or((
+            500,
+            r#"{"type":"error","error":{"type":"api_error","message":"stub is out of replies"}}"#.into(),
+            0,
+        ))
     };
     std::thread::sleep(Duration::from_millis(delay));
     let resp = format!(
@@ -104,7 +108,11 @@ const DEFS: &str = r#"
 fn interp(stub: &Stub) -> Interp {
     let mut i = Interp::new();
     i.load_str(DEFS, "defs.nrm", Path::new(".")).unwrap();
-    i.live = Some(LiveConfig { base_url: stub.url.clone(), auth: Auth::ApiKey("test-key".into()), timeout: Duration::from_secs(10) });
+    i.live = Some(LiveConfig {
+        base_url: stub.url.clone(),
+        auth: Auth::ApiKey("test-key".into()),
+        timeout: Duration::from_secs(10),
+    });
     i
 }
 
@@ -206,7 +214,10 @@ fn a_bad_key_or_model_is_a_run_time_error() {
 
 #[test]
 fn a_transient_count_failure_is_a_tool_error_and_nothing_is_sent() {
-    let s = stub((529, r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#.into()), vec![(200, sell(), 0)]);
+    let s = stub(
+        (529, r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#.into()),
+        vec![(200, sell(), 0)],
+    );
     let o = run(&s, "(ask-v)", Some(1_000_000), None).unwrap();
     assert_eq!(failure_name(&o), "ToolError");
     assert_eq!(o.spent, 0);
