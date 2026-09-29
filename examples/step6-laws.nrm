@@ -1,0 +1,92 @@
+;;; step6-laws.nrm: instances of the algebraic laws of design/06 as unit tests.
+;;; (check-equiv e₁ e₂ grade) runs e₁ and e₂ each in its own fresh world built from the
+;;; enclosing `under`, then compares them: 'exact (result + whole world), 'resource
+;;; (result + spend + time + hosts), or 'value (value on success; success vs. failure).
+
+(use step5-examples.nrm)
+
+(define accept-all (v) #t)
+
+;;; ------------------------------------------------------------------
+;;; C3, the rethrow law: (catch e x (fail x)) ≡ e
+
+(under ([script sell] [cost $1.00] [time 1min])
+  (check-equiv (catch (ask-analyst) x (fail x)) (ask-analyst) 'exact))
+(under ([script garbled] [cost $1.00] [time 1min])
+  (check-equiv (catch (ask-analyst) x (fail x)) (ask-analyst) 'exact))
+
+;;; ------------------------------------------------------------------
+;;; B1 (nesting takes the min) and B5 (an expired scope never calls the oracle)
+
+(under ([script sell] [cost $1.00] [time 1min])
+  (check-equiv (budget ([cost $0.10]) (budget ([cost $0.05] [time 10s]) (ask-analyst)))
+               (budget ([cost $0.05] [time 10s]) (ask-analyst))
+               'exact)
+  (check-equiv (budget ([time 0s]) (ask-analyst)) (fail PastDeadline) 'exact))
+
+;;; ------------------------------------------------------------------
+;;; retry: nested retries multiply attempts, (m+1)(n+1) − 1 = 3
+
+(script flaky3
+  [analyst (reply "not json") (out 3) (latency 1s)
+           (reply "not json") (out 3) (latency 1s)
+           (reply "not json") (out 3) (latency 1s)
+           (reply "{\"tag\":\"Buy\",\"reason\":\"Fourth time lucky.\"}") (out 15) (latency 1s)])
+
+(under ([script flaky3] [cost $1.00] [time 1min])
+  (check-equiv (retry 1 (lambda () (retry 1 ask-analyst))) (retry 3 ask-analyst) 'exact)
+  (check-expect (retry 3 ask-analyst) (Buy "Fourth time lucky.")))
+
+;;; Problem #1: a negative count means no retries, not a budget-draining loop
+(under ([script garbled] [cost $1.00] [time 1min])
+  (check-fail   (retry -1 ask-analyst) (Invalid _))
+  (check-within (catch (retry -1 ask-analyst) e 0) ([time 1s])))   ; exactly one call
+
+;;; ------------------------------------------------------------------
+;;; best-of
+
+;;; Problem #2: width 0 does nothing and costs nothing
+(under ([script sell] [cost $1.00] [time 1min])
+  (check-fail   (best-of 0 ask-analyst accept-all) (Raised _))
+  (check-within (catch (best-of 0 ask-analyst accept-all) e 0) ([cost $0] [time 0s])))
+
+;;; Problem #3: the correct best-of-1 law goes through attempt; the old law is false
+(under ([script garbled] [cost $1.00] [time 1min])
+  (check-equiv (best-of 1 ask-analyst accept-all)
+               (case (attempt ask-analyst accept-all) [(Some x) x] [None (fail 'none-accepted)])
+               'exact)
+  (check-expect (catch (best-of 1 ask-analyst accept-all) e e) (Raised 'none-accepted))
+  (check-fail   (ask-analyst) (Invalid _)))           ; …so they're ≡v but not ≡
+
+;;; ------------------------------------------------------------------
+;;; W5, parallelizing: let* ⊒t workflow (same value, same spend, less time)
+
+(define seq-ab (m)
+  (let* ([x (ask m (Text 20) (step-ctx "a") 'a)]
+         [y (ask m (Text 20) (step-ctx "b") 'b)])
+    (list x y)))
+
+(define par-ab (m)
+  (workflow ([x (ask m (Text 20) (step-ctx "a") 'a)]
+             [y (ask m (Text 20) (step-ctx "b") 'b)])
+    (list x y)))
+
+(under ([script dag] [cost $1.00] [time 5min])
+  (check-equiv  (seq-ab claude) (par-ab claude) 'value)
+  (check-expect (elapsed (lambda () (seq-ab claude))) 40s)       ; 10 + 30
+  (check-expect (elapsed (lambda () (par-ab claude))) 30s))      ; max(10, 30)
+
+;;; ------------------------------------------------------------------
+;;; Non-law: common-subexpression elimination changes the answer
+
+(under ([script two-analysts] [cost $1.00] [time 1min])
+  (check-expect (let* ([a (ask-analyst)] [b (ask-analyst)]) (Pair [fst a] [snd b]))
+                (Pair [fst (Buy "One.")] [snd (Sell "Two.")])))   ; CSE would claim (Pair a a)
+
+;;; Non-law: catch does not commute with budget (the fallback idiom depends on it)
+
+(under ([script two-analysts] [cost $1.00] [time 1min])
+  (check-expect (catch (budget ([cost $0.000001]) (ask-analyst)) e (ask-analyst))   ; handler outside: parent's $1
+                (Buy "One."))
+  (check-fail   (budget ([cost $0.000001]) (catch (ask-analyst) e (ask-analyst)))   ; handler inside: 1 µ$
+                OverBudget))
