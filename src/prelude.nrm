@@ -1,0 +1,81 @@
+;;; The µNorman initial basis: predefined datatypes, records and functions
+;;; (design/04-formal-definition.md §7.2, as corrected by design/06).
+
+(datatype Role    [System] [User] [Assistant] [Tool])
+(record   Message (role Role) (content Text))
+(datatype Failure [Invalid (raw Text)] [ToolError (message Text)]
+                  [OverBudget] [PastDeadline] [Raised (reason Sym)])
+(datatype Option  [None] [Some (value Any)])
+(record   Pair    (fst Any) (snd Any))
+(record   Resources (cost Any) (time Any))
+
+(define not (b)     (if b #f #t))
+(define <= (x y)    (not (> x y)))
+(define >= (x y)    (not (< x y)))
+
+(define append (xs ys)
+  (case xs ['() ys] [(cons z zs) (cons z (append zs ys))]))
+
+(define length (xs)
+  (case xs ['() 0] [(cons _ ys) (+ 1 (length ys))]))
+
+(define filter (p xs)
+  (case xs
+    ['() '()]
+    [(cons y ys) (if (p y) (cons y (filter p ys)) (filter p ys))]))
+
+;; retry: re-ask the same thunk; never retry budget or deadline failures (06 §1)
+(define retry (n f)
+  (if (<= n 0)
+      (f)
+      (catch (f) err
+        (case err
+          [(Invalid _)   (retry (- n 1) f)]
+          [(ToolError _) (retry (- n 1) f)]
+          [_             (fail err)]))))
+
+;; repair: like retry, but the failed reply and a correction go into the context
+(define correction (raw)
+  (list (Message [role Assistant] [content raw])
+        (Message [role User] [content "That reply did not match the required format. Try again."])))
+
+(define repair (n f ctx)
+  (if (<= n 0)
+      (f ctx)
+      (catch (f ctx) err
+        (case err
+          [(Invalid raw) (repair (- n 1) f (append ctx (correction raw)))]
+          [_             (fail err)]))))
+
+;; best-of: k concurrent attempts, keeping one that check accepts (06 §1)
+(define attempt (f check)
+  (catch (let* ([x (f)]) (if (check x) (Some x) None))
+         err
+         (case err [(Invalid _) None] [(ToolError _) None] [_ (fail err)])))
+
+(define first-some (a b) (case a [(Some _) a] [None b]))
+
+(define best-of* (k f check)
+  (if (<= k 0)
+      None
+      (let* ([p (par (attempt f check) (best-of* (- k 1) f check))])
+        (first-some (. p fst) (. p snd)))))
+
+(define best-of (k f check)
+  (case (best-of* k f check)
+    [(Some x) x]
+    [None     (fail 'none-accepted)]))
+
+;; window: the system messages plus the last n others (06 §1)
+(define system? (m) (case (. m role) [System #t] [_ #f]))
+
+(define drop (k xs)
+  (if (<= k 0)
+      xs
+      (case xs ['() '()] [(cons _ ys) (drop (- k 1) ys)])))
+
+(define last-n (n xs) (drop (- (length xs) n) xs))
+
+(define window (n ctx)
+  (append (filter system? ctx)
+          (last-n n (filter (lambda (m) (not (system? m))) ctx))))

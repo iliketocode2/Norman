@@ -1,0 +1,20 @@
+;;; must-fail.nrm: mutants of the Step 5 tests. Each test is deliberately wrong,
+;;; and every one must FAIL. This checks that the suite can tell right from wrong.
+(use ../examples/step5-examples.nrm)
+(under ([script dag] [cost $1.00] [time 5min])
+  (check-expect (elapsed (lambda () (n-graph claude))) 39s)          ; really 40s
+  (check-expect (elapsed (lambda () (n-graph-par claude))) 40s))     ; really 60s
+(under ([script both] [cost $0.05] [time 1min])
+  (check-expect (ask claude LooseVerdict (analyst-ctx "FY2025 10-K") 'loose)
+                (LSell "Margins are compressing.")))                  ; really OverBudget
+(under ([script flaky] [cost $0.000001] [time 1min])
+  (check-fail (retry 5 ask-analyst) (Invalid _)))                    ; really OverBudget
+(under ([script sell] [cost $1.00] [time 1min])
+  (check-within (analyst claude "FY2025 10-K") ([cost $0.0001] [time 1s])))   ; really ~$0.0004, 2s
+(under ([script kernels] [cost $1.00] [time 1min])
+  (check-expect (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) (list a b))
+                (list "ok" "ok")))                                    ; really rejected
+(under ([script garbled] [cost $1.00] [time 1min])
+  (check-equiv (ask-analyst) (Hold "x") 'value))                      ; fail vs value
+(under ([script cp] [cost $1.00] [time 5min])
+  (check-error (cp-agent claude py "Compute 6 * 7.")))                ; really succeeds

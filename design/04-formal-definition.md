@@ -129,7 +129,13 @@ literal   ::= numeral | string | money | duration | #t | #f | quoted-symbol | '(
 
 **Reserved words:** `val define datatype record use grant script under
 check-expect check-assert check-error check-fail check-within check-equiv if let* lambda
-case ask call fail catch budget workflow begin par and or cost time _`.
+case ask call fail catch budget workflow begin par and or _`.
+
+`cost` and `time` are **not** reserved. They occur only in fixed bracket
+positions (`[cost e]` in `budget`, `under` and `check-within`), and they're the
+field names of the predefined `Resources` record. An earlier draft reserved
+them, which made `(. (remaining) cost)` a syntax error. Running the Step 5
+tests caught this.
 
 **Patterns are flat:** a constructor applied to variables or `_`. Nested
 patterns can come later as sugar. Flat patterns keep the CASE rule, and every

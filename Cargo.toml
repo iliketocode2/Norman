@@ -1,0 +1,15 @@
+[package]
+name = "munorman"
+version = "0.1.0"
+edition = "2024"
+description = "A definitional interpreter for µNorman, a language for AI agents"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "norman"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
