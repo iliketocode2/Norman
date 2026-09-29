@@ -19,6 +19,10 @@ pub struct Interp {
     next_cap: u64,
     /// Print each failing test's message (on by default).
     pub verbose: bool,
+    /// When set, `ask` is answered by a real model (design/09); otherwise by scripts.
+    pub live: Option<crate::live::LiveConfig>,
+    /// Print the trace of each top-level evaluation: one line per ask or call.
+    pub trace: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -47,7 +51,15 @@ impl Default for Interp {
 impl Interp {
     /// A fresh interpreter with the initial basis loaded.
     pub fn new() -> Interp {
-        let mut i = Interp { theta: TypeEnv::default(), globals: HashMap::new(), scripts: HashMap::new(), next_cap: 1, verbose: true };
+        let mut i = Interp {
+            theta: TypeEnv::default(),
+            globals: HashMap::new(),
+            scripts: HashMap::new(),
+            next_cap: 1,
+            verbose: true,
+            live: None,
+            trace: false,
+        };
         for p in Prim::ALL {
             i.globals.insert(Rc::from(p.name()), Value::Prim(p));
         }
@@ -121,7 +133,9 @@ impl Interp {
                 self.globals.insert(x, v);
             }
             Def::Exp(e) => {
+                // As in Ramsey's interpreters, a top-level expression's value is printed.
                 let v = self.eval_top(e)?;
+                println!("{}", v);
                 self.globals.insert(Rc::from("it"), v);
             }
             Def::Define(f, lambda) => {
@@ -134,22 +148,43 @@ impl Interp {
     }
 
     fn eval_top(&self, e: ExpRef) -> Result<Value, String> {
-        let cfg = WorldConfig { cost: None, time: None, script: None };
-        match machine::run(&self.globals, &self.theta, &cfg, e) {
-            Ok(Outcome { result: Res::Val(v), .. }) => Ok(v),
-            Ok(Outcome { result: Res::Fail(phi), .. }) => Err(format!("evaluation failed: (fail {})", phi)),
-            Err(e) => Err(format!("run-time error: {}", e.0)),
+        match self.run_in(&Config::default(), &e)? {
+            Outcome { result: Res::Val(v), .. } => Ok(v),
+            Outcome { result: Res::Fail(phi), .. } => Err(format!("evaluation failed: (fail {})", phi)),
         }
     }
 
     /// Evaluate an expression in a fresh world built from a test configuration.
+    /// In live mode, asks go to the model; the configuration's money and time
+    /// limits still apply, and its script (if any) is not consulted.
     pub fn run_in(&self, cfg: &Config, e: &ExpRef) -> Result<Outcome, String> {
         let script = match &cfg.script {
             Some(name) => Some(self.scripts.get(name).cloned().ok_or_else(|| format!("unknown script {}", name))?),
             None => None,
         };
         let world = WorldConfig { cost: cfg.cost, time: cfg.time, script };
-        machine::run(&self.globals, &self.theta, &world, e.clone()).map_err(|e| format!("run-time error: {}", e.0))
+        let outcome = match &self.live {
+            None => machine::run(&self.globals, &self.theta, &world, e.clone()),
+            Some(live) => {
+                let oracle = Box::new(crate::live::LiveOracle::new(&self.theta, live.clone()));
+                machine::run_with(&self.globals, &self.theta, &world, oracle, e.clone())
+            }
+        }
+        .map_err(|e| format!("run-time error: {}", e.0))?;
+        if self.trace {
+            print_trace(&outcome);
+        }
+        Ok(outcome)
+    }
+
+    /// Parse and evaluate one expression under `cfg`: for tests and embedding.
+    pub fn eval_source(&self, src: &str, cfg: &Config) -> Result<Outcome, String> {
+        let forms = read_all(src, "<source>")?;
+        let [sx] = forms.as_slice() else {
+            return Err(format!("expected exactly one expression, found {}", forms.len()));
+        };
+        let e = Parser::new(&self.theta).exp(sx)?;
+        self.run_in(cfg, &e)
     }
 
     fn run_tests(&self, file: &str, tests: Vec<PendingTest>) -> Summary {
@@ -249,5 +284,25 @@ impl Interp {
                 }
             }
         }
+    }
+}
+
+/// One line per ask or call: site, tokens, cost, when it started and ended, and how it ended.
+fn print_trace(o: &Outcome) {
+    for t in &o.trace {
+        println!(
+            "  trace: {} {:<12} in {:>6}  out {:>6}  {:>10}  {:>7} → {:<7} {}",
+            t.kind,
+            t.site,
+            t.in_tokens,
+            t.out_tokens,
+            fmt_money(t.cost),
+            fmt_dur(t.start),
+            fmt_dur(t.end),
+            t.outcome
+        );
+    }
+    if !o.trace.is_empty() {
+        println!("  total: spent {}, took {}", fmt_money(o.spent), fmt_dur(o.elapsed));
     }
 }

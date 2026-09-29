@@ -42,9 +42,24 @@ pub enum Completion {
     ToolError { msg: String },
 }
 
+/// Why an ask couldn't be counted.
+#[derive(Debug, Clone)]
+pub enum CountError {
+    /// A transient provider failure (429, 5xx, network): the ask fails with `ToolError`.
+    Transient(String),
+    /// A bad key, model ID or request: a checked run-time error.
+    Fatal(String),
+}
+
 pub trait Oracle {
-    /// Count an ask's input tokens (M-ASK-COUNT). An error is a checked run-time error.
-    fn count(&mut self, req: &AskReq) -> Result<Count, String>;
+    /// The oracle's clock in ms since the run began, if it has one. A live
+    /// oracle's time passes by itself, so the machine syncs to it. The scripted
+    /// oracle's time is virtual and moves only through `next` (`None`).
+    fn clock(&self) -> Option<i64> {
+        None
+    }
+    /// Count an ask's input tokens (M-ASK-COUNT).
+    fn count(&mut self, req: &AskReq) -> Result<Count, CountError>;
     /// Send an ask. It completes later, through `next`.
     fn issue_ask(&mut self, rid: u64, req: AskReq, now: i64) -> Result<(), String>;
     /// Send a call to capability site `key/op`.
@@ -133,7 +148,7 @@ impl ScriptedOracle {
 
 impl Oracle for ScriptedOracle {
     /// The test tokenizer defines billing in scripted mode, so the count is exact.
-    fn count(&mut self, req: &AskReq) -> Result<Count, String> {
+    fn count(&mut self, req: &AskReq) -> Result<Count, CountError> {
         Ok(Count { tokens: test_tokens(&req.messages), exact: true })
     }
 

@@ -7,6 +7,9 @@ use crate::value::Value;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+/// Bytes added by the root wrapper `{"value":` … `}`.
+pub const WRAP_OVERHEAD: u64 = 10;
+
 #[derive(Default)]
 pub struct TypeEnv {
     pub datatypes: HashMap<Name, Rc<Vec<ConDef>>>,
@@ -170,6 +173,79 @@ impl TypeEnv {
                 result
             }
         }
+    }
+
+    /// `S(τ)` (design/09 §2): the JSON Schema a live model's answer is decoded
+    /// against. Bounds the API can't express (`(Text n)`, `(List τ n)`) are
+    /// left out here and enforced by `validate`. Recursive datatypes are an error.
+    pub fn json_schema(&self, ty: &Type) -> Result<serde_json::Value, String> {
+        self.schema_in(ty, &mut HashSet::new())
+    }
+
+    fn schema_in(&self, ty: &Type, visiting: &mut HashSet<Name>) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        let object = |props: Vec<(String, serde_json::Value)>| {
+            let required: Vec<&String> = props.iter().map(|(k, _)| k).collect();
+            json!({
+                "type": "object",
+                "properties": props.iter().cloned().collect::<serde_json::Map<_, _>>(),
+                "required": required,
+                "additionalProperties": false,
+            })
+        };
+        Ok(match ty {
+            Type::Text(_) | Type::Sym => json!({"type": "string"}),
+            Type::Num => json!({"type": "integer"}),
+            Type::Bool => json!({"type": "boolean"}),
+            Type::List(t, _) => json!({"type": "array", "items": self.schema_in(t, visiting)?}),
+            Type::Any => return Err("type Any is not askable".into()),
+            Type::Named(n) => {
+                if !visiting.insert(n.clone()) {
+                    return Err(format!("{} is recursive, and a live model can't be asked for a recursive type", n));
+                }
+                let schema = if let Some(cons) = self.datatypes.get(n).cloned() {
+                    let mut alternatives = vec![];
+                    for c in cons.iter() {
+                        let mut props = vec![("tag".to_string(), json!({"const": &*c.name}))];
+                        for (f, t) in &c.fields {
+                            props.push((f.to_string(), self.schema_in(t, visiting)?));
+                        }
+                        alternatives.push(object(props));
+                    }
+                    if alternatives.len() == 1 {
+                        alternatives.pop().unwrap()
+                    } else {
+                        json!({"anyOf": alternatives})
+                    }
+                } else if let Some(fs) = self.records.get(n).cloned() {
+                    let mut props = vec![];
+                    for (f, t) in fs.iter() {
+                        props.push((f.to_string(), self.schema_in(t, visiting)?));
+                    }
+                    object(props)
+                } else {
+                    return Err(format!("unknown type {}", n));
+                };
+                visiting.remove(n);
+                schema
+            }
+        })
+    }
+
+    /// Whether `S(τ)` is an object schema. The API requires an object at the
+    /// root, so any other answer is asked for as `{"value": S(τ)}` (design/09 §2).
+    /// This is decided by shape alone, so it also works for recursive types.
+    pub fn root_is_object(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Named(n) => self.records.contains_key(n) || self.datatypes.get(n).is_some_and(|cons| cons.len() == 1),
+            _ => false,
+        }
+    }
+
+    /// Extra output bytes for the `{"value": …}` wrapper, when one is needed.
+    /// Scripted and live mode use the same arithmetic, so reservations agree.
+    pub fn wrap_overhead(&self, ty: &Type) -> u64 {
+        if self.root_is_object(ty) { 0 } else { WRAP_OVERHEAD }
     }
 
     /// `validate_Θ(j, τ)`: the µNorman value that JSON `j` encodes at type `ty`,

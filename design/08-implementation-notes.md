@@ -84,10 +84,12 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
    reservation (Theorem 1′).
 5. **Hosts are scripted only.** `cost_κ(op) = 0` for every host. There's no
    real Python kernel or filesystem yet. Kernels implement `fork` natively.
-6. **There is no live oracle yet.** Models answer only from scripts. Step 1
-   of [`09`](09-live-oracle.md) is done: the machine now talks to an `Oracle`
-   trait ([`src/host.rs`](../src/host.rs)), and scripts are one implementation
-   of it. Refusals, the default model grant (Claude Sonnet 5, set in
+6. **The live oracle exists but hasn't yet made a real call.** Steps 1–3 of
+   [`09`](09-live-oracle.md) are done. The machine talks to an `Oracle` trait
+   ([`src/host.rs`](../src/host.rs)), which is implemented by scripts and by
+   the live client ([`src/live.rs`](../src/live.rs), run with `--live`). The
+   live client is tested against a local stub server. Step 4, one real call,
+   is next. Refusals, the default model grant (Claude Sonnet 5, set in
    [`src/defaults.rs`](../src/defaults.rs)) and thinking allowances are in
    place and tested in
    [`examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm).

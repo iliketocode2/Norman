@@ -31,14 +31,15 @@
 
 ;;; ------------------------------------------------------------------
 ;;; The thinking allowance is reserved (decision A)
-;;;   sonnet: max_tokens = 426 + 2000 = 2426  →  reserve 25×2 + 2426×10 = 24 310 µ$ ≈ $0.0243
-;;;   lean:   max_tokens = 426              →  reserve 25×2 +  426×10 =  4 310 µ$ ≈ $0.0043
+;;;   Verdict is a 3-constructor datatype, so its answer is wrapped as {"value": …} (+10 bytes).
+;;;   sonnet: max_tokens = 426 + 10 + 2000 = 2436  →  reserve 25×2 + 2436×10 = 24 410 µ$ ≈ $0.0244
+;;;   lean:   max_tokens = 426 + 10         =  436  →  reserve 25×2 +  436×10 =  4 410 µ$ ≈ $0.0044
 
 (script sell
   [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Margins are compressing.\"}") (out 20) (latency 2s)])
 
 (under ([script sell] [cost $0.024] [time 1min])
-  (check-fail   ((ask-with sonnet)) OverBudget)                     ; 24 310 µ$ > 24 000 µ$
+  (check-fail   ((ask-with sonnet)) OverBudget)                     ; 24 410 µ$ > 24 000 µ$
   (check-expect ((ask-with lean)) (Sell "Margins are compressing.")))
 
 (under ([script sell] [cost $0.025] [time 1min])
@@ -52,6 +53,6 @@
   [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Margins are compressing.\"}") (out 500) (latency 2s)])
 
 (under ([script long] [cost $1.00] [time 1min])
-  (check-fail   ((ask-with lean)) (Invalid _))                     ; 500 > 426
-  (check-within (catch ((ask-with lean)) e 0) ([cost $0.00431]))   ; 25×2 + 426×10 = 4 310 µ$
-  (check-expect ((ask-with sonnet)) (Sell "Margins are compressing.")))   ; 500 ≤ 2426: fits
+  (check-fail   ((ask-with lean)) (Invalid _))                     ; 500 > 436
+  (check-within (catch ((ask-with lean)) e 0) ([cost $0.00441]))   ; 25×2 + 436×10 = 4 410 µ$
+  (check-expect ((ask-with sonnet)) (Sell "Margins are compressing.")))   ; 500 ≤ 2436: fits
