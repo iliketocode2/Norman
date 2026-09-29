@@ -34,12 +34,28 @@ pub struct Count {
 #[derive(Debug, Clone)]
 pub enum Completion {
     /// A model reply. `truncated` means it stopped at `max_tokens`.
-    Answer { json: String, input_tokens: i64, output_tokens: i64, truncated: bool },
-    Refusal { category: String, input_tokens: i64, output_tokens: i64 },
+    Answer {
+        json: String,
+        input_tokens: i64,
+        output_tokens: i64,
+        truncated: bool,
+    },
+    Refusal {
+        category: String,
+        input_tokens: i64,
+        output_tokens: i64,
+    },
     /// A retryable provider failure (429, 5xx, network).
-    ProviderError { msg: String, input_tokens: i64 },
-    ToolResult { text: String },
-    ToolError { msg: String },
+    ProviderError {
+        msg: String,
+        input_tokens: i64,
+    },
+    ToolResult {
+        text: String,
+    },
+    ToolError {
+        msg: String,
+    },
 }
 
 /// Why an ask couldn't be counted.
@@ -171,7 +187,10 @@ impl Oracle for ScriptedOracle {
             }
             Entry::ProviderError { msg, .. } => Completion::ProviderError { msg: msg.clone(), input_tokens },
             Entry::Result { .. } | Entry::Error { .. } => {
-                return Err(format!("the script entry for ask site '{}' is a tool result, not a model reply", req.site));
+                return Err(format!(
+                    "the script entry for ask site '{}' is a tool result, not a model reply",
+                    req.site
+                ));
             }
         };
         self.inflight.push((rid, now + entry.latency(), completion));
@@ -179,7 +198,10 @@ impl Oracle for ScriptedOracle {
     }
 
     fn issue_call(&mut self, rid: u64, site: &str, _args: &[Value], now: i64) -> Result<(), String> {
-        let entry = self.state.next(site).ok_or_else(|| format!("script exhausted: no result left for call site '{}'", site))?;
+        let entry = self
+            .state
+            .next(site)
+            .ok_or_else(|| format!("script exhausted: no result left for call site '{}'", site))?;
         let completion = match &entry {
             Entry::Result { text, .. } => Completion::ToolResult { text: text.clone() },
             Entry::Error { msg, .. } => Completion::ToolError { msg: msg.clone() },

@@ -70,13 +70,7 @@ pub fn quote(s: &str) -> String {
 
 /// Read every S-expression in `src`.
 pub fn read_all(src: &str, file: &str) -> Result<Vec<Sx>, String> {
-    let mut r = Reader {
-        chars: src.chars().collect(),
-        pos: 0,
-        line: 1,
-        col: 1,
-        file: Rc::from(file),
-    };
+    let mut r = Reader { chars: src.chars().collect(), pos: 0, line: 1, col: 1, file: Rc::from(file) };
     let mut out = vec![];
     loop {
         r.skip_ws();
@@ -153,7 +147,7 @@ impl Reader {
                             return Ok(Sx::List(items, loc));
                         }
                         Some(c @ (')' | ']')) => {
-                            return Err(format!("{}: '{}' does not match '{}' opened at {}", self.loc(), c, open, loc))
+                            return Err(format!("{}: '{}' does not match '{}' opened at {}", self.loc(), c, open, loc));
                         }
                         _ => items.push(self.read()?),
                     }

@@ -16,9 +16,35 @@ use std::sync::atomic::{AtomicU64, Ordering};
 type P<T> = Result<T, String>;
 
 const KEYWORDS: &[&str] = &[
-    "val", "define", "datatype", "record", "use", "grant", "script", "under", "check-expect", "check-assert",
-    "check-error", "check-fail", "check-within", "check-equiv", "if", "let*", "lambda", "case", "ask", "call",
-    "fail", "catch", "budget", "workflow", "begin", "par", "and", "or", "_",
+    "val",
+    "define",
+    "datatype",
+    "record",
+    "use",
+    "grant",
+    "script",
+    "under",
+    "check-expect",
+    "check-assert",
+    "check-error",
+    "check-fail",
+    "check-within",
+    "check-equiv",
+    "if",
+    "let*",
+    "lambda",
+    "case",
+    "ask",
+    "call",
+    "fail",
+    "catch",
+    "budget",
+    "workflow",
+    "begin",
+    "par",
+    "and",
+    "or",
+    "_",
 ];
 // `cost` and `time` are not reserved: they occur only in fixed bracket positions
 // ([cost e] in budget, under and check-within), and they are the field names of
@@ -171,43 +197,44 @@ impl<'a> Parser<'a> {
 
     pub fn top(&self, sx: &Sx) -> P<Top> {
         if let Sx::List(xs, _) = sx
-            && let Some(head) = xs.first().and_then(Sx::atom) {
-                let args = &xs[1..];
-                match head {
-                    "val" => {
-                        self.arity(sx, "val", args, 2)?;
-                        return Ok(Top::Def(Def::Val(self.lower(&args[0], "a variable")?, self.exp(&args[1])?)));
-                    }
-                    "define" => {
-                        self.arity(sx, "define", args, 3)?;
-                        let f = self.lower(&args[0], "a function name")?;
-                        let formals = self.formals(&args[1])?;
-                        let body = self.exp(&args[2])?;
-                        return Ok(Top::Def(Def::Define(f, Rc::new(Lambda::new(formals, body)))));
-                    }
-                    "datatype" => return self.datatype(sx, args),
-                    "record" => {
-                        if args.is_empty() {
-                            return perr(sx, "record needs a name");
-                        }
-                        let r = self.upper(&args[0], "a record name")?;
-                        let fields = args[1..].iter().map(|f| self.field(f)).collect::<P<Vec<_>>>()?;
-                        return Ok(Top::Def(Def::Record(r, fields)));
-                    }
-                    "use" => {
-                        self.arity(sx, "use", args, 1)?;
-                        return match &args[0] {
-                            Sx::Atom(a, _) | Sx::Str(a, _) => Ok(Top::Use(a.to_string())),
-                            other => perr(other, "use expects a file name"),
-                        };
-                    }
-                    "grant" => return self.grant(sx, args),
-                    "script" => return self.script(sx, args),
-                    "under" => return self.under(sx, args),
-                    h if h.starts_with("check-") => return Ok(Top::Test(self.test(sx)?)),
-                    _ => {}
+            && let Some(head) = xs.first().and_then(Sx::atom)
+        {
+            let args = &xs[1..];
+            match head {
+                "val" => {
+                    self.arity(sx, "val", args, 2)?;
+                    return Ok(Top::Def(Def::Val(self.lower(&args[0], "a variable")?, self.exp(&args[1])?)));
                 }
+                "define" => {
+                    self.arity(sx, "define", args, 3)?;
+                    let f = self.lower(&args[0], "a function name")?;
+                    let formals = self.formals(&args[1])?;
+                    let body = self.exp(&args[2])?;
+                    return Ok(Top::Def(Def::Define(f, Rc::new(Lambda::new(formals, body)))));
+                }
+                "datatype" => return self.datatype(sx, args),
+                "record" => {
+                    if args.is_empty() {
+                        return perr(sx, "record needs a name");
+                    }
+                    let r = self.upper(&args[0], "a record name")?;
+                    let fields = args[1..].iter().map(|f| self.field(f)).collect::<P<Vec<_>>>()?;
+                    return Ok(Top::Def(Def::Record(r, fields)));
+                }
+                "use" => {
+                    self.arity(sx, "use", args, 1)?;
+                    return match &args[0] {
+                        Sx::Atom(a, _) | Sx::Str(a, _) => Ok(Top::Use(a.to_string())),
+                        other => perr(other, "use expects a file name"),
+                    };
+                }
+                "grant" => return self.grant(sx, args),
+                "script" => return self.script(sx, args),
+                "under" => return self.under(sx, args),
+                h if h.starts_with("check-") => return Ok(Top::Test(self.test(sx)?)),
+                _ => {}
             }
+        }
         Ok(Top::Def(Def::Exp(self.exp(sx)?)))
     }
 
@@ -250,7 +277,8 @@ impl<'a> Parser<'a> {
                 // Every field is optional; omitted fields take the defaults in
                 // crate::defaults, which describe Claude Sonnet 5 (design/09 §0).
                 use crate::defaults as d;
-                let (mut id, mut i, mut o, mut c, mut t) = (d::MODEL_ID.to_string(), d::IN_PRICE, d::OUT_PRICE, d::CEILING, d::THINK);
+                let (mut id, mut i, mut o, mut c, mut t) =
+                    (d::MODEL_ID.to_string(), d::IN_PRICE, d::OUT_PRICE, d::CEILING, d::THINK);
                 for item in &spec[1..] {
                     match item.list() {
                         Some([k, Sx::Str(s, _)]) if k.atom() == Some("id") => id = s.to_string(),
@@ -264,7 +292,12 @@ impl<'a> Parser<'a> {
                                 Some("out") => o = n,
                                 Some("ceiling") => c = n as u64,
                                 Some("think") => t = n as u64,
-                                _ => return perr(k, "model options are [id \"…\"], [in n], [out n], [ceiling n] and [think n]"),
+                                _ => {
+                                    return perr(
+                                        k,
+                                        "model options are [id \"…\"], [in n], [out n], [ceiling n] and [think n]",
+                                    );
+                                }
                             }
                         }
                         _ => return perr(item, "expected [option value]"),
@@ -313,7 +346,9 @@ impl<'a> Parser<'a> {
                     "result" => entries.push(Entry::Result { text: text(arg)?, latency: 0 }),
                     "error" => entries.push(Entry::Error { msg: text(arg)?, latency: 0 }),
                     "out" | "latency" => {
-                        let last = entries.last_mut().ok_or_else(|| format!("{}: ({} …) must follow a reply", item.loc(), head))?;
+                        let last = entries
+                            .last_mut()
+                            .ok_or_else(|| format!("{}: ({} …) must follow a reply", item.loc(), head))?;
                         match (head, arg.atom().map(classify)) {
                             ("out", Some(Ok(Atom::Num(n)))) if n >= 0 => match last {
                                 Entry::Reply { out, .. } | Entry::Refusal { out, .. } => *out = n as u64,
@@ -405,7 +440,12 @@ impl<'a> Parser<'a> {
                 };
                 TestKind::Equiv(self.exp(&args[0])?, self.exp(&args[1])?, grade)
             }
-            _ => return perr(sx, "expected a unit test (check-expect, check-assert, check-error, check-fail, check-within, check-equiv)"),
+            _ => {
+                return perr(
+                    sx,
+                    "expected a unit test (check-expect, check-assert, check-error, check-fail, check-within, check-equiv)",
+                );
+            }
         };
         Ok(UnitTest { kind, texts, loc: sx.loc().clone() })
     }
@@ -438,11 +478,7 @@ impl<'a> Parser<'a> {
 
     fn pattern(&self, sx: &Sx) -> P<Pattern> {
         let var = |x: &Sx| -> P<Option<Name>> {
-            if x.atom() == Some("_") {
-                Ok(None)
-            } else {
-                Ok(Some(self.lower(x, "a pattern variable")?))
-            }
+            if x.atom() == Some("_") { Ok(None) } else { Ok(Some(self.lower(x, "a pattern variable")?)) }
         };
         let p = match sx {
             Sx::Atom(a, _) if &**a == "_" => Pattern::Wild,
@@ -490,9 +526,10 @@ impl<'a> Parser<'a> {
                     return perr(sx, "() is not an expression (did you mean '()?)");
                 }
                 if let Some(h) = xs[0].atom()
-                    && let Some(e) = self.special(sx, h, &xs[1..])? {
-                        return Ok(e);
-                    }
+                    && let Some(e) = self.special(sx, h, &xs[1..])?
+                {
+                    return Ok(e);
+                }
                 let f = self.exp(&xs[0])?;
                 let args = xs[1..].iter().map(|x| self.exp(x)).collect::<P<Vec<_>>>()?;
                 Ok(Rc::new(Exp::Apply(f, args)))
@@ -554,7 +591,11 @@ impl<'a> Parser<'a> {
                 if args.len() < 2 {
                     return perr(sx, "call expects a capability and an operation");
                 }
-                Exp::Call { cap: self.exp(&args[0])?, op: self.lower(&args[1], "an operation name")?, args: self.exps(&args[2..])? }
+                Exp::Call {
+                    cap: self.exp(&args[0])?,
+                    op: self.lower(&args[1], "an operation name")?,
+                    args: self.exps(&args[2..])?,
+                }
             }
             "fail" => {
                 self.arity(sx, "fail", args, 1)?;
@@ -604,7 +645,10 @@ impl<'a> Parser<'a> {
                 let (a, b) = (fresh("par-a"), fresh("par-b"));
                 let body = Rc::new(Exp::Record(
                     Rc::from("Pair"),
-                    vec![(Rc::from("fst"), Rc::new(Exp::Var(a.clone()))), (Rc::from("snd"), Rc::new(Exp::Var(b.clone())))],
+                    vec![
+                        (Rc::from("fst"), Rc::new(Exp::Var(a.clone()))),
+                        (Rc::from("snd"), Rc::new(Exp::Var(b.clone()))),
+                    ],
                 ));
                 let bindings = vec![(a, self.exp(&args[0])?), (b, self.exp(&args[1])?)];
                 return Ok(Some(self.workflow(sx, bindings, body)?));
@@ -679,9 +723,10 @@ impl<'a> Parser<'a> {
                     return Some(d);
                 }
                 if color[d] == 0
-                    && let Some(c) = visit(d, nodes, color) {
-                        return Some(c);
-                    }
+                    && let Some(c) = visit(d, nodes, color)
+                {
+                    return Some(c);
+                }
             }
             color[i] = 2;
             None
@@ -689,9 +734,13 @@ impl<'a> Parser<'a> {
         let mut color = vec![0u8; nodes.len()];
         for i in 0..nodes.len() {
             if color[i] == 0
-                && let Some(c) = visit(i, &nodes, &mut color) {
-                    return perr(sx, format!("workflow node {} depends on itself (the dependency graph has a cycle)", nodes[c].name));
-                }
+                && let Some(c) = visit(i, &nodes, &mut color)
+            {
+                return perr(
+                    sx,
+                    format!("workflow node {} depends on itself (the dependency graph has a cycle)", nodes[c].name),
+                );
+            }
         }
         Ok(Rc::new(Exp::Workflow(Rc::new(WorkflowDef { nodes, body }))))
     }

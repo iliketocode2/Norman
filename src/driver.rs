@@ -4,7 +4,7 @@
 
 use crate::ast::*;
 use crate::lexer::read_all;
-use crate::machine::{self, match_pattern, Outcome, Res, WorldConfig};
+use crate::machine::{self, Outcome, Res, WorldConfig, match_pattern};
 use crate::parser::Parser;
 use crate::types::TypeEnv;
 use crate::value::*;
@@ -101,7 +101,14 @@ impl Interp {
                 Top::Grant(x, spec) => {
                     let v = match spec {
                         HostSpec::Model { id, in_price, out_price, ceiling, think } => {
-                            Value::Model(Rc::new(ModelSpec { name: x.clone(), id, think, in_price, out_price, ceiling }))
+                            Value::Model(Rc::new(ModelSpec {
+                                name: x.clone(),
+                                id,
+                                think,
+                                in_price,
+                                out_price,
+                                ceiling,
+                            }))
                         }
                         HostSpec::Kernel => self.cap(&x, CapKind::Kernel),
                         HostSpec::Filesystem => self.cap(&x, CapKind::Filesystem),
@@ -236,28 +243,57 @@ impl Interp {
             },
             TestKind::Error(e) => match self.run_in(cfg, e) {
                 Err(_) => Ok(()),
-                Ok(o) => Err(format!("Check-error failed: evaluating {} was expected to cause a run-time error, but it produced {}.", text(0), o.result)),
+                Ok(o) => Err(format!(
+                    "Check-error failed: evaluating {} was expected to cause a run-time error, but it produced {}.",
+                    text(0),
+                    o.result
+                )),
             },
             TestKind::Fail(e, p) => match self.run_in(cfg, e)?.result {
                 Res::Fail(phi) if match_pattern(p, &phi).is_some() => Ok(()),
-                other => Err(format!("Check-fail failed: expected {} to fail matching {}, but it's {}.", text(0), text(1), other)),
+                other => Err(format!(
+                    "Check-fail failed: expected {} to fail matching {}, but it's {}.",
+                    text(0),
+                    text(1),
+                    other
+                )),
             },
             TestKind::Within(e, cost, time) => {
                 let o = self.run_in(cfg, e)?;
                 if let Some(c) = cost
-                    && o.spent > *c {
-                        return Err(format!("Check-within failed: {} spent {}, more than {}.", text(0), fmt_money(o.spent), fmt_money(*c)));
-                    }
+                    && o.spent > *c
+                {
+                    return Err(format!(
+                        "Check-within failed: {} spent {}, more than {}.",
+                        text(0),
+                        fmt_money(o.spent),
+                        fmt_money(*c)
+                    ));
+                }
                 if let Some(d) = time
-                    && o.elapsed > *d {
-                        return Err(format!("Check-within failed: {} took {}, longer than {}.", text(0), fmt_dur(o.elapsed), fmt_dur(*d)));
-                    }
+                    && o.elapsed > *d
+                {
+                    return Err(format!(
+                        "Check-within failed: {} took {}, longer than {}.",
+                        text(0),
+                        fmt_dur(o.elapsed),
+                        fmt_dur(*d)
+                    ));
+                }
                 Ok(())
             }
             TestKind::Equiv(e1, e2, grade) => {
                 let a = self.run_in(cfg, e1)?;
                 let b = self.run_in(cfg, e2)?;
-                let describe = |o: &Outcome| format!("{} (spent {}, took {}, {} trace entries)", o.result, fmt_money(o.spent), fmt_dur(o.elapsed), o.trace.len());
+                let describe = |o: &Outcome| {
+                    format!(
+                        "{} (spent {}, took {}, {} trace entries)",
+                        o.result,
+                        fmt_money(o.spent),
+                        fmt_dur(o.elapsed),
+                        o.trace.len()
+                    )
+                };
                 let same_value = match (&a.result, &b.result) {
                     (Res::Val(x), Res::Val(y)) => x.equal(y),
                     (Res::Fail(_), Res::Fail(_)) => true,
