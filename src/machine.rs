@@ -10,7 +10,7 @@
 //! Rule names in comments refer to 04 §6 and 07 §4.
 
 use crate::ast::*;
-use crate::host::{AskReq, Completion, Oracle, ScriptedOracle};
+use crate::host::{AskReq, Completion, CountError, Oracle, ScriptedOracle};
 use crate::types::TypeEnv;
 use crate::value::*;
 use std::collections::{HashMap, HashSet};
@@ -299,6 +299,7 @@ impl<'a> Machine<'a> {
                 let Some(l) = limit else {
                     return stuck("the machine is stuck: requests are in flight but the oracle has nothing to deliver");
                 };
+                self.sync_clock();
                 self.now = self.now.max(l);
                 let mut cut: Vec<Request> = vec![];
                 let mut i = 0;
@@ -331,6 +332,14 @@ impl<'a> Machine<'a> {
             Ctl::Ret(v) => self.ret(tid, v),
             Ctl::Raise(phi) => self.raise(tid, phi),
             Ctl::Idle => stuck("internal error: stepped an idle thread"),
+        }
+    }
+
+    /// A live oracle's clock runs by itself; bring the machine's `now` up to it.
+    /// The scripted oracle has no clock, so virtual time moves only in M-TIME.
+    fn sync_clock(&mut self) {
+        if let Some(t) = self.oracle.clock() {
+            self.now = self.now.max(t);
         }
     }
 
@@ -794,6 +803,7 @@ impl<'a> Machine<'a> {
             // M-REMAINING: the live shared value (decision Q-A).
             Prim::Remaining => {
                 arity(0)?;
+                self.sync_clock();
                 let s = self.current_scope(tid);
                 let cost = match self.available(s) {
                     i64::MAX => Inf,
@@ -812,6 +822,7 @@ impl<'a> Machine<'a> {
 
     /// M-BUDGET: a child scope whose limits are at most its parent's (via the chain).
     fn enter_scope(&mut self, tid: usize, cost: Option<i64>, time: Option<i64>, body: ExpRef, env: Env) {
+        self.sync_clock();
         let parent = self.current_scope(tid);
         let id = self.scopes.len();
         self.scopes.push(Scope { limit: cost, spent: 0, reserved: 0, deadline: time.map(|t| self.now + t), parent: Some(parent) });
@@ -823,6 +834,7 @@ impl<'a> Machine<'a> {
 
     /// M-ASK-EXPIRED, M-ASK-COUNT, M-ASK-REFUSED, M-ASK-ISSUE (07 §4.1, 09 §3).
     fn issue_ask(&mut self, tid: usize, site: &str, model: Rc<ModelSpec>, ty: &Type, ctx: &Value) -> Rt<()> {
+        self.sync_clock();
         let s = self.current_scope(tid);
         if self.deadline_star(s).is_some_and(|d| self.now >= d) {
             self.raise_con(tid, "PastDeadline", vec![]);
@@ -830,10 +842,29 @@ impl<'a> Machine<'a> {
         }
         self.theta.askable(ty).map_err(RtErr)?;
         let messages = crate::host::messages(ctx).map_err(RtErr)?;
-        // max_tokens = min(ceiling, bound(τ) + think): room for the answer and for thinking.
-        let max_tokens = self.theta.bound(ty).map_or(model.ceiling, |b| (b + model.think).min(model.ceiling)) as i64;
+        // max_tokens = min(ceiling, bound(τ) + wrapper + think): room for the
+        // answer, the root wrapper if the schema needs one (09 §2), and thinking.
+        let max_tokens = self
+            .theta
+            .bound(ty)
+            .map_or(model.ceiling, |b| (b + self.theta.wrap_overhead(ty) + model.think).min(model.ceiling))
+            as i64;
         let req = AskReq { site: site.to_string(), model: model.clone(), ty: ty.clone(), messages, max_tokens };
-        let count = self.oracle.count(&req).map_err(RtErr)?;
+        let count = match self.oracle.count(&req) {
+            Ok(c) => c,
+            Err(CountError::Transient(msg)) => {
+                // Counting failed transiently: nothing was sent or reserved (decision C).
+                self.raise_con(tid, "ToolError", vec![Value::str(&msg)]);
+                return Ok(());
+            }
+            Err(CountError::Fatal(msg)) => return stuck(msg),
+        };
+        // Counting takes real time on a live oracle; the deadline may have passed meanwhile.
+        self.sync_clock();
+        if self.deadline_star(s).is_some_and(|d| self.now >= d) {
+            self.raise_con(tid, "PastDeadline", vec![]);
+            return Ok(());
+        }
         let in_tokens = if count.exact {
             count.tokens
         } else {
@@ -853,6 +884,7 @@ impl<'a> Machine<'a> {
 
     /// The CALL rules. `fork` on a kernel is implemented by the host itself.
     fn issue_call(&mut self, tid: usize, cap: Cap, op: &str, args: Vec<Value>) -> Rt<()> {
+        self.sync_clock();
         let s = self.current_scope(tid);
         if self.deadline_star(s).is_some_and(|d| self.now >= d) {
             self.raise_con(tid, "PastDeadline", vec![]);

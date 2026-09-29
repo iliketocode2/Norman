@@ -14,11 +14,13 @@
 //! | `machine` | the µNorman machine (07): threads, scopes, requests, clock |
 //! | `driver`  | definitions (§6.6), extended definitions, unit tests   |
 
+pub mod anthropic;
 pub mod ast;
 pub mod defaults;
 pub mod driver;
 pub mod host;
 pub mod lexer;
+pub mod live;
 pub mod machine;
 pub mod parser;
 pub mod types;

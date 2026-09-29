@@ -55,7 +55,7 @@ pricing when changing models.
 | adjacent messages of the same role | merged into one turn |
 | context ending with an assistant turn | **checked run-time error**. Current models reject assistant prefill with a 400, and a prefill isn't a question anyway. |
 | `τ` | `output_config.format = {"type": "json_schema", "schema": S(τ)}` (§2) |
-| `max_out(m, τ)` | `max_tokens = min(ceiling, bound(τ) + think)` |
+| `max_out(m, τ)` | `max_tokens = min(ceiling, bound(τ) + wrapper + think)`, where wrapper is 10 when the answer is wrapped (§2) and 0 otherwise |
 | thinking | left at the model's default (adaptive); `think` budgets for it |
 
 The answer is JSON in the response's `text` block. It goes through the existing
@@ -183,18 +183,46 @@ the mode.
 
 ## 6. Implementation plan
 
-1. **Refactor the oracle into a trait.** `Machine` stops pulling from the
+1. ✅ **Refactor the oracle into a trait.** `Machine` stops pulling from the
    script directly. It asks an `Oracle` to *count*, *issue*, *cancel*, and
    deliver the *next batch* of completions up to a time limit. Add
    `Refused`, `(refusal …)` script entries, and the model-grant fields
    `id`/`think` with the defaults of §0. **Every existing test must still
    pass unchanged.**
-2. **Pure translations,** each with unit tests and no network:
-   `S(τ)`, context → request body, response body → outcome.
-3. **The live client.** Raw HTTP (there's no official Rust SDK), worker
+2. ✅ **Pure translations,** each with unit tests and no network:
+   `S(τ)`, context → request body, response body → outcome. `S(τ)` and the
+   root-wrapping rule are in [`src/types.rs`](../src/types.rs), next to
+   `bound` and `validate`. The request and response formats are in
+   [`src/anthropic.rs`](../src/anthropic.rs), with 14 unit tests. The 10-byte
+   wrapper is counted in `max_tokens` in *both* modes, so scripted and live
+   reservations use the same arithmetic.
+3. ✅ **The live client.** Raw HTTP (there's no official Rust SDK), worker
    threads, a real clock. It's tested against a **local stub server** that
    replays canned API responses, so 429s, truncation and refusals are tested
-   without spending money.
+   without spending money. The client is
+   [`src/live.rs`](../src/live.rs), using `ureq` 2. The stub-server tests are
+   [`tests/live_stub.rs`](../tests/live_stub.rs), 9 tests covering: an answer
+   charged from reported usage, and the exact request sent; a 429 retried and
+   shown in the trace; a refusal not retried; `max_tokens` truncation; 401s
+   as run-time errors; a transient count failure; the exact reservation
+   boundary; a deadline cut; and two 600 ms asks finishing together. Run
+   with `norman --live [--trace] FILE`.
+
+   **What step 3 narrows or defers:**
+   - **Counting is synchronous.** M-ASK-COUNT blocks the machine for one
+     round trip, so the counts of concurrent asks happen one after another.
+     The asks themselves are concurrent.
+   - **No streaming.** A request with a very large `max_tokens` (an unbounded
+     `Text` answer) can hit the 10-minute HTTP timeout.
+   - **No tool hosts in live mode.** A `call` is a checked run-time error, and
+     scripted tools can't yet be mixed with a live model.
+   - **Abandoned requests keep running.** When a deadline cuts a request, or
+     fail-fast cancels it, its worker thread finishes the HTTP call and the
+     reply is discarded. The provider may bill for it, and µNorman charges the
+     reservation, which is the upper bound (`07` §5).
+   - **Credentials** come from `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` as
+     a bearer token. `ANTHROPIC_BASE_URL` overrides the endpoint (that's how
+     the stub is reached).
 4. **One opt-in real call.** `cargo test -- --ignored` with
    `ANTHROPIC_API_KEY` set runs the analyst example against Sonnet 5. It costs
    well under $0.01.
