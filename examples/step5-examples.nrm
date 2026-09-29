@@ -1,0 +1,277 @@
+;;; step5-examples.nrm: Step 5 of Ramsey's design process, "example results,"
+;;; for the µNorman evaluator. It's written before the evaluator exists, the way
+;;; Ramsey writes triangle.imp's tests before triangle (Seven Lessons; Impcore §1.2.5).
+;;; Conventions for scripted mode are in design/05-steps-3-to-5.md.
+
+;;; ------------------------------------------------------------------
+;;; Host grants (extended definitions). Prices are micro-dollars per token:
+;;; $3 per million input tokens = 3 µ$/token; $15 per million output = 15 µ$/token.
+
+(grant claude (model [in 3] [out 15] [ceiling 8000]))
+(grant py     (kernel))        ; stateful
+(grant fs     (filesystem))    ; stateful
+
+;;; ------------------------------------------------------------------
+;;; Types
+
+(datatype Verdict                        ; bounded: a narrow judgment operator (RSTD)
+  [Buy  (reason (Text 400))]
+  [Hold (reason (Text 400))]
+  [Sell (reason (Text 400))])
+
+(datatype LooseVerdict                   ; the same shape with unbounded text
+  [LBuy  (reason Text)]
+  [LHold (reason Text)]
+  [LSell (reason Text)])
+
+(datatype Step
+  [Exec (code (Text 4000))]
+  [Done (code (Text 4000))])
+
+;;; ------------------------------------------------------------------
+;;; Programs under test (P1 and P2 from design/01, in the syntax of design/04)
+
+(val analyst-prompt
+  "You are an equity analyst. Give a verdict and a one-sentence reason.")
+
+(define analyst-ctx (filing)
+  (list (Message [role System] [content analyst-prompt])
+        (Message [role User]   [content filing])))
+
+(define analyst (model filing)
+  (catch (ask model Verdict (analyst-ctx filing) 'analyst)
+         err
+         (Hold "analysis unavailable")))
+
+(define ask-analyst ()                   ; a thunk, for retry
+  (ask claude Verdict (analyst-ctx "FY2025 10-K") 'analyst))
+
+(val cp-prompt "Model the problem in CPMpy. Test it. Reply Done with the final code.")
+
+(define observe (py code)                ; tool errors become observations; nothing else does
+  (catch (call py exec code) e
+    (case e
+      [(ToolError m) m]
+      [_             (fail e)])))
+
+(define react (model py ctx)
+  (case (ask model Step ctx 'react)
+    [(Exec code)
+       (react model py
+              (append ctx (list (Message [role Assistant] [content code])
+                                (Message [role Tool]      [content (observe py code)]))))]
+    [(Done code) code]))
+
+(define cp-agent (model py task)
+  (budget ([cost $0.50] [time 10min])
+    (react model py (list (Message [role System] [content cp-prompt])
+                          (Message [role User]   [content task])))))
+
+(define react-fuel (model py ctx n)      ; the explicit-fuel version whose laws are Peano (01, Step 6 preview)
+  (if (= n 0)
+      (fail 'out-of-fuel)
+      (case (ask model Step ctx 'react)
+        [(Exec code)
+           (react-fuel model py
+                       (append ctx (list (Message [role Assistant] [content code])
+                                         (Message [role Tool]      [content (observe py code)])))
+                       (- n 1))]
+        [(Done code) code])))
+
+;;; Measuring helpers, written in µNorman itself using the (remaining) observer
+
+(define elapsed (thunk)
+  (let* ([t0 (. (remaining) time)]
+         [_  (thunk)]
+         [t1 (. (remaining) time)])
+    (- t0 t1)))
+
+(define spent (thunk)
+  (let* ([c0 (. (remaining) cost)]
+         [_  (thunk)]
+         [c1 (. (remaining) cost)])
+    (- c0 c1)))
+
+;;; ==================================================================
+;;; Group 1. ASKOK: a typed answer, charged within bounds
+
+(script sell
+  [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Margins are compressing.\"}") (out 20) (latency 2s)])
+
+(under ([script sell] [cost $1.00] [time 1min])
+  (check-expect (analyst claude "FY2025 10-K") (Sell "Margins are compressing."))
+  (check-within (analyst claude "FY2025 10-K") ([cost $0.01] [time 2s])))
+
+;;; ==================================================================
+;;; Group 2. ASKINVALID: bad model output is a result, not a crash
+
+(script garbled
+  [analyst (reply "I think you should sell.") (out 8) (latency 1s)])
+
+(under ([script garbled] [cost $1.00] [time 1min])
+  (check-fail   (ask-analyst) (Invalid _))
+  (check-expect (analyst claude "FY2025 10-K") (Hold "analysis unavailable")))
+
+;;; ==================================================================
+;;; Group 3. ASKUNAFFORDABLE: the reservation comes from the TYPE (03, Q1)
+;;;   LooseVerdict: max_out = ceiling = 8000 tokens → reserve ≥ 8000 × 15 µ$ = $0.12 > $0.05
+;;;   Verdict:      max_out ≈ 430 bytes            → reserve ≈ $0.0066        ≤ $0.05
+
+(script both
+  [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Margins are compressing.\"}")  (out 20) (latency 2s)]
+  [loose   (reply "{\"tag\":\"LSell\",\"reason\":\"Margins are compressing.\"}") (out 20) (latency 2s)])
+
+(under ([script both] [cost $0.05] [time 1min])
+  (check-fail   (ask claude LooseVerdict (analyst-ctx "FY2025 10-K") 'loose) OverBudget)
+  (check-within (catch (ask claude LooseVerdict (analyst-ctx "FY2025 10-K") 'loose) e 0)
+                ([cost $0] [time 0s]))             ; refused before the oracle: no charge, no time
+  (check-expect (ask-analyst) (Sell "Margins are compressing.")))
+
+;;; ==================================================================
+;;; Group 4. retry and repair (predefined; design/04 §7.2)
+
+(script flaky
+  [analyst (reply "not json")                                          (out 3)  (latency 1s)
+           (reply "{\"tag\":\"Buy\",\"reason\":\"Cheap on earnings.\"}") (out 15) (latency 1s)])
+
+(under ([script flaky] [cost $1.00] [time 1min])
+  (check-fail   (retry 0 ask-analyst) (Invalid _))
+  (check-expect (retry 1 ask-analyst) (Buy "Cheap on earnings."))
+  (check-within (retry 1 ask-analyst) ([time 2s]))
+  (check-expect (repair 1 (lambda (ctx) (ask claude Verdict ctx 'analyst))
+                          (analyst-ctx "FY2025 10-K"))
+                (Buy "Cheap on earnings.")))
+
+;;; ==================================================================
+;;; Group 5. retry never retries budget failures
+
+(under ([script flaky] [cost $0.000001] [time 1min])   ; 1 µ$: nothing is affordable
+  (check-fail   (retry 5 ask-analyst) OverBudget)
+  (check-within (catch (retry 5 ask-analyst) e 0) ([cost $0] [time 0s])))
+
+;;; ==================================================================
+;;; Group 6. ASKLATE: one absolute deadline (03, Q4)
+
+(script slow
+  [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Too late.\"}") (out 8) (latency 10min)])
+
+(under ([script slow] [cost $1.00] [time 1min])
+  (check-fail   (ask-analyst) PastDeadline)
+  (check-within (catch (ask-analyst) e 0) ([time 1min])))   ; the clock stops at the deadline
+
+(under ([script sell] [cost $1.00] [time 1min])             ; a nested budget shrinks the deadline
+  (check-expect (catch (budget ([time 1s]) (ask-analyst)) e e) PastDeadline))
+
+;;; ==================================================================
+;;; Group 7. WORKFLOW: work adds, span is the critical path (02, Part B)
+;;;   DAG: c needs a and b; d needs only a.  Latencies: a = c = 10 s, b = d = 30 s.
+
+(define step-ctx (name)
+  (list (Message [role User] [content (string-append "Do step " name)])))
+
+(define n-graph (m)
+  (workflow ([a (ask m (Text 20) (step-ctx "a") 'a)]
+             [b (ask m (Text 20) (step-ctx "b") 'b)]
+             [c (begin a b (ask m (Text 20) (step-ctx "c") 'c))]   ; mentioning a, b creates the edges
+             [d (begin a   (ask m (Text 20) (step-ctx "d") 'd))])
+    (list a b c d)))
+
+(define n-graph-par (m)                  ; the same DAG forced into fork-join
+  (let* ([ab (par (ask m (Text 20) (step-ctx "a") 'a)
+                  (ask m (Text 20) (step-ctx "b") 'b))]
+         [cd (par (ask m (Text 20) (step-ctx "c") 'c)
+                  (ask m (Text 20) (step-ctx "d") 'd))])
+    (list (. ab fst) (. ab snd) (. cd fst) (. cd snd))))
+
+(script dag                             ; two entries per site: the last test runs both versions
+  [a (reply "\"A\"") (out 2) (latency 10s)  (reply "\"A\"") (out 2) (latency 10s)]
+  [b (reply "\"B\"") (out 2) (latency 30s)  (reply "\"B\"") (out 2) (latency 30s)]
+  [c (reply "\"C\"") (out 2) (latency 10s)  (reply "\"C\"") (out 2) (latency 10s)]
+  [d (reply "\"D\"") (out 2) (latency 30s)  (reply "\"D\"") (out 2) (latency 30s)])
+
+(under ([script dag] [cost $1.00] [time 5min])
+  (check-expect (n-graph claude) (list "A" "B" "C" "D"))
+  (check-expect (elapsed (lambda () (n-graph claude)))     40s)   ; span: b→c = a→d = 40 s
+  (check-expect (elapsed (lambda () (n-graph-par claude))) 60s)   ; fork-join: 30 + 30
+  (check-assert (= (spent (lambda () (n-graph claude)))           ; work is identical
+                   (spent (lambda () (n-graph-par claude))))))
+
+;;; ==================================================================
+;;; Group 8. WORKFLOWSHARED: stateful capabilities are owned (03, Q2)
+
+(define run-x (code) (call py exec code))   ; a closure that reaches py through fv, not through ρ
+
+(script kernels                         ; a forked kernel draws from its parent's script
+  [py/exec (result "ok") (latency 1s)
+           (result "ok") (latency 1s)])
+
+(under ([script kernels] [cost $1.00] [time 1min])
+  (check-expect (catch (workflow ([a (call py exec "x = 1")] [b (call py exec "x = 2")]) a) e e)
+                (Raised 'shared-stateful-capability))
+  (check-expect (catch (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a) e e)
+                (Raised 'shared-stateful-capability))
+  (check-within (catch (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a) e 0)
+                ([cost $0] [time 0s]))      ; rejected before any node runs
+  (check-expect (let* ([py2 (call py fork)])
+                  (workflow ([a (call py exec "x = 1")] [b (call py2 exec "x = 2")]) (list a b)))
+                (list "ok" "ok")))
+
+(script two-analysts
+  [analyst (reply "{\"tag\":\"Buy\",\"reason\":\"One.\"}") (out 10) (latency 2s)
+           (reply "{\"tag\":\"Sell\",\"reason\":\"Two.\"}") (out 10) (latency 2s)])
+
+(under ([script two-analysts] [cost $1.00] [time 1min])
+  ;; analyst's closure environment contains py and fs, but its body never mentions them,
+  ;; so reach(analyst) = ∅ and the two nodes don't conflict.
+  (check-expect (workflow ([a (analyst claude "A")] [b (analyst claude "B")]) (list a b))
+                (list (Buy "One.") (Sell "Two."))))   ; per-site order: virtual time, ties by binding order
+
+;;; ==================================================================
+;;; Group 9. P1 (CP-Agent): the ReAct loop is case analysis on the oracle's answer
+
+(script cp
+  [react   (reply "{\"tag\":\"Exec\",\"code\":\"x = 6 * 7\"}")                (out 12) (latency 3s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"print(x)\"}")                 (out 10) (latency 3s)
+           (reply "{\"tag\":\"Done\",\"code\":\"x = 6 * 7\\nprint(x)\"}")     (out 16) (latency 3s)]
+  [py/exec (result "") (latency 1s)
+           (result "42") (latency 1s)])
+
+(under ([script cp] [cost $1.00] [time 5min])
+  (check-expect (cp-agent claude py "Compute 6 * 7.") "x = 6 * 7\nprint(x)")
+  (check-within (cp-agent claude py "Compute 6 * 7.") ([cost $0.05] [time 11s]))   ; 3 asks × 3 s + 2 calls × 1 s
+  (check-expect (react-fuel claude py '() 3) "x = 6 * 7\nprint(x)")
+  (check-fail   (react-fuel claude py '() 2) (Raised _)))                      ; 'out-of-fuel
+
+;;; ==================================================================
+;;; Group 10. ASKPROVIDERERROR and CALLERROR: tool and provider failures are ToolError
+
+(script outage
+  [analyst (provider-error "503 Service Unavailable") (latency 1s)
+           (reply "{\"tag\":\"Hold\",\"reason\":\"Back online.\"}") (out 10) (latency 1s)])
+
+(under ([script outage] [cost $1.00] [time 1min])
+  (check-fail   (ask-analyst) (ToolError _))
+  (check-expect (retry 1 ask-analyst) (Hold "Back online.")))   ; ToolError is retryable
+
+(script py-error
+  [py/exec (error "NameError: name 'x' is not defined") (latency 1s)])
+
+(under ([script py-error] [cost $1.00] [time 1min])
+  (check-fail   (call py exec "print(x)") (ToolError _))
+  (check-expect (observe py "print(x)") "NameError: name 'x' is not defined"))   ; the error becomes an observation
+
+;;; ==================================================================
+;;; Group 11. WORKFLOWFAIL: fail-fast cancels siblings; time stops at the first failure
+
+(script fail-fast
+  [a (reply "garbage") (out 2) (latency 5s)]
+  [b (reply "\"B\"")   (out 2) (latency 30s)])
+
+(define two-steps (m)
+  (workflow ([a (ask m (Text 20) (step-ctx "a") 'a)]
+             [b (ask m (Text 20) (step-ctx "b") 'b)])
+    (list a b)))
+
+(under ([script fail-fast] [cost $1.00] [time 1min])
+  (check-fail   (two-steps claude) (Invalid _))
+  (check-within (catch (two-steps claude) e 0) ([time 5s])))   ; b is cancelled at 5 s, not awaited to 30 s
