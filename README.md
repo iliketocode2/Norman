@@ -1,5 +1,4 @@
-# Norman
-Mr. Shannon, meet Mr. Ramsey
+# µNorman
 
 **µNorman** is a small programming language for AI agents. It has typed model
 calls, budgets in money and time, capabilities for tools, and dataflow
