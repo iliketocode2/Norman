@@ -12,9 +12,16 @@ by example. The formal definitions, rules and proofs are in the numbered
 documents. The [reading map](#reading-map) at the end says which one to open
 for what.
 
-> **Status:** designed, not yet implemented. The syntax, semantics and laws are
-> written down, and the example programs and tests exist. The interpreter
-> (in Rust) is the next step.
+> **Status:** designed and implemented. A Rust interpreter runs the design's
+> example programs and laws. All 35 example tests and 19 law tests pass, and
+> a suite of deliberately wrong tests fails, as it must. Models and tools are
+> scripted so far; a live model connection is next. See
+> [`08-implementation-notes.md`](08-implementation-notes.md).
+>
+> ```
+> cargo run -- examples/step5-examples.nrm
+> cargo test
+> ```
 
 ---
 
@@ -235,17 +242,19 @@ evaluator.
 | 3. Names · 4. Contracts · 5. Example results | [`05`](05-steps-3-to-5.md), [`examples/step5-examples.nrm`](../examples/step5-examples.nrm) |
 | 6. Algebraic laws | [`06`](06-algebraic-laws.md), [`examples/step6-laws.nrm`](../examples/step6-laws.nrm) |
 | (the semantics the code will follow) | [`04`](04-formal-definition.md) (big-step), [`07`](07-small-step-semantics.md) (concurrency) |
-| 7–8. Case analysis and code | next: the Rust interpreter |
-| 9. Revisit tests | after that |
+| 7–8. Case analysis and code | [`../src/`](../src/): the Rust interpreter; [`08`](08-implementation-notes.md) maps rules to code |
+| 9. Revisit tests | `cargo test`; [`08`](08-implementation-notes.md) records what running them found |
 
-Twice, writing things down precisely caught real mistakes before any code
-existed:
+Writing things down precisely caught real mistakes, twice before any code
+existed and once more when the code first ran:
 
 - **Writing tests** caught an ownership check that would have rejected every
   workflow.
 - **Writing laws** caught five problems. Two were loops that could drain a whole
   budget, one was a false law, one was a charge for calls that could never
   succeed, and one was a theorem missing a condition.
+- **Running the tests** caught reserved words (`cost`, `time`) that the
+  language's own basis used as field names.
 
 Ramsey's point exactly: proofs are most useful when they fail.
 
@@ -263,6 +272,7 @@ Ramsey's point exactly: proofs are most useful when they fail.
 | [`05-steps-3-to-5.md`](05-steps-3-to-5.md) | function names, contracts, test conventions, rule-by-rule test coverage | write or read tests |
 | [`06-algebraic-laws.md`](06-algebraic-laws.md) | laws for every construct; what `==` means; tempting non-laws; two proofs | refactor, optimize, or reason about programs |
 | [`07-small-step-semantics.md`](07-small-step-semantics.md) | the event-by-event machine for concurrency and shared budgets | implement the interpreter, or see who wins a budget race |
+| [`08-implementation-notes.md`](08-implementation-notes.md) | how to run it; rule-to-code map; every deliberate deviation; what the tests found | work on the interpreter |
 
 Where documents disagree, the later one wins. Each correction is also noted at
 the place it corrects.
