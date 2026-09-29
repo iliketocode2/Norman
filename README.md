@@ -14,6 +14,26 @@ cargo run -- examples/step5-examples.nrm    # load a program and run its unit te
 cargo test                                  # the design's example results and laws
 ```
 
+## License
+
+µNorman is dual-licensed under either of
+
+- the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), or
+- the MIT License ([LICENSE-MIT](LICENSE-MIT)),
+
+at your option. This is the convention of the Rust ecosystem, which the
+interpreter is written in. Apache-2.0 adds an explicit patent grant.
+
+This covers the project's own work: the language design documents in
+[`design/`](design/), the interpreter in [`src/`](src/), and the examples and
+tests. **It does not cover the papers in [`theory/`](theory/).** They remain
+the copyright of their authors and publishers, and they're cited in the
+Bibliography below.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this work, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.
+
 ## Bibliography
 
 The source papers are in [`theory/`](theory/). Each one is reviewed critically
