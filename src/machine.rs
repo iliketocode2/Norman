@@ -10,7 +10,7 @@
 //! Rule names in comments refer to 04 §6 and 07 §4.
 
 use crate::ast::*;
-use crate::host::ScriptState;
+use crate::host::{AskReq, Completion, Oracle, ScriptedOracle};
 use crate::types::TypeEnv;
 use crate::value::*;
 use std::collections::{HashMap, HashSet};
@@ -174,10 +174,12 @@ struct Wf {
 }
 
 enum ReqKind {
-    Ask { model: Rc<ModelSpec>, ty: Type, in_tokens: i64, max_out: i64 },
+    Ask { model: Rc<ModelSpec>, ty: Type },
     Call,
 }
 
+/// An in-flight request, from the machine's side: what was reserved, where,
+/// and by when it must complete. The oracle holds the rest.
 struct Request {
     rid: u64,
     tid: usize,
@@ -185,10 +187,8 @@ struct Request {
     reserve: i64,
     scope: usize,
     start: i64,
-    due: i64,
-    /// The reply would arrive after the deadline, so `due` was cut to it (ASKLATE).
-    cut: bool,
-    entry: Entry,
+    /// deadline*(σ) at issue: the request is cut if it hasn't completed by then (ASKLATE).
+    deadline: Option<i64>,
     kind: ReqKind,
 }
 
@@ -202,7 +202,7 @@ pub struct Machine<'a> {
     next_rid: u64,
     next_cap: u64,
     now: i64,
-    script: ScriptState,
+    oracle: Box<dyn Oracle + 'a>,
     trace: Vec<TraceEntry>,
     steps: u64,
 }
@@ -211,9 +211,20 @@ fn failure(name: &str, fields: Vec<Value>) -> Value {
     Value::con(name, fields)
 }
 
-/// Run `e` in a fresh world. This is how every definition and unit test is
-/// evaluated.
+/// Run `e` in a fresh world with the scripted oracle. This is how every
+/// definition and unit test is evaluated.
 pub fn run(globals: &HashMap<Name, Value>, theta: &TypeEnv, cfg: &WorldConfig, e: ExpRef) -> Rt<Outcome> {
+    run_with(globals, theta, cfg, Box::new(ScriptedOracle::new(cfg.script.clone())), e)
+}
+
+/// Run `e` in a fresh world, with answers from `oracle`.
+pub fn run_with<'a>(
+    globals: &'a HashMap<Name, Value>,
+    theta: &'a TypeEnv,
+    cfg: &WorldConfig,
+    oracle: Box<dyn Oracle + 'a>,
+    e: ExpRef,
+) -> Rt<Outcome> {
     let mut m = Machine {
         globals,
         theta,
@@ -224,7 +235,7 @@ pub fn run(globals: &HashMap<Name, Value>, theta: &TypeEnv, cfg: &WorldConfig, e
         next_rid: 0,
         next_cap: 1 << 40,
         now: 0,
-        script: ScriptState::new(cfg.script.clone()),
+        oracle,
         trace: vec![],
         steps: 0,
     };
@@ -269,23 +280,40 @@ impl<'a> Machine<'a> {
         }
     }
 
-    /// M-TIME: jump to the earliest due time and complete every request due
-    /// then, in issue order.
+    /// M-TIME: the clock moves to whichever comes first, the oracle's next batch
+    /// of completions or the earliest deadline among in-flight requests. A
+    /// batch completes in issue order. At a deadline, the requests due are cut.
     fn advance_time(&mut self) -> Rt<()> {
-        let due = self.pending.iter().map(|r| r.due).min().expect("pending is non-empty");
-        self.now = due;
-        let mut ready = vec![];
-        let mut i = 0;
-        while i < self.pending.len() {
-            if self.pending[i].due == due {
-                ready.push(self.pending.remove(i));
-            } else {
-                i += 1;
+        let limit = self.pending.iter().filter_map(|r| r.deadline).min();
+        match self.oracle.next(limit).map_err(RtErr)? {
+            Some((t, batch)) => {
+                self.now = self.now.max(t);
+                for (rid, c) in batch {
+                    if let Some(pos) = self.pending.iter().position(|r| r.rid == rid) {
+                        let r = self.pending.remove(pos);
+                        self.complete(r, c)?;
+                    }
+                }
             }
-        }
-        ready.sort_by_key(|r| r.rid);
-        for r in ready {
-            self.complete(r)?;
+            None => {
+                let Some(l) = limit else {
+                    return stuck("the machine is stuck: requests are in flight but the oracle has nothing to deliver");
+                };
+                self.now = self.now.max(l);
+                let mut cut: Vec<Request> = vec![];
+                let mut i = 0;
+                while i < self.pending.len() {
+                    if self.pending[i].deadline.is_some_and(|d| d <= self.now) {
+                        cut.push(self.pending.remove(i));
+                    } else {
+                        i += 1;
+                    }
+                }
+                cut.sort_by_key(|r| r.rid);
+                for r in cut {
+                    self.cut(r);
+                }
+            }
         }
         Ok(())
     }
@@ -793,7 +821,7 @@ impl<'a> Machine<'a> {
 
     // --------------------------------------------------------- ask and call
 
-    /// M-ASK-EXPIRED, M-ASK-REFUSED, M-ASK-ISSUE.
+    /// M-ASK-EXPIRED, M-ASK-COUNT, M-ASK-REFUSED, M-ASK-ISSUE (07 §4.1, 09 §3).
     fn issue_ask(&mut self, tid: usize, site: &str, model: Rc<ModelSpec>, ty: &Type, ctx: &Value) -> Rt<()> {
         let s = self.current_scope(tid);
         if self.deadline_star(s).is_some_and(|d| self.now >= d) {
@@ -801,27 +829,30 @@ impl<'a> Machine<'a> {
             return Ok(());
         }
         self.theta.askable(ty).map_err(RtErr)?;
-        let in_tokens = (context_bytes(ctx)? + 3) / 4;
-        let max_out = self.theta.bound(ty).unwrap_or(u64::MAX).min(model.ceiling) as i64;
-        let reservation = in_tokens * model.in_price + max_out * model.out_price;
+        let messages = crate::host::messages(ctx).map_err(RtErr)?;
+        // max_tokens = min(ceiling, bound(τ) + think): room for the answer and for thinking.
+        let max_tokens = self.theta.bound(ty).map_or(model.ceiling, |b| (b + model.think).min(model.ceiling)) as i64;
+        let req = AskReq { site: site.to_string(), model: model.clone(), ty: ty.clone(), messages, max_tokens };
+        let count = self.oracle.count(&req).map_err(RtErr)?;
+        let in_tokens = if count.exact {
+            count.tokens
+        } else {
+            use crate::defaults::{COUNT_MARGIN_ABS, COUNT_MARGIN_PCT};
+            (count.tokens * (100 + COUNT_MARGIN_PCT) + 99) / 100 + COUNT_MARGIN_ABS
+        };
+        let reservation = in_tokens * model.in_price + max_tokens * model.out_price;
         if reservation > self.available(s) {
             self.raise_con(tid, "OverBudget", vec![]);
             return Ok(());
         }
-        let entry = self
-            .script
-            .next(site)
-            .ok_or_else(|| RtErr(format!("script exhausted: no reply left for ask site '{}'", site)))?;
-        if !matches!(entry, Entry::Reply { .. } | Entry::ProviderError { .. }) {
-            return stuck(format!("the script entry for ask site '{}' is a tool result, not a model reply", site));
-        }
-        let kind = ReqKind::Ask { model, ty: ty.clone(), in_tokens, max_out };
-        self.enqueue(tid, s, site.to_string(), reservation, entry, kind);
+        let rid = self.next_rid;
+        self.oracle.issue_ask(rid, req, self.now).map_err(RtErr)?;
+        self.enqueue(tid, s, site.to_string(), reservation, ReqKind::Ask { model, ty: ty.clone() });
         Ok(())
     }
 
     /// The CALL rules. `fork` on a kernel is implemented by the host itself.
-    fn issue_call(&mut self, tid: usize, cap: Cap, op: &str, _args: Vec<Value>) -> Rt<()> {
+    fn issue_call(&mut self, tid: usize, cap: Cap, op: &str, args: Vec<Value>) -> Rt<()> {
         let s = self.current_scope(tid);
         if self.deadline_star(s).is_some_and(|d| self.now >= d) {
             self.raise_con(tid, "PastDeadline", vec![]);
@@ -834,76 +865,85 @@ impl<'a> Machine<'a> {
             return Ok(());
         }
         let site = format!("{}/{}", cap.key, op);
-        let entry = self
-            .script
-            .next(&site)
-            .ok_or_else(|| RtErr(format!("script exhausted: no result left for call site '{}'", site)))?;
-        if !matches!(entry, Entry::Result { .. } | Entry::Error { .. }) {
-            return stuck(format!("the script entry for call site '{}' is a model reply, not a tool result", site));
-        }
+        let rid = self.next_rid;
+        self.oracle.issue_call(rid, &site, &args, self.now).map_err(RtErr)?;
         // cost_κ(op) = 0 for every host so far.
-        self.enqueue(tid, s, site, 0, entry, ReqKind::Call);
+        self.enqueue(tid, s, site, 0, ReqKind::Call);
         Ok(())
     }
 
-    fn enqueue(&mut self, tid: usize, s: usize, site: String, reservation: i64, entry: Entry, kind: ReqKind) {
-        let mut due = self.now + entry.latency();
-        let mut cut = false;
-        if let Some(d) = self.deadline_star(s)
-            && due > d {
-                due = d;
-                cut = true;
-            }
+    /// Reserve on the scope chain, record the request, and block the thread.
+    fn enqueue(&mut self, tid: usize, s: usize, site: String, reservation: i64, kind: ReqKind) {
         self.reserve(s, reservation);
         let rid = self.next_rid;
         self.next_rid += 1;
-        self.pending.push(Request { rid, tid, site, reserve: reservation, scope: s, start: self.now, due, cut, entry, kind });
+        let deadline = self.deadline_star(s);
+        self.pending.push(Request { rid, tid, site, reserve: reservation, scope: s, start: self.now, deadline, kind });
         self.threads[tid].status = Status::Blocked;
     }
 
-    /// M-TIME, for one request: settle its money, log it, resume its thread.
-    fn complete(&mut self, r: Request) -> Rt<()> {
-        let (in_tokens, price_in, price_out, max_out, ty) = match &r.kind {
-            ReqKind::Ask { model, ty, in_tokens, max_out } => (*in_tokens, model.in_price, model.out_price, *max_out, Some(ty)),
-            ReqKind::Call => (0, 0, 0, 0, None),
-        };
-        let (charge, out_tokens, ctl, outcome) = if r.cut {
-            // ASKLATE / CALLLATE: cancelled at the deadline, charged the reservation.
-            (r.reserve, 0, Ctl::Raise(failure("PastDeadline", vec![])), "past-deadline".to_string())
-        } else {
-            match &r.entry {
-                Entry::Reply { json, out, .. } => {
-                    let n = (*out as i64).min(max_out);
-                    let charge = in_tokens * price_in + n * price_out;
-                    let parsed = if (*out as i64) > max_out {
-                        None // the provider truncates at max_out, so the JSON is incomplete
-                    } else {
-                        serde_json::from_str::<serde_json::Value>(json).ok().and_then(|j| self.theta.validate(&j, ty.unwrap()))
-                    };
-                    match parsed {
-                        Some(v) => (charge, n, Ctl::Ret(v), "ok".to_string()),
-                        None => (charge, n, Ctl::Raise(failure("Invalid", vec![Value::str(json)])), "invalid".to_string()),
-                    }
-                }
-                Entry::ProviderError { msg, .. } => {
-                    (in_tokens * price_in, 0, Ctl::Raise(failure("ToolError", vec![Value::str(msg)])), format!("error: {}", msg))
-                }
-                Entry::Result { text, .. } => (0, 0, Ctl::Ret(Value::str(text)), "ok".to_string()),
-                Entry::Error { msg, .. } => (0, 0, Ctl::Raise(failure("ToolError", vec![Value::str(msg)])), format!("error: {}", msg)),
-            }
-        };
-        self.settle(r.scope, r.reserve, charge);
+    /// ASKLATE / CALLLATE: the deadline arrived first. The request is
+    /// abandoned and charged its reservation.
+    fn cut(&mut self, r: Request) {
+        self.oracle.cancel(r.rid);
+        self.settle(r.scope, r.reserve, r.reserve);
+        self.log(&r, 0, 0, r.reserve, "past-deadline".into());
+        let t = &mut self.threads[r.tid];
+        t.ctl = Ctl::Raise(failure("PastDeadline", vec![]));
+        t.status = Status::Runnable;
+    }
+
+    fn log(&mut self, r: &Request, in_tokens: i64, out_tokens: i64, cost: i64, mut outcome: String) {
+        if cost > r.reserve {
+            // The reservation's one assumption (09 §3) failed: say so where it happened.
+            outcome.push_str(" over-reservation");
+        }
         self.trace.push(TraceEntry {
-            site: r.site,
+            site: r.site.clone(),
             path: self.threads[r.tid].path.clone(),
-            kind: if ty.is_some() { "ask" } else { "call" },
+            kind: if matches!(r.kind, ReqKind::Ask { .. }) { "ask" } else { "call" },
             in_tokens,
             out_tokens,
-            cost: charge,
+            cost,
             start: r.start,
             end: self.now,
             outcome,
         });
+    }
+
+    /// M-TIME, for one request: settle its money, log it, resume its thread.
+    fn complete(&mut self, r: Request, c: Completion) -> Rt<()> {
+        let (price_in, price_out, ty) = match &r.kind {
+            ReqKind::Ask { model, ty } => (model.in_price, model.out_price, Some(ty.clone())),
+            ReqKind::Call => (0, 0, None),
+        };
+        let raise = |name: &str, fields: Vec<Value>| Ctl::Raise(failure(name, fields));
+        let (in_tokens, out_tokens, ctl, outcome) = match c {
+            Completion::Answer { json, input_tokens, output_tokens, truncated } => {
+                let parsed = if truncated {
+                    None // stopped at max_tokens, so the JSON is incomplete
+                } else {
+                    let ty = ty.as_ref().expect("an answer completes an ask");
+                    serde_json::from_str::<serde_json::Value>(&json).ok().and_then(|j| self.theta.validate(&j, ty))
+                };
+                match parsed {
+                    Some(v) => (input_tokens, output_tokens, Ctl::Ret(v), "ok".to_string()),
+                    None => (input_tokens, output_tokens, raise("Invalid", vec![Value::str(&json)]), "invalid".to_string()),
+                }
+            }
+            Completion::Refusal { category, input_tokens, output_tokens } => {
+                let ctl = raise("Refused", vec![Value::Sym(Rc::from(category.as_str()))]);
+                (input_tokens, output_tokens, ctl, format!("refused: {}", category))
+            }
+            Completion::ProviderError { msg, input_tokens } => {
+                (input_tokens, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg))
+            }
+            Completion::ToolResult { text } => (0, 0, Ctl::Ret(Value::str(&text)), "ok".to_string()),
+            Completion::ToolError { msg } => (0, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg)),
+        };
+        let charge = in_tokens * price_in + out_tokens * price_out;
+        self.settle(r.scope, r.reserve, charge);
+        self.log(&r, in_tokens, out_tokens, charge, outcome);
         let t = &mut self.threads[r.tid];
         t.ctl = ctl;
         t.status = Status::Runnable;
@@ -1091,18 +1131,9 @@ impl<'a> Machine<'a> {
             Status::Blocked => {
                 if let Some(pos) = self.pending.iter().position(|r| r.tid == tid) {
                     let r = self.pending.remove(pos);
+                    self.oracle.cancel(r.rid);
                     self.settle(r.scope, r.reserve, r.reserve);
-                    self.trace.push(TraceEntry {
-                        site: r.site,
-                        path: self.threads[tid].path.clone(),
-                        kind: if matches!(r.kind, ReqKind::Ask { .. }) { "ask" } else { "call" },
-                        in_tokens: 0,
-                        out_tokens: 0,
-                        cost: r.reserve,
-                        start: r.start,
-                        end: self.now,
-                        outcome: "cancelled".into(),
-                    });
+                    self.log(&r, 0, 0, r.reserve, "cancelled".into());
                 }
             }
             Status::Waiting => {
@@ -1143,28 +1174,4 @@ pub fn match_pattern(p: &Pattern, v: &Value) -> Option<Vec<(Name, Value)>> {
         }
         _ => None,
     }
-}
-
-/// Bytes of a context under the test tokenizer's serialization: for each
-/// message, its role, its content, and 4 bytes of framing. Tokens = ⌈bytes ÷ 4⌉.
-fn context_bytes(ctx: &Value) -> Rt<i64> {
-    let items = ctx.to_vec().ok_or_else(|| RtErr(format!("an ask's context must be a list of Message, got {}", ctx)))?;
-    let mut bytes = 0;
-    for m in items {
-        let Value::Record(r, fs) = &m else {
-            return stuck(format!("an ask's context must contain Message records, got {}", m));
-        };
-        if &**r != "Message" {
-            return stuck(format!("an ask's context must contain Message records, got {}", m));
-        }
-        for (f, v) in fs.iter() {
-            match (&**f, v) {
-                ("role", Value::Con(k, _)) => bytes += k.len() as i64,
-                ("content", Value::Str(s)) => bytes += s.len() as i64,
-                _ => return stuck(format!("malformed Message {}", m)),
-            }
-        }
-        bytes += 4;
-    }
-    Ok(bytes)
 }

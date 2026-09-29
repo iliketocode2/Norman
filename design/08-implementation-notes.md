@@ -84,7 +84,13 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
    reservation (Theorem 1′).
 5. **Hosts are scripted only.** `cost_κ(op) = 0` for every host. There's no
    real Python kernel or filesystem yet. Kernels implement `fork` natively.
-6. **There is no live oracle yet.** Models answer only from scripts.
+6. **There is no live oracle yet.** Models answer only from scripts. Step 1
+   of [`09`](09-live-oracle.md) is done: the machine now talks to an `Oracle`
+   trait ([`src/host.rs`](../src/host.rs)), and scripts are one implementation
+   of it. Refusals, the default model grant (Claude Sonnet 5, set in
+   [`src/defaults.rs`](../src/defaults.rs)) and thinking allowances are in
+   place and tested in
+   [`examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm).
 7. **`check-equiv 'exact`** compares results, money, time, and the trace by
    (site, kind, cost, start, end, outcome). It ignores workflow paths, because
    the same computation can legitimately run at a different path (for

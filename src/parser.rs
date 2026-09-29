@@ -247,28 +247,30 @@ impl<'a> Parser<'a> {
         let kind = spec.first().and_then(Sx::atom).unwrap_or("");
         let spec = match kind {
             "model" => {
-                let (mut i, mut o, mut c) = (None, None, None);
+                // Every field is optional; omitted fields take the defaults in
+                // crate::defaults, which describe Claude Sonnet 5 (design/09 §0).
+                use crate::defaults as d;
+                let (mut id, mut i, mut o, mut c, mut t) = (d::MODEL_ID.to_string(), d::IN_PRICE, d::OUT_PRICE, d::CEILING, d::THINK);
                 for item in &spec[1..] {
                     match item.list() {
+                        Some([k, Sx::Str(s, _)]) if k.atom() == Some("id") => id = s.to_string(),
                         Some([k, v]) => {
                             let n = match v.atom().map(classify) {
                                 Some(Ok(Atom::Num(n))) if n >= 0 => n,
                                 _ => return perr(v, "expected a non-negative numeral"),
                             };
                             match k.atom() {
-                                Some("in") => i = Some(n),
-                                Some("out") => o = Some(n),
-                                Some("ceiling") => c = Some(n as u64),
-                                _ => return perr(k, "model options are in, out and ceiling"),
+                                Some("in") => i = n,
+                                Some("out") => o = n,
+                                Some("ceiling") => c = n as u64,
+                                Some("think") => t = n as u64,
+                                _ => return perr(k, "model options are [id \"…\"], [in n], [out n], [ceiling n] and [think n]"),
                             }
                         }
-                        _ => return perr(item, "expected [option numeral]"),
+                        _ => return perr(item, "expected [option value]"),
                     }
                 }
-                match (i, o, c) {
-                    (Some(in_price), Some(out_price), Some(ceiling)) => HostSpec::Model { in_price, out_price, ceiling },
-                    _ => return perr(&args[1], "a model needs [in n] [out n] [ceiling n]"),
-                }
+                HostSpec::Model { id, in_price: i, out_price: o, ceiling: c, think: t }
             }
             "kernel" => HostSpec::Kernel,
             "filesystem" => HostSpec::Filesystem,
@@ -306,6 +308,7 @@ impl<'a> Parser<'a> {
                 };
                 match head {
                     "reply" => entries.push(Entry::Reply { json: text(arg)?, out: 0, latency: 0 }),
+                    "refusal" => entries.push(Entry::Refusal { category: text(arg)?, out: 0, latency: 0 }),
                     "provider-error" => entries.push(Entry::ProviderError { msg: text(arg)?, latency: 0 }),
                     "result" => entries.push(Entry::Result { text: text(arg)?, latency: 0 }),
                     "error" => entries.push(Entry::Error { msg: text(arg)?, latency: 0 }),
@@ -313,11 +316,12 @@ impl<'a> Parser<'a> {
                         let last = entries.last_mut().ok_or_else(|| format!("{}: ({} …) must follow a reply", item.loc(), head))?;
                         match (head, arg.atom().map(classify)) {
                             ("out", Some(Ok(Atom::Num(n)))) if n >= 0 => match last {
-                                Entry::Reply { out, .. } => *out = n as u64,
-                                _ => return perr(item, "(out …) applies only to a reply"),
+                                Entry::Reply { out, .. } | Entry::Refusal { out, .. } => *out = n as u64,
+                                _ => return perr(item, "(out …) applies only to a reply or a refusal"),
                             },
                             ("latency", Some(Ok(Atom::Dur(d)))) => match last {
                                 Entry::Reply { latency, .. }
+                                | Entry::Refusal { latency, .. }
                                 | Entry::ProviderError { latency, .. }
                                 | Entry::Result { latency, .. }
                                 | Entry::Error { latency, .. } => *latency = d,

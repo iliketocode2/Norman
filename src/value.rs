@@ -100,6 +100,10 @@ impl Prim {
 #[derive(Debug)]
 pub struct ModelSpec {
     pub name: Name,
+    /// The provider's model ID, e.g. "claude-sonnet-5".
+    pub id: String,
+    /// Thinking allowance in tokens, added to max_tokens and the reservation (09, decision A).
+    pub think: u64,
     /// Micro-dollars per input token.
     pub in_price: i64,
     /// Micro-dollars per output token.

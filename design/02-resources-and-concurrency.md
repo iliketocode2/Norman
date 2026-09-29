@@ -268,6 +268,7 @@ it was formed. So `fail` carries a datatype:
 (datatype Failure
   [Invalid      (raw Text)]      ; model output didn't match τ
   [ToolError    (message Text)]  ; a call failed
+  [Refused      (category Sym)]  ; the model declined (added by 09, decision B)
   [OverBudget]                   ; a reservation didn't fit
   [PastDeadline]                 ; the clock ran out
   [Raised       (reason Sym)])   ; the program said (fail 'reason)

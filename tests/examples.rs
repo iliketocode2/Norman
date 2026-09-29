@@ -24,6 +24,13 @@ fn step6_laws_all_pass() {
 }
 
 #[test]
+fn scripted_oracle_tests_all_pass() {
+    let s = load("examples/oracle-scripted.nrm");
+    assert!(s.total >= 10, "expected at least 10 tests, found {}", s.total);
+    assert!(s.all_passed(), "{} of {} oracle tests passed", s.passed, s.total);
+}
+
+#[test]
 fn deliberately_wrong_tests_all_fail() {
     let mut interp = Interp::new();
     interp.verbose = false;

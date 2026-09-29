@@ -1,0 +1,57 @@
+;;; oracle-scripted.nrm: tests for design/09, step 1 (the oracle interface),
+;;; run against scripts: refusals, the default model grant, the thinking
+;;; allowance's effect on reservations, and truncation at max_tokens.
+
+(grant sonnet (model))                  ; all defaults: claude-sonnet-5, [in 2] [out 10] [ceiling 128000] [think 2000]
+(grant lean   (model [think 0]))        ; the same model with no thinking allowance
+
+(datatype Verdict
+  [Buy  (reason (Text 400))]
+  [Hold (reason (Text 400))]
+  [Sell (reason (Text 400))])
+
+(define ctx0 ()                          ; 25 tokens under the test tokenizer
+  (list (Message [role System] [content "You are an equity analyst. Give a verdict and a one-sentence reason."])
+        (Message [role User]   [content "FY2025 10-K"])))
+
+(define ask-with (m) (lambda () (ask m Verdict (ctx0) 'analyst)))
+
+;;; ------------------------------------------------------------------
+;;; Refusal (decision B): a new failure, and retry does not retry it
+
+(script refusing
+  [analyst (refusal "cyber") (out 5) (latency 1s)
+           (reply "{\"tag\":\"Hold\",\"reason\":\"Fine.\"}") (out 10) (latency 1s)])
+
+(under ([script refusing] [cost $1.00] [time 1min])
+  (check-fail   ((ask-with sonnet)) (Refused _))
+  (check-expect (catch ((ask-with sonnet)) e e) (Refused 'cyber))
+  (check-fail   (retry 3 (ask-with sonnet)) (Refused _))           ; the second reply is never requested
+  (check-within (catch (retry 3 (ask-with sonnet)) e 0) ([time 1s])))
+
+;;; ------------------------------------------------------------------
+;;; The thinking allowance is reserved (decision A)
+;;;   sonnet: max_tokens = 426 + 2000 = 2426  →  reserve 25×2 + 2426×10 = 24 310 µ$ ≈ $0.0243
+;;;   lean:   max_tokens = 426              →  reserve 25×2 +  426×10 =  4 310 µ$ ≈ $0.0043
+
+(script sell
+  [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Margins are compressing.\"}") (out 20) (latency 2s)])
+
+(under ([script sell] [cost $0.024] [time 1min])
+  (check-fail   ((ask-with sonnet)) OverBudget)                     ; 24 310 µ$ > 24 000 µ$
+  (check-expect ((ask-with lean)) (Sell "Margins are compressing.")))
+
+(under ([script sell] [cost $0.025] [time 1min])
+  (check-expect ((ask-with sonnet)) (Sell "Margins are compressing."))
+  (check-within ((ask-with sonnet)) ([cost $0.00025])))              ; actual charge: 25×2 + 20×10 = 250 µ$
+
+;;; ------------------------------------------------------------------
+;;; Truncation: a reply longer than max_tokens is Invalid, charged at max_tokens
+
+(script long
+  [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Margins are compressing.\"}") (out 500) (latency 2s)])
+
+(under ([script long] [cost $1.00] [time 1min])
+  (check-fail   ((ask-with lean)) (Invalid _))                     ; 500 > 426
+  (check-within (catch ((ask-with lean)) e 0) ([cost $0.00431]))   ; 25×2 + 426×10 = 4 310 µ$
+  (check-expect ((ask-with sonnet)) (Sell "Margins are compressing.")))   ; 500 ≤ 2426: fits
