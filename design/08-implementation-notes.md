@@ -11,7 +11,7 @@ running the tests (Step 9) found.
 ```
 cargo build
 cargo run -- examples/step5-examples.nrm      # or: target/debug/norman FILE.nrm …
-cargo test                                    # Steps 5, 6 and the must-fail suite
+cargo test                                    # Steps 5, 6, 9, the laws, and the must-fail suite
 ```
 
 Current results:
@@ -19,8 +19,15 @@ Current results:
 | Suite | Result |
 |---|---|
 | Step 5 example results | 35 of 35 pass |
-| Step 6 law instances | 19 of 19 pass |
+| Step 6 law instances and non-law counterexamples | 26 of 26 pass |
+| Step 9 tests of the initial basis ([`../examples/step9-revisit.nrm`](../examples/step9-revisit.nrm)) | 39 of 39 pass |
+| Scripted-oracle tests ([`../examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm)) | 11 of 11 pass |
+| Random tests of 13 laws ([`../tests/properties.rs`](../tests/properties.rs)) | 150 cases each, all pass |
+| The same harness on 3 false laws | finds a counterexample to each, as it must |
 | Must-fail suite ([`../tests/must-fail.nrm`](../tests/must-fail.nrm)) | 8 of 8 fail, as they must |
+
+Every scripted run also checks Theorem 1′ (the budget invariant) in every
+state it reaches. See "The budget invariant is checked" below.
 
 The must-fail suite holds deliberately wrong versions of Step 5 tests: 39 s
 instead of 40 s, a success instead of `OverBudget`, and so on. It checks that
@@ -127,6 +134,32 @@ tests passed.
 | fail-fast | stops at 5 s, not 30 s |
 | nested retries | `(retry 1 (λ () (retry 1 f)))` is exactly `(retry 3 f)` |
 
+**Revisiting the tests found three more problems in the laws** (`06` §7,
+#6–#8). Step 9 asks, "Do they test every form of input?" They didn't:
+`window`, `drop`, `filter` and `last-n` had no tests, and `best-of` was
+tested only at widths 0 and 1, which skips the concurrent case it exists for.
+[`step9-revisit.nrm`](../examples/step9-revisit.nrm) adds them, including a
+true and a false result for every predicate.
+
+- Running one instance of the `window` property showed it was false.
+- Random testing ([`tests/properties.rs`](../tests/properties.rs), Lesson 2's
+  "random, automated, property-based testing") showed that Theorem 4 and law
+  W1 fail when a limit binds. The law had been tested on one hand-written
+  script with generous limits. Each case is generated from a fixed seed and
+  printed as a complete `.nrm` file when it fails, so any failure can be
+  reproduced exactly.
+- The nested-retry law had lost its side condition when fix #1 made `retry`
+  accept negative counts.
+
+**The budget invariant is checked** (Lesson 6: representation invariants
+"can be coded, typechecked, and tested"). Only `reserve` and `settle` move
+money, so after each one the machine checks `spent + reserved ≤ limit` on the
+scopes it touched (`budget_invariant` in
+[`src/machine.rs`](../src/machine.rs), with unit tests). A violation is a
+run-time error, so every scripted test checks Theorem 1′ in every state it
+reaches. On a live oracle, the check stops after an `over-reservation`,
+because the theorem's one assumption has failed (`07` §6).
+
 This is the arc Ramsey's process promises. Laws and tests written *before* the
 code found five design mistakes (`06` §7) and one flawed ownership rule (`05`).
 Running them found one more. Once the code was written, it agreed with the
@@ -136,13 +169,17 @@ specification on every other test.
 
 ## What's next
 
-- **A live oracle.** Connect `ask` to a real model API. The provider reports
-  token usage, which replaces the test tokenizer; `max_tokens` enforces
-  `max_out`. Cancelled calls can then be refunded down to reported usage
-  (`07` §5).
+- **One real call** (step 4 of [`09`](09-live-oracle.md)). The live client
+  is built and tested against a stub server, but no request has reached the
+  real API. One call would confirm that the API accepts our schemas and that
+  the token-count margin holds. Cancelled calls can then be refunded down to
+  reported usage (`07` §5).
 - **Real hosts.** A Python kernel and a filesystem capability, with `fork`.
 - **A read-eval-print loop,** for interactive use.
 - **The type and effect system** (Lesson 5). It makes askability, ownership
   and the `(remaining)` side condition of law W1 into compile-time checks.
+- **Tests of the inherited forms** (LITERAL, VAR, IF, LET, LAMBDA, APPLY,
+  CON, RECORD, FIELD, CASE) on their own, which `05` promised for Step 9.
+  They're still tested only indirectly.
 - **More examples.** P3 (the committee) and P5 (ProofFlow) from `01`/`02` as
   runnable programs.

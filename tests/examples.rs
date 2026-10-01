@@ -19,8 +19,15 @@ fn step5_example_results_all_pass() {
 #[test]
 fn step6_laws_all_pass() {
     let s = load("examples/step6-laws.nrm");
-    assert!(s.total >= 19, "expected at least 19 tests, found {}", s.total);
+    assert!(s.total >= 26, "expected at least 26 tests, found {}", s.total);
     assert!(s.all_passed(), "{} of {} Step 6 tests passed", s.passed, s.total);
+}
+
+#[test]
+fn step9_revisited_tests_all_pass() {
+    let s = load("examples/step9-revisit.nrm");
+    assert!(s.total >= 39, "expected at least 39 tests, found {}", s.total);
+    assert!(s.all_passed(), "{} of {} Step 9 tests passed", s.passed, s.total);
 }
 
 #[test]

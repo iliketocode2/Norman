@@ -1,0 +1,92 @@
+;;; step9-revisit.nrm: Step 9 of Ramsey's process, "revisit tests," for the
+;;; initial basis (src/prelude.nrm). Step 9 asks: "Do they test every form of
+;;; input? If the function's result is Boolean, add new tests so that you have
+;;; both a 'true' and a 'false' test." Before this file, drop, filter, last-n and
+;;; window had no tests, and best-of was tested only at widths 0 and 1.
+;;; Random tests of the same functions' laws are in tests/properties.rs.
+
+(use step5-examples.nrm)
+
+(val sys  (Message [role System]    [content "s"]))
+(val u1   (Message [role User]      [content "u1"]))
+(val a1   (Message [role Assistant] [content "a1"]))
+(val u2   (Message [role User]      [content "u2"]))
+
+;;; ------------------------------------------------------------------
+;;; Predicates: both a true and a false result
+
+(check-expect (not #t) #f)
+(check-expect (not #f) #t)
+(check-expect (<= 2 3) #t)
+(check-expect (<= 3 3) #t)
+(check-expect (<= 4 3) #f)
+(check-expect (>= 4 3) #t)
+(check-expect (>= 3 3) #t)
+(check-expect (>= 2 3) #f)
+(check-expect (system? sys) #t)
+(check-expect (system? u1)  #f)
+
+;;; ------------------------------------------------------------------
+;;; Lists: one test per form of input ('() and cons), and per law
+
+(check-expect (append '() (list 1 2)) (list 1 2))
+(check-expect (append (list 1 2) (list 3)) (list 1 2 3))
+(check-expect (length '()) 0)
+(check-expect (length (list 1 2 3)) 3)
+
+(check-expect (filter system? '()) '())
+(check-expect (filter system? (list u1 sys a1 sys)) (list sys sys))   ; kept, dropped, both orders
+(check-expect (filter system? (list u1 a1)) '())
+
+(check-expect (drop 0 (list 1 2 3)) (list 1 2 3))         ; (drop 0 xs) == xs
+(check-expect (drop 2 '()) '())                           ; (drop (+ k 1) '()) == '()
+(check-expect (drop 2 (list 1 2 3)) (list 3))             ; (drop (+ k 1) (cons y ys)) == (drop k ys)
+(check-expect (drop 5 (list 1 2 3)) '())
+(check-expect (drop -1 (list 1 2 3)) (list 1 2 3))        ; a count ≤ 0 is 0
+
+(check-expect (last-n 2 (list 1 2 3)) (list 2 3))
+(check-expect (last-n 5 (list 1 2 3)) (list 1 2 3))
+(check-expect (last-n 0 (list 1 2 3)) '())
+
+;;; ------------------------------------------------------------------
+;;; window: system messages first, then the last n others
+
+(check-expect (window 2 '()) '())
+(check-expect (window 2 (list sys u1 a1 u2)) (list sys a1 u2))   ; drops the oldest other
+(check-expect (window 0 (list sys u1 a1)) (list sys))
+(check-expect (window 5 (list sys u1 a1)) (list sys u1 a1))      ; system-first: unchanged
+(check-expect (window 5 (list u1 sys a1)) (list sys u1 a1))      ; NOT unchanged: sys moves first
+
+;;; ------------------------------------------------------------------
+;;; best-of at widths 2 and 3: attempts run concurrently. Work adds; span is
+;;; the longest attempt; the first accepted attempt in order wins.
+
+(define accept-all (v) #t)
+(define buy? (v) (case v [(Buy _) #t] [_ #f]))
+
+(script mixed                           ; garbage at 3 s, Sell at 1 s, Buy at 5 s
+  [analyst (reply "not json") (out 3) (latency 3s)
+           (reply "{\"tag\":\"Sell\",\"reason\":\"Two.\"}") (out 10) (latency 1s)
+           (reply "{\"tag\":\"Buy\",\"reason\":\"Three.\"}") (out 10) (latency 5s)])
+
+(under ([script mixed] [cost $1.00] [time 1min])
+  (check-expect (best-of 2 ask-analyst accept-all) (Sell "Two."))     ; the garbage attempt is skipped
+  (check-expect (elapsed (lambda () (best-of 2 ask-analyst accept-all))) 3s)   ; max(3 s, 1 s)
+  (check-expect (best-of 3 ask-analyst buy?) (Buy "Three."))          ; check rejects Sell
+  (check-expect (elapsed (lambda () (best-of 3 ask-analyst buy?))) 5s)
+  (check-expect (spent (lambda () (best-of 3 ask-analyst buy?)))      ; 75 in × 3 µ$ + 23 out × 15 µ$
+                $0.00057))
+
+(script two-buys
+  [analyst (reply "{\"tag\":\"Buy\",\"reason\":\"One.\"}") (out 10) (latency 4s)
+           (reply "{\"tag\":\"Buy\",\"reason\":\"Two.\"}") (out 10) (latency 2s)])
+
+(under ([script two-buys] [cost $1.00] [time 1min])
+  (check-expect (best-of 2 ask-analyst buy?) (Buy "One.")))           ; first in order, not first in time
+
+(under ([script mixed] [cost $1.00] [time 1min])
+  (check-fail   (best-of 2 ask-analyst buy?) (Raised _))              ; garbage and Sell: none accepted
+  (check-within (catch (best-of 2 ask-analyst buy?) e 0) ([time 3s])))
+
+(under ([script mixed] [cost $1.00] [time 2s])                        ; the 3 s attempt misses the deadline
+  (check-fail   (best-of 2 ask-analyst accept-all) PastDeadline))     ; PastDeadline is never absorbed

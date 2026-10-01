@@ -12,10 +12,14 @@ by example. The formal definitions, rules and proofs are in the numbered
 documents. The [reading map](#reading-map) at the end says which one to open
 for what.
 
-> **Status:** designed and implemented. A Rust interpreter runs the design's
-> example programs and laws. All 35 example tests and 19 law tests pass, and
-> a suite of deliberately wrong tests fails, as it must. Models and tools are
-> scripted so far; a live model connection is next. See
+> **Status:** designed and implemented, with models and tools scripted. A Rust
+> interpreter runs the design's example programs and laws: 35 example tests,
+> 26 law tests, 39 tests of the predefined functions and 11 oracle tests all
+> pass. Thirteen laws are also checked on 150 random scripts each, and the
+> budget invariant is checked in every state of every scripted run. A suite of
+> deliberately wrong tests fails, as it must. The live model client is built
+> and tested against a local stub server, but it hasn't yet sent a request to
+> the real API. Live mode has no tools yet. See
 > [`08-implementation-notes.md`](08-implementation-notes.md).
 >
 > ```
@@ -48,6 +52,14 @@ language can guarantee and a library can't:
 | Latency is safety-critical | the control-theory paper: delays add up and can destabilize | one **shared clock** per budget scope, with deadlines everywhere |
 | Failed steps shouldn't rerun everything | RSTD: retry only the step that failed | failures are **values**, and `retry` wraps one step |
 | Agents shouldn't touch tools they weren't given | Turn: credentials as unforgeable handles | tools are **capabilities**; the model can never create one |
+
+Today these guarantees are enforced **when the program runs**, and a careful
+library could make most of the same checks. Two things a library can't offer
+already hold. A program has no way to reach the outside world except `ask`
+and `call`, so every limit applies to every effect. And the guarantees are
+stated as theorems, with laws that say which rewrites are safe. Checking
+programs **before they run** is the job of the planned type and effect system
+(see [What it doesn't do (yet)](#what-it-doesnt-do-yet)).
 
 ---
 
@@ -189,20 +201,38 @@ These are stated as theorems in [`04`](04-formal-definition.md) §8 and
 [`07`](07-small-step-semantics.md) §6. In plain words:
 
 1. **The budget is never overspent,** even with many steps running at once.
+   The interpreter checks this invariant in every state it reaches. Against a
+   live model, it rests on one assumption: the provider never bills more than
+   the reservation, which is based on a token count plus a safety margin. If
+   that assumption fails, the trace records it.
 2. **A model can't hand your program a tool.** Authority comes only from the
    host.
 3. **No answer is accepted after the deadline.**
 4. **Concurrency doesn't change answers.** A workflow gives the same result as
    running its steps one at a time. (The fine print: this holds for steps that
-   don't read their own remaining budget.)
+   don't read their own remaining budget, and when no limit binds. Running
+   steps one at a time takes longer, so it can miss a deadline the workflow
+   meets. If both versions succeed, they agree.)
 5. **Every model call and tool call is recorded** in a trace. That trace is what
    makes testing, replay and cost profiling possible.
 
 ## What it doesn't do (yet)
 
 - **No static types yet.** Types appear only where `ask` needs them. A full
-  type and effect checker is planned. It will turn several run-time checks into
-  compile-time ones.
+  type and effect checker is planned. Today, these mistakes are caught only
+  when the program runs:
+  - asking for a type that can't be asked for;
+  - two concurrent steps sharing a stateful tool (rejected before either step
+    starts, but at run time).
+
+  One isn't caught at all: a concurrent step that reads its remaining budget.
+  That's allowed by design; such a step just falls outside guarantee 4. The
+  checker will catch all three before the program runs.
+- **No real model call yet, and no real tools.** The live client is tested
+  against a local stub server only. Tools are scripted, so programs that use
+  them, such as the CP-Agent example, can't yet run against a real model.
+- **A small standard library.** There's no way yet to turn a number or a value
+  such as a `Verdict` into text, or to take strings apart.
 - **Models are not deterministic, and µNorman doesn't pretend they are.** It
   never merges two identical-looking `ask`s or caches answers automatically.
   Caching is an explicit tool.
@@ -243,7 +273,7 @@ evaluator.
 | 6. Algebraic laws | [`06`](06-algebraic-laws.md), [`examples/step6-laws.nrm`](../examples/step6-laws.nrm) |
 | (the semantics the code will follow) | [`04`](04-formal-definition.md) (big-step), [`07`](07-small-step-semantics.md) (concurrency) |
 | 7–8. Case analysis and code | [`../src/`](../src/): the Rust interpreter; [`08`](08-implementation-notes.md) maps rules to code |
-| 9. Revisit tests | `cargo test`; [`08`](08-implementation-notes.md) records what running them found |
+| 9. Revisit tests | [`examples/step9-revisit.nrm`](../examples/step9-revisit.nrm), random tests of the laws in [`tests/properties.rs`](../tests/properties.rs), `cargo test`; [`08`](08-implementation-notes.md) records what they found |
 
 Writing things down precisely caught real mistakes, twice before any code
 existed and once more when the code first ran:
@@ -255,6 +285,11 @@ existed and once more when the code first ran:
   succeed, and one was a theorem missing a condition.
 - **Running the tests** caught reserved words (`cost`, `time`) that the
   language's own basis used as field names.
+- **Revisiting the tests** caught three more false laws. One `window` law was
+  wrong about message order. One law about nested `retry` was missing a side
+  condition. And the concurrency theorem (guarantee 4) was false when a
+  deadline binds. Random testing found that last one; it had passed its single
+  hand-written test.
 
 Ramsey's point exactly: proofs are most useful when they fail.
 

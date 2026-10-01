@@ -219,6 +219,16 @@ case per transition that touches money.
 This is much shorter than the big-step argument, because interleaving is
 built in rather than argued around.
 
+*Checked at run time.* The invariant is also a representation invariant in
+Lesson 6's sense, so the interpreter checks it: after every `reserve` and
+`settle`, the machine checks the scopes on the chain it touched, and a
+violation is a run-time error (`budget_invariant` in `src/machine.rs`). Every
+scripted test therefore checks Theorem 1′ in every state it reaches. On a
+live oracle the theorem rests on one assumption, that the provider never bills
+more than the reservation (`09` §3). If that ever fails, the trace records it
+as `over-reservation` and the check stops, because the theorem's premise no
+longer holds.
+
 **Theorem 3′ (deadline).** No request completes successfully after
 `deadline*` of its scope: `due` is cut at `deadline*`, and cut requests fail.
 

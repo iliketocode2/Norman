@@ -136,8 +136,10 @@ Ramsey's Step 2 says "every form of data needs an example," and Step 9 asks
 | sugar `par` | 7 | `par` returns a `Pair`; the fork-join version is the 60 s one |
 
 Rules for the inherited forms (LITERAL, VAR, LET, IF, APPLY, CON, RECORD,
-FIELD) are exercised throughout. They'll get their own small tests at Step 9,
-Ramsey's "revisit tests" step.
+FIELD) are exercised throughout. The predefined functions got their own
+tests at Step 9, Ramsey's "revisit tests" step, in
+[`examples/step9-revisit.nrm`](../examples/step9-revisit.nrm). The inherited
+forms are still tested only indirectly, through the programs above.
 
 ### What writing the examples changed
 
