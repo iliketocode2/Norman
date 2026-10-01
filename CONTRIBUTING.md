@@ -34,6 +34,12 @@ model (see [`design/09-live-oracle.md`](design/09-live-oracle.md)).
 2. **For any change to what µNorman programs mean, write the tests first.** Add
    `check-expect`, `check-fail`, `check-within` or `check-equiv` tests to a
    file in [`examples/`](examples/), and see them fail (Ramsey's Step 5).
+   A new algebraic law in [`design/06`](design/06-algebraic-laws.md) gets an
+   instance in [`examples/step6-laws.nrm`](examples/step6-laws.nrm) and, if it
+   holds for all scripts, a random test in
+   [`tests/properties.rs`](tests/properties.rs). A law that has only been
+   tested on one hand-written script hasn't really been tested: W1 passed that
+   way and was false.
 3. Make your changes.
 4. Run `cargo fmt` and `cargo clippy --all-targets` before committing.
 5. Ensure all tests pass: `cargo test`.

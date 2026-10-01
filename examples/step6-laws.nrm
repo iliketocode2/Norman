@@ -90,3 +90,34 @@
                 (Buy "One."))
   (check-fail   (budget ([cost $0.000001]) (catch (ask-analyst) e (ask-analyst)))   ; handler inside: 1 µ$
                 OverBudget))
+
+;;; ------------------------------------------------------------------
+;;; window: the corrected law. When nothing is dropped, window moves the
+;;; System messages to the front and keeps the rest in order.
+
+(val ctx-mixed (list (Message [role User] [content "u"]) (Message [role System] [content "s"])))
+
+(check-expect (window 5 ctx-mixed)
+              (append (filter system? ctx-mixed) (filter (lambda (m) (not (system? m))) ctx-mixed)))
+
+;;; Non-law: the old law (window n ctx) == ctx when (length ctx) ≤ n
+(check-expect (window 5 ctx-mixed)
+              (list (Message [role System] [content "s"]) (Message [role User] [content "u"])))   ; not ctx-mixed
+
+;;; ------------------------------------------------------------------
+;;; Non-law: nested retries multiply only for natural counts.
+;;; (retry -2 (λ () (retry 1 f))) calls f up to twice; (retry -3 f) once.
+
+(under ([script flaky3] [cost $1.00] [time 1min])
+  (check-within (catch (retry -2 (lambda () (retry 1 ask-analyst))) e 0) ([time 2s]))
+  (check-fail   (retry -2 (lambda () (retry 1 ask-analyst))) (Invalid _))
+  (check-within (catch (retry -3 ask-analyst) e 0) ([time 1s])))
+
+;;; ------------------------------------------------------------------
+;;; Non-law: W1 without premise (iii). With a = 10 s and b = 30 s, the
+;;; workflow finishes at 30 s; its sequentialization needs 40 s and misses a
+;;; 35 s deadline.
+
+(under ([script dag] [cost $1.00] [time 35s])
+  (check-expect (par-ab claude) (list "A" "B"))
+  (check-fail   (seq-ab claude) PastDeadline))

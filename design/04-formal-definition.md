@@ -761,12 +761,16 @@ the deadline.
 **Theorem 4 (workflow determinism of value).** If the WORKFLOW rule derives
 `⟨v, W′⟩`, then for *every* topological order `π′` of the nodes, the
 sequentialization `(let* (π′-ordered bindings) e)` derives the same `v`,
-**provided no node evaluates `(remaining)`**. The proof uses the ownership
+**provided no node evaluates `(remaining)`** and **no limit binds** (on
+neither side is a reservation refused or a request cut at a deadline). The
+proof uses the ownership
 premise and the statelessness of models. The `(remaining)` premise was missing
 from the first draft. Stating the theorem as law W1 in `06` exposed that it's
 false without it: a node that reads `(remaining)` observes how much its
-siblings have spent, which depends on scheduling. See `06`, question Q-A. This is the
-law from `02`, made into a theorem.
+siblings have spent, which depends on scheduling. See `06`, question Q-A. The
+second premise was missing too, and random testing found it (`06` §7, #7):
+the sequentialization takes the sum of the nodes' times, so it can miss a
+deadline the workflow meets. This is the law from `02`, made into a theorem.
 
 **A conjecture that fails** (the counterpart of Ramsey's "every variable in `e`
 is defined"). *"A workflow's total spend doesn't depend on scheduling."* It's

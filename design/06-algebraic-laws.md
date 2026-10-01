@@ -18,7 +18,8 @@ This document has two kinds of law, following Lesson 2 §2.3:
   `par`, `ask`). Each property is sound by appeal to the rules of `04` and
   labeled with its use: testing, refactoring, code improvement or specification.
 
-Writing the laws found **five problems** in the earlier documents (§7).
+Writing the laws found **five problems** in the earlier documents, and testing
+them found three more (§7).
 
 ---
 
@@ -101,10 +102,16 @@ cover every natural. `n` gets smaller. `f` appears as a variable, because
 (retry n (lambda () (fail OverBudget)))    ≡ (fail OverBudget)                ; spec: never retries budget
 (retry n (lambda () (fail PastDeadline)))  ≡ (fail PastDeadline)
 (retry m (lambda () (retry n f)))  ≡  (retry (- (* (+ m 1) (+ n 1)) 1) f)      ; refactoring
+                                       when m ≥ 0 and n ≥ 0
 ```
 
 The last law says nested retries multiply attempts: `(m+1)(n+1)` in total. It's
 exact (`≡`), because the sequence of calls to `f` is identical.
+
+> **Problem found (§7, #8).** The first version of this law had no side
+> condition. Problem #1 made `retry` accept negative counts, so the law has to
+> say which counts it covers. With `m = −2` and `n = 1`, the left side calls
+> `f` up to twice, while the right side, `(retry −3 f)`, calls it once.
 
 ### `repair`: like `retry`, with the context growing
 
@@ -195,13 +202,27 @@ a list function with Lesson 2 laws. **Contract:** `(window n ctx)` keeps every
                           (last-n n (filter (lambda (m) (not (system? m))) ctx)))
 ```
 
-**Properties** (for testing):
+**Properties** (for testing), for `n ≥ 0`:
 
 ```
-(length (window n ctx)) ≤ (+ n (length (filter system? ctx)))
-(window n ctx) == ctx                     when (length ctx) ≤ n
+(filter system? (window n ctx)) == (filter system? ctx)
+(length (window n ctx)) == (+ (length (filter system? ctx)) (min n (length (filter non-system? ctx))))
+(window n ctx) == (append (filter system? ctx) (filter non-system? ctx))
+                                          when (length (filter non-system? ctx)) ≤ n
 reservation(ask m τ (window n ctx)) ≤ reservation(ask m τ ctx)       ; by law A2
 ```
+
+Here `non-system?` is `(lambda (m) (not (system? m)))`.
+
+> **Problem found (§7, #6).** This section first stated
+> `(window n ctx) == ctx when (length ctx) ≤ n`. That's **false**: `window`
+> moves every `System` message to the front, so `[User, System]` comes back
+> as `[System, User]`. It's Lesson 2.4's mistake: a variable stands for any
+> form of data, and `ctx` here could have its system messages anywhere. The
+> law holds only for system-first contexts. The third property above is the
+> correct statement: when nothing is dropped, `window` only reorders. The
+> length property also needed `n ≥ 0`, because `last-n` treats a negative
+> count as 0.
 
 So context management needs no primitive, no VM tier and no fixed `W = 100`.
 It's a function whose effect on cost follows from a law.
@@ -273,6 +294,8 @@ budget*.
 (W1) (workflow ([x₁ e₁] … [xₙ eₙ]) e)  ≡v  (let* (topologically ordered bindings) e)
         provided  (i) nodes own disjoint stateful capabilities   [WORKFLOW ownership premise]
                   (ii) no node evaluates (remaining)             [see Q-A below]
+                  (iii) no limit binds: on neither side is a reservation refused
+                        or a request cut at a deadline           [see §7, #7]
 
 (W2) (par e₁ e₂)  ≡$  (swap (par e₂ e₁))     where swap p = (Pair [fst (. p snd)] [snd (. p fst)])
         except when both fail at the same virtual instant (then ≡v)
@@ -281,13 +304,14 @@ budget*.
 
 (W4) flattening:     (workflow (bs₁) (workflow (bs₂) e))  ⊒t  (workflow (bs₁ ++ bs₂) e)
                      when (a) the names of bs₂ are distinct from those of bs₁,
-                          (b) no node of bs₁ mentions a name bound by bs₂ (no capture), and
-                          (c) ownership holds across bs₁ ++ bs₂ together
+                          (b) no node of bs₁ mentions a name bound by bs₂ (no capture),
+                          (c) ownership holds across bs₁ ++ bs₂ together, and
+                          (d) (ii) and (iii) of W1 hold
                      (in the nested form, bs₁ and bs₂ run in separate phases, so they may share a kernel;
                       flattened, they may not)
 
 (W5) parallelizing:  (let* ([x e₁] [y e₂]) e)  ⊒t  (workflow ([x e₁] [y e₂]) e)
-                     when x ∉ fv(e₂), and (i) and (ii) of W1 hold
+                     when x ∉ fv(e₂), and (i), (ii) and (iii) of W1 hold
 
 (W6) work:  spent   (workflow …) = Σ spent(eᵢ) + spent(e)         (on success)
      span:  elapsed (workflow …) = longest path (by elapsed) through the DAG + elapsed(e)
@@ -299,6 +323,15 @@ budget*.
   sequentialization lets earlier nodes spend first, so a node could compute a
   different value. `04`'s Theorem 4 was stated without this premise, and it's
   false without it. See question Q-A.
+- **Premise (iii) was found by random testing** (§7, #7). The two sides take
+  different amounts of time and hold reservations differently. The
+  sequentialization takes the *sum* of its steps' times, so it can miss a
+  deadline that the workflow meets. The workflow holds all its nodes'
+  reservations at once, so it can be refused where the sequentialization,
+  reserving one at a time, isn't. With a = 10 s and b = 30 s under a 35 s
+  limit, the workflow returns at 30 s and the `let*` fails `PastDeadline`.
+  W4 and W5 inherit the premise. Without it, these laws still hold for
+  values: *if both sides succeed, they return the same value.*
 - **W4 and W5 are code improvements** (Lesson 2: "rewriting code to improve its
   performance, without changing its semantics"). They're the language's
   **parallelization optimizations**. The Step 5 test "40 s vs. 60 s" is W4 in
@@ -394,9 +427,19 @@ evaluation doesn't change the world (LITERAL). Let `P = W.pool`,
 | 4 | an `ask` after the deadline still calls the oracle and pays its reservation | `04` §6.5 | new rules ASKEXPIRED and CALLEXPIRED (no call, no charge) |
 | 5 | Theorem 4 (workflow sequentialization) is false if a node reads `(remaining)` | `04` §8 | add premise (ii), pending Q-A |
 
+Testing the laws found three more, after the interpreter existed:
+
+| # | Problem | Found by | Fix |
+|---|---|---|---|
+| 6 | the `window` property `(window n ctx) == ctx when (length ctx) ≤ n` is false when a `System` message comes after another message | running one instance of it | the correct property: when nothing is dropped, `window` puts system messages first |
+| 7 | Theorem 4 and W1 are false when a limit binds: the sequentialization can miss a deadline the workflow meets | random scripts with random limits ([`tests/properties.rs`](../tests/properties.rs)) | premise (iii) in W1, inherited by W4 and W5; the same premise in `04` Theorem 4 |
+| 8 | the nested-retry law is false for negative counts | the side condition was missing after fix #1 | `m ≥ 0` and `n ≥ 0` |
+
 This is Impcore §1.7's point in practice: "Proofs … are interesting primarily
 when they are wrong. Like a bug in a program, a wrong proof tells you that you
-made a mistake (in your language design, not your code)."
+made a mistake (in your language design, not your code)." Problem #7 is the
+case for Lesson 2's random testing: the law had been tested on one
+hand-written script, chosen with generous limits.
 
 ---
 
@@ -404,10 +447,15 @@ made a mistake (in your language design, not your code)."
 
 These are Lesson 2's four uses for properties, applied here:
 
-- **Testing.** Instances of the laws become unit tests in
-  [`examples/step6-laws.nrm`](../examples/step6-laws.nrm). Later, random
-  scripts can drive property-based tests. Because the laws quantify over
-  scripted worlds, a random script *is* a random test case.
+- **Testing.** Instances of the laws are unit tests in
+  [`examples/step6-laws.nrm`](../examples/step6-laws.nrm). Because the laws
+  quantify over scripted worlds, a random script *is* a random test case:
+  [`tests/properties.rs`](../tests/properties.rs) checks C3, B1, B4, B5, the
+  `retry` laws, W1, W2, W5, `best-of`, `window`, `drop` and `filter` on 150
+  random scripts, budgets and inputs each. It also checks that it *finds* a
+  counterexample to each of the three false laws of §7 (#6–#8). That shows
+  the generator reaches the cases that matter, so a passing law means
+  something.
 - **Refactoring.** C3, W2, W3 and nested `retry`.
 - **Code improvement.** W4 and W5 (parallelization), and A3 (narrowing types to
   shrink reservations, with the stated trade-off).

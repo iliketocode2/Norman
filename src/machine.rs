@@ -204,6 +204,24 @@ struct Scope {
     parent: Option<usize>,
 }
 
+/// Theorem 1′ (07 §6) as a representation invariant (Seven Lessons, Lesson 6):
+/// on every scope of `chain`, `spent + reserved ≤ limit`, and nothing is
+/// negative. Returns a description of the first violation.
+fn budget_invariant(scopes: &[Scope], chain: &[usize]) -> Result<(), String> {
+    for &c in chain {
+        let s = &scopes[c];
+        if s.spent < 0 || s.reserved < 0 {
+            return Err(format!("scope {} has spent {} and reserved {}", c, s.spent, s.reserved));
+        }
+        if let Some(l) = s.limit
+            && s.spent + s.reserved > l
+        {
+            return Err(format!("scope {}: spent {} + reserved {} exceeds its limit {}", c, s.spent, s.reserved, l));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NodeState {
     Pending,
@@ -254,6 +272,12 @@ pub struct Machine<'a> {
     oracle: Box<dyn Oracle + 'a>,
     trace: Vec<TraceEntry>,
     steps: u64,
+    /// The first violation of Theorem 1′, reported as a run-time error at the next step.
+    broken: Option<String>,
+    /// Set once a charge exceeds its reservation. That can happen only on a live
+    /// oracle, when the token-count assumption of 09 §3 fails; Theorem 1′ is
+    /// conditional on it, so the invariant is no longer checked.
+    over_reserved: bool,
 }
 
 fn failure(name: &str, fields: Vec<Value>) -> Value {
@@ -287,6 +311,8 @@ pub fn run_with<'a>(
         oracle,
         trace: vec![],
         steps: 0,
+        broken: None,
+        over_reserved: false,
     };
     m.threads.push(Thread {
         ctl: Ctl::Eval(e, Env::default()),
@@ -310,6 +336,9 @@ impl<'a> Machine<'a> {
     /// move, M-TIME advances the clock.
     fn run_main(&mut self) -> Rt<Res> {
         loop {
+            if let Some(msg) = self.broken.take() {
+                return stuck(format!("internal error: the budget invariant (Theorem 1′) failed: {}", msg));
+            }
             if self.threads[0].status == Status::Done {
                 return Ok(self.threads[0].result.clone().expect("main thread finished without a result"));
             }
@@ -436,16 +465,32 @@ impl<'a> Machine<'a> {
     }
 
     fn reserve(&mut self, s: usize, amount: i64) {
-        for c in self.chain(s) {
+        let chain = self.chain(s);
+        for &c in &chain {
             self.scopes[c].reserved += amount;
         }
+        self.check_invariant(&chain);
     }
 
     /// Release a reservation and charge the actual amount, on the whole chain.
     fn settle(&mut self, s: usize, reserved: i64, charge: i64) {
-        for c in self.chain(s) {
+        let chain = self.chain(s);
+        for &c in &chain {
             self.scopes[c].reserved -= reserved;
             self.scopes[c].spent += charge;
+        }
+        self.over_reserved |= charge > reserved;
+        self.check_invariant(&chain);
+    }
+
+    /// Only `reserve` and `settle` move money, so checking the chain they
+    /// touched after each one checks Theorem 1′ in every reachable state.
+    fn check_invariant(&mut self, chain: &[usize]) {
+        if self.broken.is_none()
+            && !self.over_reserved
+            && let Err(msg) = budget_invariant(&self.scopes, chain)
+        {
+            self.broken = Some(msg);
         }
     }
 
@@ -1283,5 +1328,34 @@ pub fn match_pattern(p: &Pattern, v: &Value) -> Option<Vec<(Name, Value)>> {
             Some(xs.iter().zip(vs.iter()).filter_map(|(x, v)| x.clone().map(|x| (x, v.clone()))).collect())
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scope(limit: Option<i64>, spent: i64, reserved: i64, parent: Option<usize>) -> Scope {
+        Scope { limit, spent, reserved, deadline: None, parent }
+    }
+
+    #[test]
+    fn budget_invariant_accepts_a_full_scope() {
+        let scopes = [scope(Some(100), 60, 40, None), scope(None, 60, 40, Some(0))];
+        assert!(budget_invariant(&scopes, &[1, 0]).is_ok());
+    }
+
+    #[test]
+    fn budget_invariant_catches_overspending_on_any_scope_of_the_chain() {
+        // The child has no limit of its own; the parent is over by one.
+        let scopes = [scope(Some(100), 61, 40, None), scope(None, 61, 40, Some(0))];
+        let err = budget_invariant(&scopes, &[1, 0]).unwrap_err();
+        assert!(err.contains("scope 0"), "{}", err);
+    }
+
+    #[test]
+    fn budget_invariant_catches_a_negative_reservation() {
+        let scopes = [scope(Some(100), 0, -1, None)];
+        assert!(budget_invariant(&scopes, &[0]).is_err());
     }
 }
