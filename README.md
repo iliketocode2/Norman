@@ -6,10 +6,7 @@ concurrency. It's designed in the style of Norman Ramsey's *Programming
 Languages: Build, Prove, and Compare*, and implemented as a definitional
 interpreter in Rust.
 
-**[Try it in your browser →](https://iliketocode2.github.io/Norman/)** The whole
-interpreter is compiled to WebAssembly, so every example on the documentation
-site really runs: real typed asks, real budgets, real test results. No API key,
-nothing leaves your machine.
+**[Try it in your browser](https://iliketocode2.github.io/Norman/)**
 
 Start with the guide: [design/README.md](design/README.md). To point `ask` at a
 real model, see [LIVE-SETUP.md](LIVE-SETUP.md) — including why an answer's
@@ -21,8 +18,7 @@ cargo run -- examples/step5-examples.nrm    # load a program and run its unit te
 cargo test                                  # the design's example results and laws
 ```
 
-No API key is needed for either command. Models answer from scripts, and the
-live client is tested against a local stub server.
+No API key is needed for either command.
 
 ## License
 

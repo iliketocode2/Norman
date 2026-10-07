@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>µNorman — a small language for AI agents</title>
+<title>µNorman - a small language for AI agents</title>
 <meta name="description" content="µNorman is a small programming language for AI agents: typed model calls, budgets in money and time, capabilities for tools, and dataflow concurrency. Every example on this page runs in your browser.">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>µ</text></svg>">
@@ -28,13 +28,12 @@
 
   <section class="hero">
     <h1>A small language for AI&nbsp;agents</h1>
-    <p class="tagline">Typed model calls, budgets in money and time, tools as capabilities, and concurrency that follows the data.</p>
+    <p class="tagline">Typed model calls, budgets in money and time, tools, and concurrency.</p>
     <p class="lede">
       Today&rsquo;s agent frameworks are libraries. The things that matter most &mdash; how much an agent
       may spend, how long it may run, which tools it may touch, what shape an answer must have &mdash;
       live in those libraries as <em>conventions</em>, and nothing checks that they are followed.
-      µNorman makes them part of the language, writes down precisely what every construct means,
-      and proves the properties it promises.
+      µNorman makes them part of the language.
     </p>
 
     <div class="badges">
@@ -56,9 +55,7 @@
     <span class="label">How this page works</span>
     <p>
       The interpreter on this page is the same Rust program as the command-line one, compiled to
-      WebAssembly. Models answer from <strong>scripts</strong>: canned replies with a simulated clock,
-      keyed by where in the program each call happens. So every example below is exact and repeatable,
-      costs nothing, and runs entirely on your machine. Press <strong>Run</strong> and see.
+      WebAssembly. Every example below is repeatable and runs entirely on your machine. Press <strong>Run</strong> and see.
     </p>
   </div>
 
@@ -83,7 +80,7 @@
     enforced when the program <em>runs</em>.
   </p>
 
-  <h2 id="tour">A tour, in six runnable examples</h2>
+  <h2 id="tour">A tour via examples</h2>
 
   <h3>1. Ask a model for a typed answer</h3>
   <p>
@@ -119,12 +116,12 @@
     <div class="result"></div>
   </div>
 
-  <h3>2. Failure is a value you can handle</h3>
+  <h3>2. Handling Failure</h3>
   <p>
     If a reply doesn&rsquo;t fit the type, or the provider is down, or the money or time runs out,
     <code>ask</code> produces a <strong>failure</strong>: one of <code>Invalid</code>,
     <code>ToolError</code>, <code>Refused</code>, <code>OverBudget</code>, <code>PastDeadline</code>
-    or <code>Raised</code>. Agents fail often, so failure is part of the language, not a crash.
+    or <code>Raised</code>. Agents fail often, so failure is part of the language rather than a crash.
   </p>
   <div class="example">
     <div class="head"><span class="title">failure.nrm</span>
@@ -186,7 +183,7 @@
     <div class="result"></div>
   </div>
 
-  <h3>4. An agent loop is case analysis on the model&rsquo;s answer</h3>
+  <h3>4. Agent Loop</h3>
   <p>
     This is the CP-Agent design: ask for the next step, run any code it writes, feed the result back,
     stop when it says it is done. Because the answer is a <em>choice</em>, the loop is an ordinary
@@ -231,7 +228,7 @@
     <div class="result"></div>
   </div>
 
-  <h3>5. Concurrency follows the data</h3>
+  <h3>5. Concurrency</h3>
   <p>
     A <code>workflow</code> is a set of named steps, and <strong>the dependencies come from the names
     each step mentions</strong>. Any step whose inputs are ready runs immediately. Below, the same
@@ -280,7 +277,7 @@
     <div class="result"></div>
   </div>
 
-  <h3>6. Laws, and the refactors that are <em>not</em> safe</h3>
+  <h3>6. Laws</h3>
   <p>
     Every construct has algebraic laws, so you know which rewrites preserve meaning. Just as useful
     are the <strong>non-laws</strong>. A compiler would happily merge two identical
@@ -317,7 +314,6 @@
   </div>
 
   <h2 id="guarantees">What µNorman guarantees</h2>
-  <p>These are stated as theorems in the design documents. In plain words:</p>
   <ol>
     <li><strong>The budget is never overspent,</strong> even with many steps running at once. The interpreter checks this invariant in every state it reaches.</li>
     <li><strong>A model can&rsquo;t hand your program a tool.</strong> Authority comes only from the host.</li>
@@ -364,9 +360,7 @@
   <div class="note">
     <span class="label">One finding worth your attention</span>
     <p>
-      The first real API call billed <strong>538 input tokens for a 175-character prompt</strong>.
-      The answer&rsquo;s type is sent with every ask as a JSON schema, and it accounted for 478 of
-      them &mdash; 89% of the input. A type costs money twice: bounding an <em>answer</em> shrinks the
+      The answer&rsquo;s type is sent with every ask as a JSON schema, which accounts for a significant portion of the input tokens. A type costs money twice: bounding an <em>answer</em> shrinks the
       reservation, but adding a constructor or a field makes every ask dearer on input, for as long as
       the program runs. That falsified one of the algebraic laws, which had priced an ask without its
       schema.
@@ -387,7 +381,7 @@
 
 <footer>
   <div class="wrap">
-    <span>µNorman — dual-licensed MIT or Apache-2.0.</span>
+    <span>µNorman - dual-licensed MIT or Apache-2.0.</span>
     <span>The interpreter on this page is WebAssembly, compiled from the project&rsquo;s Rust source.</span>
   </div>
 </footer>
