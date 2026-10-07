@@ -342,3 +342,62 @@ export function activateChrome() {
     h.append(a);
   }
 }
+
+/* ------------------------------------------------------------ reference TOC */
+
+/**
+ * Build the sidebar from the page's own headings, and keep the current
+ * section marked as you scroll. Generating it from the document means the
+ * two can never drift apart.
+ */
+export function activateToc() {
+  const toc = document.querySelector('.toc');
+  const body = document.querySelector('.doc-body');
+  if (!toc || !body) return;
+
+  const list = document.createElement('ol');
+  const links = new Map();
+
+  for (const h of body.querySelectorAll('h2[id], h3[id]')) {
+    const li = document.createElement('li');
+    if (h.tagName === 'H3') li.className = 'sub';
+    const a = document.createElement('a');
+    a.href = '#' + h.id;
+    a.textContent = h.dataset.short || h.textContent.replace(/#$/, '');
+    li.append(a);
+    list.append(li);
+    links.set(h.id, a);
+  }
+  toc.append(list);
+
+  // Mark the heading nearest the top of the viewport.
+  const seen = new Map();
+  const observer = new IntersectionObserver((entries) => {
+    for (const e of entries) seen.set(e.target.id, e);
+    let best = null;
+    for (const e of seen.values()) {
+      if (!e.isIntersecting) continue;
+      if (!best || e.boundingClientRect.top < best.boundingClientRect.top) best = e;
+    }
+    if (!best) return;
+    for (const a of links.values()) a.classList.remove('here');
+    const a = links.get(best.target.id);
+    if (a) {
+      a.classList.add('here');
+      // Keep the active link in view in a long sidebar, without scrolling the page.
+      if (toc.scrollHeight > toc.clientHeight) {
+        const top = a.offsetTop - toc.clientHeight / 2;
+        toc.scrollTo({ top, behavior: 'smooth' });
+      }
+    }
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 });
+
+  for (const id of links.keys()) observer.observe(document.getElementById(id));
+
+  // On a phone the sidebar is a dropdown; choosing a section closes it.
+  toc.addEventListener('click', (e) => {
+    if (e.target.tagName === 'A' && toc.tagName === 'DETAILS' && window.innerWidth < 992) {
+      toc.open = false;
+    }
+  });
+}

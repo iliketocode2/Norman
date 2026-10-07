@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Language reference — µNorman</title>
+<meta name="description" content="The µNorman language in depth: lexical structure, definitions, expressions, the six agentic forms, types and askability, failures, the initial basis, hosts, and the testing forms.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>µ</text></svg>">
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="./">µNorman</a>
+    <nav>
+      <a href="./#tour">Tour</a>
+      <a href="reference.html" aria-current="page">Reference</a>
+      <a href="playground.html">Playground</a>
+      <a href="./#status">Status</a>
+      <a href="https://github.com/iliketocode2/Norman">GitHub</a>
+      <button class="theme" type="button" aria-label="Switch between light and dark">☾</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap doc">
+
+  <details class="toc" open>
+    <summary>Contents</summary>
+  </details>
+
+  <article class="doc-body">
+
+    <h1 style="font-size:2rem">Language reference</h1>
+    <p class="lede">
+      Everything in the language, in the order you would meet it. This page follows the
+      <a href="https://github.com/iliketocode2/Norman/blob/main/design/04-formal-definition.md">formal
+      definition</a>, which is the authority where the two disagree.
+    </p>
+
+    <div class="note">
+      <span class="label">How to read the grammars</span>
+      <p>
+        <code>{ x }</code> is zero or more, <code>[ x ]</code> is optional, and <code>|</code>
+        separates alternatives. Words in <span class="syntax" style="display:inline;padding:0 .3em;border:0"><span class="lit">this colour</span></span>
+        are literal; <span class="syntax" style="display:inline;padding:0 .3em;border:0"><span class="meta">this one</span></span>
+        is a placeholder. Round and square brackets are interchangeable as long as they match —
+        square brackets are used by convention where a form takes a list of clauses.
+      </p>
+    </div>
+
+    <h2 id="lexical">Lexical structure</h2>
+    <p>
+      A <strong>semicolon</strong> begins a comment that runs to the end of the line. Each bracket is
+      a token on its own. A <strong>string</strong> is <code>"…"</code> with the escapes
+      <code>\"</code>, <code>\\</code> and <code>\n</code>. Every other character joins a token that
+      extends as far as it can, stopping only at a bracket, a semicolon, whitespace or a quote.
+    </p>
+
+    <table>
+      <thead><tr><th>Token</th><th>Form</th><th>Examples</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>numeral</td><td>digits, optional sign</td><td><code>42</code> <code>-7</code></td><td>a 64-bit integer</td></tr>
+        <tr><td>money</td><td><code>$</code> digits, optionally <code>.</code> and up to six more</td><td><code>$0.50</code> <code>$20</code></td><td>integer micro-dollars; <code>$0.50</code> is 500&nbsp;000&nbsp;µ$</td></tr>
+        <tr><td>duration</td><td>digits then <code>ms</code>, <code>s</code>, <code>min</code> or <code>h</code></td><td><code>250ms</code> <code>30s</code> <code>10min</code></td><td>integer milliseconds</td></tr>
+        <tr><td>Boolean</td><td><code>#t</code> or <code>#f</code></td><td></td><td></td></tr>
+        <tr><td>symbol</td><td><code>'</code> then a name</td><td><code>'declined</code></td><td>a symbol value</td></tr>
+        <tr><td>empty list</td><td><code>'()</code></td><td></td><td></td></tr>
+        <tr><td>name</td><td>starts lowercase or with a symbol character</td><td><code>react</code> <code>best-of</code> <code>+</code></td><td>a variable or function</td></tr>
+        <tr><td>Name</td><td>starts uppercase</td><td><code>Step</code> <code>Exec</code> <code>Text</code></td><td>a constructor, record or type</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <span class="label">Money and time are not numbers</span>
+      <p>
+        They are distinct kinds of value. You may add money to money, and a duration to a duration,
+        but never money to seconds. That rules out an entire class of budget bug at the level of
+        values rather than by convention.
+      </p>
+    </div>
+
+    <h2 id="program">Program structure</h2>
+    <p>
+      A file is a sequence of <strong>definitions</strong> and <strong>extended definitions</strong>.
+      Definitions are the language proper. Extended definitions arrange the world around it: loading
+      another file, receiving authority from the host, and testing. As in Ramsey's interpreters, a
+      file's unit tests run after the whole file has loaded, so a test may mention anything the file
+      defines, in any order.
+    </p>
+
+    <pre class="syntax"><span class="meta">def</span>  ::= (<span class="lit">val</span> <span class="meta">name</span> <span class="meta">exp</span>)
+     | <span class="meta">exp</span>
+     | (<span class="lit">define</span> <span class="meta">name</span> (<span class="meta">formals</span>) <span class="meta">exp</span>)
+     | (<span class="lit">datatype</span> <span class="meta">Type</span> {[<span class="meta">Con</span> {(<span class="meta">field</span> <span class="meta">ty</span>)}]})
+     | (<span class="lit">record</span> <span class="meta">Record</span> {(<span class="meta">field</span> <span class="meta">ty</span>)})
+     | <span class="meta">xdef</span>
+
+<span class="meta">xdef</span> ::= (<span class="lit">use</span> <span class="meta">file</span>)
+     | (<span class="lit">grant</span> <span class="meta">name</span> <span class="meta">host-spec</span>)
+     | (<span class="lit">script</span> <span class="meta">Name</span> {<span class="meta">site-script</span>})
+     | (<span class="lit">under</span> ({<span class="meta">config</span>}) {<span class="meta">unit-test</span>})
+     | <span class="meta">unit-test</span></pre>
+
+    <h2 id="definitions">Definitions</h2>
+
+    <dl class="forms">
+      <dt>(define <em>name</em> (<em>formals</em>) <em>body</em>)</dt>
+      <dd>A function. The formals must be distinct. Top-level names are mutually recursive.</dd>
+
+      <dt>(val <em>name</em> <em>exp</em>)</dt>
+      <dd>Evaluate once and bind the result. If it fails, nothing is bound and the failure is reported.</dd>
+
+      <dt>(datatype <em>Type</em> [<em>Con</em> (<em>field</em> <em>ty</em>)…]…)</dt>
+      <dd>A sum type: a value is <em>one of</em> its constructors. Constructor names must be distinct, and they share one namespace across the program.</dd>
+
+      <dt>(record <em>Record</em> (<em>field</em> <em>ty</em>)…)</dt>
+      <dd>A product type: a value has <em>all</em> of its fields.</dd>
+    </dl>
+
+    <p>
+      The difference matters when you write code over them. A datatype is consumed with
+      <code>case</code>, one branch per constructor. A record is consumed with <code>(. r field)</code>.
+      It also shows up in how you build them:
+    </p>
+
+    <pre class="syntax">(Sell "Margins are compressing.")             <span class="meta">; constructor: positional</span>
+(Message [role User] [content "FY2025 10-K"]) <span class="meta">; record: named, in any order</span></pre>
+
+    <h2 id="expressions">Expressions</h2>
+
+    <h3 id="exp-core" data-short="Core forms">Core forms</h3>
+    <dl class="forms">
+      <dt>(if <em>test</em> <em>then</em> <em>else</em>)</dt>
+      <dd>The test must evaluate to a Boolean; anything else is a checked run-time error.</dd>
+
+      <dt>(let* ([<em>x</em> <em>e</em>]…) <em>body</em>)</dt>
+      <dd>Sequential binding: each right-hand side sees the bindings before it. There is no simultaneous <code>let</code>.</dd>
+
+      <dt>(lambda (<em>formals</em>) <em>body</em>)</dt>
+      <dd>An anonymous function, closing over its environment.</dd>
+
+      <dt>(<em>f</em> <em>arg</em>…)</dt>
+      <dd>Application. Arguments are evaluated left to right.</dd>
+
+      <dt>(begin <em>e</em>…)</dt>
+      <dd>Evaluate in order, answering with the last. Empty <code>begin</code> is <code>#f</code>. Sugar for nested <code>let*</code>.</dd>
+
+      <dt>(and <em>e₁</em> <em>e₂</em>) · (or <em>e₁</em> <em>e₂</em>)</dt>
+      <dd>Short-circuiting, and sugar for <code>if</code>.</dd>
+
+      <dt>(. <em>e</em> <em>field</em>)</dt>
+      <dd>Select a field from a record.</dd>
+    </dl>
+
+    <h3 id="exp-case" data-short="case and patterns">Case analysis</h3>
+    <p>
+      <code>case</code> is how a program consumes a datatype, a list, or a model's answer. If no
+      branch matches, that is a checked run-time error, not a failure.
+    </p>
+
+    <pre class="syntax"><span class="meta">pattern</span> ::= <span class="meta">Con</span>                        <span class="meta">; a constructor with no fields</span>
+          | (<span class="meta">Con</span> {<span class="meta">name</span> | <span class="lit">_</span>})          <span class="meta">; its fields, bound or ignored</span>
+          | <span class="lit">'()</span>                        <span class="meta">; the empty list</span>
+          | (<span class="lit">cons</span> <span class="meta">name</span> <span class="meta">name</span>)           <span class="meta">; head and tail</span>
+          | <span class="lit">_</span>                          <span class="meta">; anything</span></pre>
+
+    <p>
+      <strong>Patterns are flat.</strong> A constructor applies to variables or <code>_</code>, never
+      to another pattern, and no variable may repeat within one pattern. This keeps matching a
+      single step, which keeps every proof about <code>case</code> to a single step too. Nested
+      patterns could be added later as sugar.
+    </p>
+
+    <h3 id="exp-build" data-short="Building values">Building values</h3>
+    <pre class="syntax">(<span class="meta">Con</span> {<span class="meta">exp</span>})                 <span class="meta">; constructor application</span>
+<span class="meta">Con</span>                         <span class="meta">; a nullary constructor is just its name</span>
+(<span class="meta">Record</span> {[<span class="meta">field</span> <span class="meta">exp</span>]})     <span class="meta">; every field, named</span>
+(<span class="lit">list</span> {<span class="meta">exp</span>})                <span class="meta">; a list</span>
+(<span class="lit">cons</span> <span class="meta">exp</span> <span class="meta">exp</span>)              <span class="meta">; prepend</span></pre>
+
+    <h2 id="effects">The six agentic forms</h2>
+    <p>
+      These are what the language adds. Everything a program can do to the outside world happens
+      through <code>ask</code> and <code>call</code>; there is no other door, which is why a budget,
+      a deadline, the trace and the ownership rules apply to <em>everything</em>.
+    </p>
+
+    <h3 id="ask" data-short="ask">ask</h3>
+    <pre class="syntax">(<span class="lit">ask</span> <span class="meta">model</span> <span class="meta">ty</span> <span class="meta">context</span> [<span class="meta">'site</span>])</pre>
+    <p>
+      Consult a model <strong>once</strong>, for an answer of type <em>ty</em>. The context is an
+      ordinary list of <code>Message</code>s that you build and pass: nothing accumulates behind your
+      back. The site is a name for this place in the program; scripts and traces are keyed by it, and
+      it defaults to the source location.
+    </p>
+    <p>
+      The answer is validated against <em>ty</em> before it is bound. If it doesn't fit, the ask
+      produces <code>Invalid</code> rather than a value. Asking again is a separate, visible
+      decision — see <a href="#basis-functions"><code>retry</code></a>.
+    </p>
+    <p>
+      Before the call, <code>ask</code> <strong>reserves</strong> the worst case: everything it is
+      about to send, plus the largest answer <em>ty</em> allows. If that doesn't fit the budget, the
+      model is never called and nothing is charged.
+    </p>
+
+    <h3 id="call" data-short="call">call</h3>
+    <pre class="syntax">(<span class="lit">call</span> <span class="meta">capability</span> <span class="meta">op</span> {<span class="meta">exp</span>})</pre>
+    <p>
+      Use a tool once. The capability comes from <a href="#hosts"><code>grant</code></a> and can only
+      come from there. A tool result is currently always <code>Text</code>; unlike <code>ask</code>,
+      <code>call</code> does not yet name the type of its result.
+    </p>
+
+    <h3 id="fail-catch" data-short="fail and catch">fail and catch</h3>
+    <pre class="syntax">(<span class="lit">fail</span> <span class="meta">exp</span>)
+(<span class="lit">catch</span> <span class="meta">exp</span> <span class="meta">name</span> <span class="meta">handler</span>)</pre>
+    <p>
+      A failure is a <em>value</em>, not a crash. <code>catch</code> binds it to <em>name</em> and
+      runs the handler. <code>(fail 'sym)</code> is sugar for <code>(fail (Raised 'sym))</code>.
+      A failure propagates left to right: everything before it still ran and still spent.
+    </p>
+
+    <h3 id="budget" data-short="budget">budget</h3>
+    <pre class="syntax">(<span class="lit">budget</span> ([<span class="lit">cost</span> <span class="meta">exp</span>] [<span class="lit">time</span> <span class="meta">exp</span>]) <span class="meta">body</span>)</pre>
+    <p>
+      Everything inside gets at most that much money and time. Either limit may be omitted, which
+      means unlimited. Nesting takes the smaller of the two, and whatever the inside spends is
+      charged to the outside. A budget scope has one pool and <strong>one absolute deadline</strong>
+      shared by every branch running inside it.
+    </p>
+
+    <h3 id="workflow" data-short="workflow and par">workflow and par</h3>
+    <pre class="syntax">(<span class="lit">workflow</span> ([<span class="meta">name</span> <span class="meta">exp</span>]…) <span class="meta">body</span>)
+(<span class="lit">par</span> <span class="meta">e₁</span> <span class="meta">e₂</span>)</pre>
+    <p>
+      A set of named steps. <strong>Dependencies come from the names each step mentions</strong>: a
+      step whose inputs are ready starts immediately, alongside the others. The graph must be
+      acyclic, and the names must be distinct — both are checked before the program runs.
+    </p>
+    <p>
+      Steps may not share a stateful tool, because the outcome would depend on timing. Such a
+      workflow is rejected before any step starts. To work in parallel on a kernel, fork it first.
+      <code>par</code> is sugar for a two-step workflow and answers with a <code>Pair</code>.
+    </p>
+
+    <h2 id="types">Types</h2>
+    <pre class="syntax"><span class="meta">ty</span> ::= <span class="lit">Text</span> | (<span class="lit">Text</span> <span class="meta">numeral</span>)        <span class="meta">; optionally bounded, in bytes</span>
+     | <span class="lit">Num</span> | <span class="lit">Bool</span> | <span class="lit">Sym</span>
+     | (<span class="lit">List</span> <span class="meta">ty</span>) | (<span class="lit">List</span> <span class="meta">ty</span> <span class="meta">numeral</span>)
+     | <span class="meta">Type</span> | <span class="meta">Record</span>              <span class="meta">; anything you defined</span>
+     | <span class="lit">Any</span>                          <span class="meta">; a placeholder; never askable</span></pre>
+
+    <h3 id="askable" data-short="Askability">Which types can be asked for</h3>
+    <p>
+      A type is <strong>askable</strong> when it is built only from <code>Text</code>,
+      <code>Num</code>, <code>Bool</code>, <code>Sym</code>, <code>List</code>, and datatypes or
+      records whose fields are all askable. <code>Any</code> is not askable.
+    </p>
+    <p>
+      That one rule is what keeps authority unforgeable: a capability is not an askable type, so no
+      model answer can ever contain a tool. Authority comes only from the host.
+    </p>
+
+    <h3 id="bounds" data-short="Bounds and cost">Bounds, and why a type costs money twice</h3>
+    <p>
+      A bound caps the answer's size, which caps the reservation. A <code>Verdict</code> with
+      400-byte reasons reserves far less than the same type with unbounded text, so it fits budgets
+      the unbounded one is refused by.
+    </p>
+    <div class="note">
+      <span class="label">Measured, not assumed</span>
+      <p>
+        The type is also <em>sent</em> with every ask, as a JSON schema, and billed as input. The
+        project's first real API call spent 538 input tokens on a 175-character prompt, 478 of them
+        on the schema. So bounding an <em>answer</em> shrinks the reservation, while adding a
+        constructor or a field makes every ask dearer on input for as long as the program runs. No
+        bound on the text inside those fields helps, because what is sent is the schema, not the
+        answer.
+      </p>
+    </div>
+
+    <h3 id="json" data-short="JSON encoding">How a type maps to JSON</h3>
+    <table>
+      <thead><tr><th>µNorman</th><th>JSON</th></tr></thead>
+      <tbody>
+        <tr><td><code>Text</code>, <code>(Text n)</code></td><td>a string, at most <em>n</em> bytes when bounded</td></tr>
+        <tr><td><code>Num</code></td><td>an integer</td></tr>
+        <tr><td><code>Bool</code></td><td><code>true</code> / <code>false</code></td></tr>
+        <tr><td><code>Sym</code></td><td>a string</td></tr>
+        <tr><td><code>(List τ)</code>, <code>(List τ n)</code></td><td>an array, at most <em>n</em> elements</td></tr>
+        <tr><td>a record <code>R</code></td><td>an object with exactly R's fields</td></tr>
+        <tr><td>constructor <code>K</code> with fields</td><td><code>{"tag": "K", "f₁": …}</code>; a nullary <code>K</code> is <code>{"tag": "K"}</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="failures">Failures</h2>
+    <p>
+      Every failure is a value of the predefined <code>Failure</code> datatype, so you can
+      <code>case</code> on it like anything else.
+    </p>
+    <table>
+      <thead><tr><th>Failure</th><th>Means</th></tr></thead>
+      <tbody>
+        <tr><td><code>(Invalid raw)</code></td><td>the reply did not fit the type; <code>raw</code> is what came back</td></tr>
+        <tr><td><code>(ToolError message)</code></td><td>a tool or the provider failed — a 503, a Python <code>NameError</code></td></tr>
+        <tr><td><code>(Refused category)</code></td><td>the model declined</td></tr>
+        <tr><td><code>OverBudget</code></td><td>the reservation did not fit the remaining money</td></tr>
+        <tr><td><code>PastDeadline</code></td><td>the scope's deadline passed</td></tr>
+        <tr><td><code>(Raised reason)</code></td><td>the program's own <code>(fail 'reason)</code></td></tr>
+      </tbody>
+    </table>
+    <p>
+      A <strong>checked run-time error</strong> is a different thing and cannot be caught: an unbound
+      name, an <code>if</code> on a non-Boolean, a <code>case</code> with no matching branch, an
+      exhausted script. Those mean the program is wrong, not that the world misbehaved.
+    </p>
+
+    <h2 id="basis">The initial basis</h2>
+
+    <h3 id="basis-types" data-short="Predefined types">Predefined types</h3>
+    <pre class="syntax">(<span class="lit">datatype</span> Role    [System] [User] [Assistant] [Tool])
+(<span class="lit">record</span>   Message (role Role) (content Text))
+(<span class="lit">datatype</span> Failure [Invalid (raw Text)] [ToolError (message Text)]
+                  [Refused (category Sym)] [OverBudget] [PastDeadline]
+                  [Raised (reason Sym)])
+(<span class="lit">datatype</span> Option  [None] [Some (value Any)])
+(<span class="lit">record</span>   Pair    (fst Any) (snd Any))
+(<span class="lit">record</span>   Resources (cost Any) (time Any))</pre>
+
+    <h3 id="basis-prims" data-short="Primitives">Primitives</h3>
+    <table>
+      <thead><tr><th>Primitive</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="sig">+ - * /</td><td>on <code>Num</code>, and on money or durations of the same kind. Scaling takes a <code>Num</code>.</td></tr>
+        <tr><td class="sig">= &lt; &gt;</td><td>comparison; <code>&lt;</code> and <code>&gt;</code> also order strings</td></tr>
+        <tr><td class="sig">cons · list</td><td><code>list</code> is variadic</td></tr>
+        <tr><td class="sig">string-append · string-length</td><td>length is in bytes. These are the only string primitives.</td></tr>
+        <tr><td class="sig">println</td><td>print a value</td></tr>
+        <tr><td class="sig">(remaining)</td><td>a <code>Resources</code> record for the current scope: <code>(. (remaining) cost)</code> and <code>… time</code></td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      <span class="label">A real limitation</span>
+      <p>
+        There is no number-to-string, no substring, and no way to render a value such as a
+        <code>Verdict</code> back into a prompt. A program can only put text into a context that it
+        already has as text. This is the first thing a real agent runs into.
+      </p>
+    </div>
+
+    <h3 id="basis-functions" data-short="Predefined functions">Predefined functions</h3>
+    <p>These are written in µNorman itself, and each is defined by algebraic laws.</p>
+    <dl class="forms">
+      <dt>(not <em>b</em>) · (&lt;= <em>x</em> <em>y</em>) · (&gt;= <em>x</em> <em>y</em>)</dt>
+      <dd>The obvious things.</dd>
+
+      <dt>(append <em>xs</em> <em>ys</em>) · (length <em>xs</em>) · (filter <em>p</em> <em>xs</em>) · (drop <em>k</em> <em>xs</em>)</dt>
+      <dd>Lists. <code>drop</code> treats a count of zero or less as zero.</dd>
+
+      <dt>(retry <em>n</em> <em>f</em>)</dt>
+      <dd>Call the thunk up to <em>n</em>+1 times, stopping at the first success. Retries <code>Invalid</code> and <code>ToolError</code> only — <strong>never</strong> <code>OverBudget</code> or <code>PastDeadline</code>, since asking again cannot help and would spend what little is left.</dd>
+
+      <dt>(repair <em>n</em> <em>f</em> <em>ctx</em>)</dt>
+      <dd>Like <code>retry</code>, but the bad reply and a correction are appended to the context. Costs more per attempt, because the context grows — a trade-off explicit context makes visible.</dd>
+
+      <dt>(best-of <em>k</em> <em>f</em> <em>check</em>)</dt>
+      <dd><em>k</em> attempts, concurrently, keeping one that <em>check</em> accepts. Built from a recursive <code>par</code>, so the cost adds up and the time is the longest attempt.</dd>
+
+      <dt>(window <em>n</em> <em>ctx</em>)</dt>
+      <dd>A context policy: every <code>System</code> message, then the last <em>n</em> others. Note that it moves system messages to the front.</dd>
+    </dl>
+
+    <h2 id="hosts">Hosts and capabilities</h2>
+    <pre class="syntax">(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">model</span> [<span class="lit">id</span> <span class="meta">"…"</span>] [<span class="lit">in</span> <span class="meta">n</span>] [<span class="lit">out</span> <span class="meta">n</span>] [<span class="lit">ceiling</span> <span class="meta">n</span>] [<span class="lit">think</span> <span class="meta">n</span>]))
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">kernel</span>))        <span class="meta">; stateful</span>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">filesystem</span>))    <span class="meta">; stateful</span>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">http</span>))          <span class="meta">; stateless</span></pre>
+    <p>
+      Every model field is optional and falls back to a default. Prices are in micro-dollars per
+      token: <code>[in 3]</code> is $3 per million input tokens. <strong>Prices are stated here, not
+      looked up</strong> — the API does not report them, so a grant is where the program says what it
+      believes a token costs. If they are wrong, the budget arithmetic is wrong.
+    </p>
+
+    <h2 id="testing">Scripts and tests</h2>
+    <p>
+      Tests run against <strong>scripts</strong>: canned replies keyed by site, with a simulated
+      clock. Every test runs in a fresh world — a fresh pool, a fresh deadline, the script rewound,
+      an empty trace — so tests are independent and exactly repeatable.
+    </p>
+
+    <pre class="syntax">(<span class="lit">script</span> <span class="meta">Name</span>
+  [<span class="meta">site</span> (<span class="lit">reply</span> <span class="meta">"…"</span>) (<span class="lit">out</span> <span class="meta">n</span>) (<span class="lit">latency</span> <span class="meta">d</span>)
+        (<span class="lit">reply</span> <span class="meta">"…"</span>) (<span class="lit">out</span> <span class="meta">n</span>) (<span class="lit">latency</span> <span class="meta">d</span>)]   <span class="meta">; consumed in order</span>
+  [<span class="meta">cap/op</span> (<span class="lit">result</span> <span class="meta">"…"</span>) (<span class="lit">latency</span> <span class="meta">d</span>)])          <span class="meta">; a tool, keyed capability/operation</span></pre>
+
+    <p>Faults are injected the same way, which is what makes failure paths testable at all:</p>
+    <table>
+      <tbody>
+        <tr><td><code>(reply "…")</code></td><td>what the model says; pair with <code>(out n)</code> for output tokens</td></tr>
+        <tr><td><code>(refusal "category")</code></td><td>the model declines</td></tr>
+        <tr><td><code>(provider-error "503 …")</code></td><td>the provider fails</td></tr>
+        <tr><td><code>(result "…")</code></td><td>a tool succeeds</td></tr>
+        <tr><td><code>(error "…")</code></td><td>a tool fails</td></tr>
+        <tr><td><code>(latency 2s)</code></td><td>how long it takes on the simulated clock</td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="checks" data-short="Test forms">Test forms</h3>
+    <pre class="syntax">(<span class="lit">under</span> ([<span class="lit">script</span> <span class="meta">Name</span>] [<span class="lit">cost</span> <span class="meta">$1.00</span>] [<span class="lit">time</span> <span class="meta">1min</span>]) {<span class="meta">unit-test</span>})</pre>
+    <dl class="forms">
+      <dt>(check-expect <em>e</em> <em>expected</em>)</dt>
+      <dd>Both sides run in their own fresh world, so evaluating the expected value cannot consume the script.</dd>
+      <dt>(check-assert <em>e</em>)</dt>
+      <dd>The expression is true.</dd>
+      <dt>(check-fail <em>e</em> <em>pattern</em>)</dt>
+      <dd>It fails, with a failure matching the pattern: <code>(check-fail (ask-v) (Invalid _))</code>.</dd>
+      <dt>(check-error <em>e</em>)</dt>
+      <dd>It is a checked run-time error — the program is wrong, not the world.</dd>
+      <dt>(check-within <em>e</em> ([cost <em>c</em>] [time <em>t</em>]))</dt>
+      <dd>It spends at most <em>c</em> and takes at most <em>t</em>, <em>whatever its result</em>. That lets you measure failures as well as successes.</dd>
+      <dt>(check-equiv <em>e₁</em> <em>e₂</em> <em>'grade</em>)</dt>
+      <dd>Two expressions agree, at <code>'exact</code> (result and the whole world, trace included), <code>'resource</code> (result, spend, time, host state), or <code>'value</code>.</dd>
+    </dl>
+
+    <p>A complete, runnable example of all of it together:</p>
+    <div class="example">
+      <div class="head"><span class="title">reference.nrm</span>
+        <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model [in 3] [out 15] [ceiling 8000]))
+
+(datatype Verdict
+  [Buy  (reason (Text 400))]
+  [Sell (reason (Text 400))])
+
+(define ask-v ()
+  (ask claude Verdict (list (Message [role User] [content "FY2025 10-K"])) 'analyst))
+
+(script flaky
+  [analyst (provider-error "503 Service Unavailable") (latency 1s)
+           (reply "{\"tag\":\"Sell\",\"reason\":\"Margins fell.\"}") (out 12) (latency 2s)])
+
+(under ([script flaky] [cost $1.00] [time 1min])
+  ;; A provider outage is a ToolError, which retry handles.
+  (check-fail   (ask-v) (ToolError _))
+  (check-expect (retry 1 ask-v) (Sell "Margins fell."))
+  (check-within (retry 1 ask-v) ([cost $0.01] [time 3s]))
+  ;; Failures are values: catch one and look at it.
+  (check-expect (catch (ask-v) e (case e [(ToolError m) m] [_ "other"]))
+                "503 Service Unavailable"))</code></pre>
+      <div class="result"></div>
+    </div>
+
+    <h2 id="sugar">Syntactic sugar</h2>
+    <p>
+      Sugar is defined by translation, so it inherits every theorem already proved about the core
+      forms, with no new cases to check.
+    </p>
+    <pre class="syntax">(<span class="lit">let*</span> () <span class="meta">e</span>)                 =  <span class="meta">e</span>
+(<span class="lit">let*</span> ([<span class="meta">x</span> <span class="meta">e₁</span>] <span class="meta">rest…</span>) <span class="meta">e</span>)   =  LETX(<span class="meta">x</span>, <span class="meta">e₁</span>, (<span class="lit">let*</span> (<span class="meta">rest…</span>) <span class="meta">e</span>))
+(<span class="lit">begin</span>)                      =  <span class="lit">#f</span>
+(<span class="lit">begin</span> <span class="meta">e₁ … eₙ</span>)             =  (<span class="lit">let*</span> ([<span class="meta">_₁</span> <span class="meta">e₁</span>] …) <span class="meta">eₙ</span>)
+(<span class="lit">par</span> <span class="meta">e₁</span> <span class="meta">e₂</span>)                  =  (<span class="lit">workflow</span> ([<span class="meta">a</span> <span class="meta">e₁</span>] [<span class="meta">b</span> <span class="meta">e₂</span>]) (Pair [fst <span class="meta">a</span>] [snd <span class="meta">b</span>]))
+(<span class="lit">and</span> <span class="meta">e₁</span> <span class="meta">e₂</span>)                  =  (<span class="lit">if</span> <span class="meta">e₁</span> <span class="meta">e₂</span> <span class="lit">#f</span>)
+(<span class="lit">or</span> <span class="meta">e₁</span> <span class="meta">e₂</span>)                   =  (<span class="lit">if</span> <span class="meta">e₁</span> <span class="lit">#t</span> <span class="meta">e₂</span>)
+(<span class="lit">fail</span> <span class="meta">'sym</span>)                  =  (<span class="lit">fail</span> (Raised <span class="meta">'sym</span>))
+(<span class="lit">ask</span> <span class="meta">m</span> <span class="meta">τ</span> <span class="meta">c</span>)                  =  (<span class="lit">ask</span> <span class="meta">m</span> <span class="meta">τ</span> <span class="meta">c</span> <span class="meta">'file:line:col</span>)
+(<span class="lit">budget</span> ([<span class="lit">cost</span> <span class="meta">e</span>]) <span class="meta">body</span>)    =  BUDGET(<span class="meta">e</span>, ∞, <span class="meta">body</span>)</pre>
+
+    <h2 id="wellformed">What is checked before a program runs</h2>
+    <p>Each of these is decidable from the syntax alone, so the parser rejects it outright.</p>
+    <ol>
+      <li>The formals of a <code>lambda</code> or <code>define</code> are distinct; so are a datatype's constructors and a record's fields.</li>
+      <li>A <code>workflow</code>'s binding names are distinct.</li>
+      <li>A <code>workflow</code>'s dependency graph is <strong>acyclic</strong>.</li>
+      <li>Patterns are flat, and no variable repeats within one pattern.</li>
+      <li>Forms are applied with the right number of parts.</li>
+    </ol>
+    <p>
+      Askability is checked when the <code>ask</code> runs rather than at parse time, because a
+      function may ask for a datatype defined later in the file. Everything else about types is a
+      run-time check too. Moving those to compile time is what the planned type and effect system is
+      for — see <a href="./#status">Status</a>.
+    </p>
+
+    <h2 id="reserved">Reserved words</h2>
+    <p class="small">
+      <code>val</code> <code>define</code> <code>datatype</code> <code>record</code> <code>use</code>
+      <code>grant</code> <code>script</code> <code>under</code> <code>check-expect</code>
+      <code>check-assert</code> <code>check-error</code> <code>check-fail</code>
+      <code>check-within</code> <code>check-equiv</code> <code>if</code> <code>let*</code>
+      <code>lambda</code> <code>case</code> <code>ask</code> <code>call</code> <code>fail</code>
+      <code>catch</code> <code>budget</code> <code>workflow</code> <code>begin</code>
+      <code>par</code> <code>and</code> <code>or</code> <code>_</code>
+    </p>
+    <p>
+      <code>cost</code> and <code>time</code> are <strong>not</strong> reserved. They appear only in
+      fixed bracket positions, and they are the field names of <code>Resources</code>. An earlier
+      draft did reserve them, which made <code>(. (remaining) cost)</code> a syntax error in the
+      language's own basis. Running the tests caught it.
+    </p>
+
+    <h2 id="deeper">Going deeper</h2>
+    <ul>
+      <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/04-formal-definition.md">The formal definition</a> — abstract syntax, big-step semantics, every rule, and the theorems.</li>
+      <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/07-small-step-semantics.md">The machine</a> — the event-by-event semantics behind concurrency and shared budgets.</li>
+      <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/06-algebraic-laws.md">The laws</a> — which refactors are safe, which are not, and the nine problems writing them found.</li>
+    </ul>
+
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>µNorman — dual-licensed MIT or Apache-2.0.</span>
+    <span>Where this page and the formal definition disagree, the formal definition is right.</span>
+  </div>
+</footer>
+
+<script type="module">
+  import { activateExamples, activateChrome, activateToc } from './norman.js';
+  activateChrome();
+  activateToc();
+  activateExamples();
+</script>
+</body>
+</html>
