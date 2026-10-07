@@ -26,7 +26,9 @@ read the guide first: [`design/README.md`](design/README.md).
 
 No API key is needed for any of this. Models answer from scripts, and the live
 client is tested against a local stub server. Only `--live` talks to a real
-model (see [`design/09-live-oracle.md`](design/09-live-oracle.md)).
+model: [LIVE-SETUP.md](LIVE-SETUP.md) explains how to get a key and what live
+mode does and doesn't do, and
+[`design/09-live-oracle.md`](design/09-live-oracle.md) specifies it.
 
 ## Development Workflow
 

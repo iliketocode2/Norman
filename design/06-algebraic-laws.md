@@ -347,16 +347,31 @@ budget*.
 ## 5. Laws for `ask`, and some tempting non-laws
 
 ```
-(A1) reservation(ask m τ ctx) = price_m(|ctx|, max_out(m, τ))           ; spec, by definition
+(A1) reservation(ask m τ ctx) = price_m(|ctx| + |schema(τ)|, max_out(m, τ))    ; spec, by definition
 (A2) |ctx| ≤ |ctx′|  ⇒  reservation(ask m τ ctx) ≤ reservation(ask m τ ctx′)   ; monotone in context
-(A3) bound(τ) ≤ bound(τ′) ⇒ reservation(ask m τ ctx) ≤ reservation(ask m τ′ ctx)
+(A3) |schema(τ)| = |schema(τ′)| and bound(τ) ≤ bound(τ′)
+       ⇒ reservation(ask m τ ctx) ≤ reservation(ask m τ′ ctx)                  ; monotone in the answer
+(A4) bound(τ) = bound(τ′) and |schema(τ)| ≤ |schema(τ′)|
+       ⇒ reservation(ask m τ ctx) ≤ reservation(ask m τ′ ctx)                  ; monotone in the schema
 ```
 
-A3 has a **hidden trade-off**. Narrowing `Text` to `(Text 400)` makes asks
-*cheaper to reserve*, so fewer of them fail with `OverBudget`. But it makes
-validation *stricter*, so more of them fail with `Invalid`. Narrowing a type is
-**not** value-preserving. It's a policy choice, and the law says exactly which
-failure you're trading for which.
+> **Problem found (§7, #9).** A1 first read `price_m(|ctx|, max_out(m, τ))`, and
+> A3 had no premise about the schema. **The type is sent with every ask**, as
+> part of the input: the first real call (`09` §6a) billed 478 of its 538 input
+> tokens for the schema alone. So `τ` appears in *both* arguments of `price_m`,
+> and A3 as written was false, because a type's output bound and its schema
+> size are independent. A datatype with twelve constructors carrying one-byte
+> fields has a far smaller `bound` than `(Text 4000)` and a far larger schema
+> (`a_smaller_output_bound_can_cost_more_input` in `src/anthropic.rs`).
+
+The pair A3/A4 names the **two separate trade-offs** a type makes:
+
+- **Narrowing an answer** (`Text` → `(Text 400)`) reserves less, so fewer asks
+  fail `OverBudget` — but validation gets stricter, so more fail `Invalid`.
+  Narrowing is **not** value-preserving.
+- **Enriching a type** (another constructor, another field) costs input tokens
+  on *every* ask, for as long as the program runs. A richer answer is not free
+  just because it is bounded.
 
 ### Non-laws
 
@@ -434,6 +449,7 @@ Testing the laws found three more, after the interpreter existed:
 | 6 | the `window` property `(window n ctx) == ctx when (length ctx) ≤ n` is false when a `System` message comes after another message | running one instance of it | the correct property: when nothing is dropped, `window` puts system messages first |
 | 7 | Theorem 4 and W1 are false when a limit binds: the sequentialization can miss a deadline the workflow meets | random scripts with random limits ([`tests/properties.rs`](../tests/properties.rs)) | premise (iii) in W1, inherited by W4 and W5; the same premise in `04` Theorem 4 |
 | 8 | the nested-retry law is false for negative counts | the side condition was missing after fix #1 | `m ≥ 0` and `n ≥ 0` |
+| 9 | A1 priced an ask without its schema, so A3 was false | the first real API call (`09` §6a): the schema was 478 of 538 input tokens | `|ctx| + |schema(τ)|` in A1; A3 and A4 separate the two monotonicity claims |
 
 This is Impcore §1.7's point in practice: "Proofs … are interesting primarily
 when they are wrong. Like a bug in a program, a wrong proof tells you that you
