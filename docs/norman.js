@@ -200,32 +200,77 @@ export function activatePlayground(examples) {
   const picker = document.getElementById('examples');
   if (!area) return;
 
-  const paint = () => {
-    // The trailing newline keeps the last line visible while scrolling.
-    view.innerHTML = highlight(area.value) + '\n';
+  // `view` is the <pre>, which is the element that scrolls. Setting scrollTop
+  // on the <code> inside it would do nothing at all, since only the <pre> has
+  // a scrolling box -- that was the original bug.
+  const sync = () => {
     view.scrollTop = area.scrollTop;
     view.scrollLeft = area.scrollLeft;
   };
 
-  area.addEventListener('input', paint);
-  area.addEventListener('scroll', () => {
-    view.scrollTop = area.scrollTop;
-    view.scrollLeft = area.scrollLeft;
-  });
+  const paint = () => {
+    // Replacing the content resets the <pre>'s scroll, so re-sync right after.
+    // The trailing newline keeps the final line reachable when scrolled down.
+    view.innerHTML = highlight(area.value) + '\n';
+    sync();
+  };
 
-  // Tab inserts two spaces rather than leaving the editor.
-  area.addEventListener('keydown', (e) => {
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const { selectionStart: s, selectionEnd: t } = area;
-      area.value = area.value.slice(0, s) + '  ' + area.value.slice(t);
-      area.selectionStart = area.selectionEnd = s + 2;
-      paint();
+  area.addEventListener('input', paint);
+  area.addEventListener('scroll', sync, { passive: true });
+  // Dragging the editor's bottom edge changes what is visible, not the text.
+  new ResizeObserver(sync).observe(area);
+
+  /**
+   * Replace the selection, keeping the browser's native undo history.
+   * Assigning to `.value` would wipe it, so a single Ctrl+Z after pressing
+   * Tab used to discard the whole program.
+   */
+  const insert = (text) => {
+    area.focus();
+    const done = text
+      ? document.execCommand?.('insertText', false, text)
+      : document.execCommand?.('delete');
+    if (!done) {
+      const { selectionStart: s, selectionEnd: e } = area;
+      area.setRangeText(text, s, e, 'end');
     }
+  };
+
+  const INDENT = '  ';
+
+  area.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       runBtn.click();
+      return;
     }
+
+    // Escape hands the keyboard back, so Tab can still leave the editor for
+    // anyone navigating the page without a mouse.
+    if (e.key === 'Escape') {
+      area.blur();
+      return;
+    }
+
+    if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+
+    const { selectionStart: s, selectionEnd: t } = area;
+    const value = area.value;
+    const lineStart = value.lastIndexOf('\n', s - 1) + 1;
+
+    if (e.shiftKey) {
+      // Outdent: drop up to two spaces from the start of this line.
+      const take = value.slice(lineStart, lineStart + INDENT.length).match(/^ {1,2}/);
+      if (!take) return;
+      area.setSelectionRange(lineStart, lineStart + take[0].length);
+      insert('');
+      const back = (p) => Math.max(lineStart, p - take[0].length);
+      area.setSelectionRange(back(s), back(t));
+    } else {
+      insert(INDENT);
+    }
+    paint();
   });
 
   for (const [name] of Object.entries(examples)) {
