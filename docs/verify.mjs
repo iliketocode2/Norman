@@ -99,15 +99,16 @@ for (const [name, source] of Object.entries(EXAMPLES)) {
   report(`example: ${name}  (${res.total} tests)`, res.ok && res.total > 0 ? [] : [res.transcript.trim()]);
 }
 
-// Every code block shown on a page.
-for (const file of ['index.html', 'playground.html']) {
+// Every runnable block shown on a page. Only blocks inside a `.example`
+// container are programs; a `<pre class="syntax">` on the reference page is a
+// grammar, and running it would be meaningless.
+for (const file of ['index.html', 'reference.html', 'playground.html']) {
   const full = path.join(here, file);
   if (!fs.existsSync(full)) continue;
   const html = fs.readFileSync(full, 'utf8');
-  for (const m of html.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)) {
-    const source = unescape(m[1]);
-    const titles = html.slice(0, m.index).match(/class="title">([^<]+)/g) || [];
-    const name = (titles.pop() || file).replace(/.*">/, '');
+  for (const m of html.matchAll(/<div class="example">[\s\S]*?class="title">([^<]*)<[\s\S]*?<pre><code>([\s\S]*?)<\/code><\/pre>/g)) {
+    const name = m[1].trim() || file;
+    const source = unescape(m[2]);
     const res = await run(source);
     report(`${name}  (${res.total} tests)`, res.ok && res.total > 0 ? [] : [res.transcript.trim()]);
   }
