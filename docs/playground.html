@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playground — µNorman</title>
+<meta name="description" content="Write and run µNorman in your browser. The interpreter is the project's own Rust source compiled to WebAssembly; models answer from scripts, so nothing leaves your machine.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>µ</text></svg>">
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="./">µNorman</a>
+    <nav>
+      <a href="./#tour">Tour</a>
+      <a href="playground.html" aria-current="page">Playground</a>
+      <a href="./#guarantees">Guarantees</a>
+      <a href="./#status">Status</a>
+      <a href="https://github.com/iliketocode2/Norman">GitHub</a>
+      <button class="theme" type="button" aria-label="Switch between light and dark">☾</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap pg">
+
+  <h1 style="font-size:1.8rem">Playground</h1>
+  <p class="lede" style="font-size:1.05rem">
+    The whole interpreter runs here, compiled to WebAssembly. Models answer from
+    <strong>scripts</strong>, so programs are deterministic and free, and nothing leaves your machine.
+    Press <strong>Run</strong>, or <strong>Ctrl</strong>/<strong>⌘</strong>&nbsp;+&nbsp;<strong>Enter</strong>.
+  </p>
+
+  <div class="pg-grid">
+    <div class="editor-wrap">
+      <div class="editor-head">
+        <label for="examples" class="small muted">Example</label>
+        <select id="examples" aria-label="Choose an example"></select>
+        <span class="spacer"></span>
+        <button id="run" class="run" type="button">Run&nbsp; ⌃⏎</button>
+      </div>
+      <div class="editor">
+        <pre aria-hidden="true"><code id="view"></code></pre>
+        <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off"
+                  aria-label="µNorman source"></textarea>
+      </div>
+    </div>
+
+    <div class="out-wrap">
+      <div class="out-head">Result</div>
+      <div class="out-body" id="out">Not run yet.</div>
+    </div>
+  </div>
+
+  <h2 id="cheatsheet">A one-screen cheat sheet</h2>
+
+  <h3>Definitions and types</h3>
+  <table>
+    <tbody>
+      <tr><td><code>(define f (x y) e)</code></td><td>a function</td></tr>
+      <tr><td><code>(val x e)</code></td><td>a binding</td></tr>
+      <tr><td><code>(datatype T [K (f τ)] …)</code></td><td>a sum type: a value is one of the <code>K</code>s</td></tr>
+      <tr><td><code>(record R (f τ) …)</code></td><td>a record; read a field with <code>(. r f)</code></td></tr>
+      <tr><td><code>(Text 400)</code>, <code>Num</code>, <code>Bool</code>, <code>Sym</code>, <code>(List τ 8)</code></td><td>the askable types; bounds make answers cheaper to reserve</td></tr>
+    </tbody>
+  </table>
+
+  <h3>The six agentic forms</h3>
+  <table>
+    <tbody>
+      <tr><td><code>(ask m τ ctx 'site)</code></td><td>consult a model once, for an answer of type τ</td></tr>
+      <tr><td><code>(call κ op args…)</code></td><td>use a tool once</td></tr>
+      <tr><td><code>(fail φ)</code> / <code>(catch e x h)</code></td><td>raise and handle a failure</td></tr>
+      <tr><td><code>(budget ([cost $1.00] [time 1min]) e)</code></td><td>a money and time limit for everything inside</td></tr>
+      <tr><td><code>(workflow ([x e] …) body)</code></td><td>named steps; dependencies come from the names each uses</td></tr>
+      <tr><td><code>(par e₁ e₂)</code></td><td>sugar for a two-step workflow, returning a <code>Pair</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Failures</h3>
+  <p class="small">
+    <code>Invalid</code> (the reply didn&rsquo;t fit the type) ·
+    <code>ToolError</code> · <code>Refused</code> ·
+    <code>OverBudget</code> · <code>PastDeadline</code> · <code>Raised</code>.
+    <code>retry</code> handles the first two and never the budget ones.
+  </p>
+
+  <h3>Scripts and tests</h3>
+  <table>
+    <tbody>
+      <tr><td><code>(grant m (model [in 3] [out 15] [ceiling 8000]))</code></td><td>a model, priced in µ$ per token</td></tr>
+      <tr><td><code>(grant py (kernel))</code></td><td>a stateful tool</td></tr>
+      <tr><td><code>(script s [site (reply "…") (out 20) (latency 2s)])</code></td><td>canned replies, keyed by site</td></tr>
+      <tr><td><code>(provider-error "503 …")</code>, <code>(refusal "…")</code>, <code>(error "…")</code></td><td>injected faults</td></tr>
+      <tr><td><code>(under ([script s] [cost $1.00] [time 1min]) …)</code></td><td>the world each test runs in</td></tr>
+      <tr><td><code>check-expect</code> · <code>check-fail</code> · <code>check-within</code> · <code>check-equiv</code> · <code>check-error</code> · <code>check-assert</code></td><td>the unit-test forms</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <span class="label">Two things that will trip you up</span>
+    <p>
+      <strong>Constructors take positional arguments</strong> (<code>(Sell "reason")</code>) while
+      <strong>records take named ones</strong> (<code>(Message [role User] [content "hi"])</code>).
+      And the standard library is very small: there is no number-to-string and no substring yet, so
+      a prompt can only carry text you already have.
+    </p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>µNorman — dual-licensed MIT or Apache-2.0.</span>
+    <span><a href="https://github.com/iliketocode2/Norman/blob/main/design/04-formal-definition.md">The full reference</a> is the formal definition.</span>
+  </div>
+</footer>
+
+<script type="module">
+  import { activatePlayground, activateChrome } from './norman.js';
+  import { EXAMPLES } from './examples.js';
+  activateChrome();
+  activatePlayground(EXAMPLES);
+</script>
+</body>
+</html>
