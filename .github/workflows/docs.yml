@@ -1,14 +1,21 @@
-# Keep the documentation site honest: rebuild its interpreter and run every
-# example on every push. The site itself is served by GitHub Pages straight
-# from docs/ on the default branch, so this workflow publishes nothing -- it
-# only fails when an example or the committed .wasm has drifted.
+# Keep the documentation site honest.
+#
+# The site is served by GitHub Pages straight from docs/ on the default
+# branch, so this workflow publishes nothing. It checks two things:
+#
+#   1. the interpreter that is actually published runs every example on the
+#      site, and
+#   2. an interpreter freshly built from src/ runs them too.
+#
+# The first catches a stale or broken commit; the second catches a source
+# change that breaks an example.
 name: docs
 
 on:
   push:
-    paths: ['src/**', 'docs/**', 'Cargo.toml', 'scripts/build-docs.sh', '.github/workflows/docs.yml']
+    paths: ['src/**', 'docs/**', 'Cargo.toml', 'Cargo.lock', 'scripts/**', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['src/**', 'docs/**', 'Cargo.toml']
+    paths: ['src/**', 'docs/**', 'Cargo.toml', 'Cargo.lock', 'scripts/**']
 
 jobs:
   examples:
@@ -21,11 +28,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Build the wasm interpreter and run every example
-        run: ./scripts/build-docs.sh
-      - name: The committed interpreter must match the source
+
+      - name: The published interpreter runs every example
+        run: node docs/verify.mjs
+
+      - name: Rebuild from source, then run them again
+        run: bash scripts/build-docs.sh
+
+      - name: Note whether the committed interpreter is stale
+        # Deliberately a notice, not a failure: Rust does not produce
+        # byte-identical output across toolchain versions, so a difference
+        # here is weak evidence. The two steps above are the real checks.
         run: |
           if ! git diff --quiet -- docs/munorman.wasm; then
-            echo "::error::docs/munorman.wasm is stale. Run ./scripts/build-docs.sh and commit the result."
-            exit 1
+            echo "::notice::docs/munorman.wasm differs from a fresh build. If you changed src/, run scripts/build-docs.sh and commit the result."
           fi
+
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Formatting
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        # The live tests are #[ignore]d: they need an API key and spend money.
+        run: cargo test
