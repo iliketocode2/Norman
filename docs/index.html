@@ -55,7 +55,7 @@
     <span class="label">How this page works</span>
     <p>
       The interpreter on this page is the same Rust program as the command-line one, compiled to
-      WebAssembly. Every example below is repeatable and runs entirely on your machine. Press <strong>Run</strong> and see.
+      WebAssembly. Every example below is repeatable and will run on your machine.
     </p>
   </div>
 
@@ -76,13 +76,12 @@
     </tbody>
   </table>
   <p class="small muted">
-    There is one honest caveat, and it is in <a href="#status">Status</a>: today most of these are
-    enforced when the program <em>runs</em>.
+    Note that most of these are enforced when the program <em>runs</em>. See <a href="#status">Status</a>.
   </p>
 
   <h2 id="tour">A tour via examples</h2>
 
-  <h3>1. Ask a model for a typed answer</h3>
+  <h3>1. Ask</h3>
   <p>
     <code>ask</code> takes a model, the <strong>type</strong> of answer you want, and the context the
     model sees. The answer comes back as a real value of that type, or the <code>ask</code> fails.
@@ -318,11 +317,11 @@
     <li><strong>The budget is never overspent,</strong> even with many steps running at once. The interpreter checks this invariant in every state it reaches.</li>
     <li><strong>A model can&rsquo;t hand your program a tool.</strong> Authority comes only from the host.</li>
     <li><strong>No answer is accepted after the deadline.</strong></li>
-    <li><strong>Concurrency doesn&rsquo;t change answers.</strong> A workflow gives the same result as running its steps one at a time &mdash; provided no step reads its own remaining budget, and no limit binds.</li>
+    <li><strong>Concurrency doesn&rsquo;t change answers.</strong> A workflow gives the same result as running its steps one at a time.</li>
     <li><strong>Every model call and tool call is recorded</strong> in a trace. That is what makes testing, replay and cost profiling possible.</li>
   </ol>
 
-  <h2 id="status">Status, honestly</h2>
+  <h2 id="status">Status</h2>
   <p>
     µNorman is a research prototype, designed in the style of Norman Ramsey&rsquo;s
     <em>Programming Languages: Build, Prove, and Compare</em> and his
@@ -358,7 +357,7 @@
   </div>
 
   <div class="note">
-    <span class="label">One finding worth your attention</span>
+    <span class="label">One Important Finding</span>
     <p>
       The answer&rsquo;s type is sent with every ask as a JSON schema, which accounts for a significant portion of the input tokens. A type costs money twice: bounding an <em>answer</em> shrinks the
       reservation, but adding a constructor or a field makes every ask dearer on input, for as long as
@@ -367,14 +366,13 @@
     </p>
   </div>
 
-  <h2 id="more">Going further</h2>
+  <h2 id="more">This is cool, what can I look at next?</h2>
   <ul>
-    <li><a href="playground.html">The playground</a> &mdash; write and run your own µNorman.</li>
-    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/README.md">The guide</a> &mdash; the language explained in depth.</li>
-    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/04-formal-definition.md">The formal definition</a> &mdash; grammar, abstract syntax, big-step semantics, theorems.</li>
-    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/06-algebraic-laws.md">The laws</a> &mdash; every law, the tempting non-laws, and the nine problems writing them found.</li>
-    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/00-reading-notes.md">Reading notes</a> &mdash; critical reviews of the seven papers behind the design.</li>
-    <li><a href="https://github.com/iliketocode2/Norman/blob/main/LIVE-SETUP.md">Running against a real model</a> &mdash; getting a key, capping the spend.</li>
+    <li><a href="playground.html">Write and run your own µNorman</a></li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/README.md">The language guide</a></li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/04-formal-definition.md">The formal definition</a></li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/06-algebraic-laws.md">The laws</a></li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/00-reading-notes.md">Claude's reading notes</a></li>
   </ul>
 
 </main>
