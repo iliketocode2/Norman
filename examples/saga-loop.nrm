@@ -1,0 +1,156 @@
+;;; saga-loop.nrm: SAGA's bi-level loop (design/00 §7) written in µNorman.
+;;;
+;;; SAGA (Du et al., 2026) evolves the *objectives* of a search, not just the
+;;; candidates. An outer loop plans objectives, implements them as scoring
+;;; functions, optimizes candidates against them, and analyses the result; an
+;;; inner loop does the optimizing. This file writes that architecture in
+;;; µNorman as it stands today, to find out which parts the language already
+;;; expresses and which it can't. design/10-saga.md records the answer.
+;;;
+;;; Two deliberate simplifications, both forced by gaps the exercise found:
+;;;   1. Scoring is an `ask`, not a `call`. A tool result is always Text, so a
+;;;      scorer that returns a number can't be called (design/10 §2.1).
+;;;   2. There is no human in the loop. SAGA's co-pilot and semi-pilot modes
+;;;      have no µNorman form at all; this is autopilot (design/10 §2.2).
+
+(grant claude (model [in 3] [out 15] [ceiling 8000]))
+
+;;; ------------------------------------------------------------------
+;;; Step 1, forms of data: an objective is one of two forms.
+;;; SAGA's Objective carries a direction and a weight, except for a *filter*
+;;; objective, which is a pass/fail constraint and has neither (paper, §S1.1.1).
+;;; Two forms, so a sum type with two constructors.
+
+(datatype Direction [Maximize] [Minimize])
+
+(datatype Kind
+  [Weighted (dir Direction) (weight Num)]   ; weight is a percentage: Num is integral
+  [Filter])                                 ; pass/fail: no direction, no weight
+
+(record Objective (name Sym) (rationale (Text 200)) (kind Kind))
+
+;;; A candidate with its aggregate score, in thousandths.
+(record Rated (candidate (Text 120)) (score Num))
+
+;;; The analyzer's verdict is a *choice*, so the outer loop is a `case` on it.
+;;; This is the CP-Agent pattern (Exec/Done) at the level of the outer loop.
+(datatype Progress
+  [Revise (report (Text 400)) (objectives (List Objective 4))]
+  [Done   (report (Text 400))])
+
+;;; ------------------------------------------------------------------
+;;; Contexts. Note what can and can't be built: the report flows from the
+;;; analyzer to the planner as Text, exactly as in SAGA, so it needs no
+;;; rendering. The *objectives* can't be rendered into a prompt at all --
+;;; there is no value-to-text in the basis (design/10 §2.4).
+
+(val planner-role
+  "You plan measurable objectives for a design search. Return at most four.")
+
+(val optimizer-role
+  "You propose candidates and score them against the current objectives.")
+
+(val analyzer-role
+  "You judge whether the search should continue, and say what to change.")
+
+(define plan-ctx (goal report)
+  (list (Message [role System] [content planner-role])
+        (Message [role User]   [content goal])
+        (Message [role User]   [content report])))
+
+(define work-ctx (role goal)
+  (list (Message [role System] [content role])
+        (Message [role User]   [content goal])))
+
+;;; ------------------------------------------------------------------
+;;; The four modules. Each is one `ask` for a typed answer.
+;;; SAGA's Implementer has no module here: it would compile an objective into
+;;; a scorer, which needs a capability the host grants (design/10 §2.3).
+
+(define plan (m goal report)
+  (ask m (List Objective 4) (plan-ctx goal report) 'planner))
+
+(define optimize (m goal objectives)                  ; the inner loop, as one step
+  (ask m (List Rated 6) (work-ctx optimizer-role goal) 'optimizer))
+
+(define analyze (m goal population)
+  (ask m Progress (work-ctx analyzer-role goal) 'analyzer))
+
+;;; ------------------------------------------------------------------
+;;; The outer loop. Fuel makes the recursion Peano, so it terminates by
+;;; construction; the enclosing budget stops it earlier if money runs out.
+;;; `archive` keeps every candidate from every iteration, because SAGA's
+;;; selector chooses retrospectively across all of them, not just the last
+;;; (paper, §S1.2 phase 5).
+
+(define outer (m goal objectives archive fuel)
+  (if (<= fuel 0)
+      archive
+      (let* ([population (optimize m goal objectives)]
+             [archive    (append archive population)])
+        (case (analyze m goal population)
+          [(Done report) archive]
+          [(Revise report revised)
+             (outer m goal revised archive (- fuel 1))]))))
+
+(define saga (m goal fuel)
+  (budget ([cost $0.50] [time 10min])
+    (let* ([objectives (plan m goal "First iteration: no results yet.")])
+      (outer m goal objectives '() fuel))))
+
+;;; The selector: the best of the archive. `best` is an ordinary fold, so
+;;; retrospective selection needs no new form.
+(define better (a b) (if (> (. a score) (. b score)) a b))
+
+(define best (rs)
+  (case rs
+    ['() (fail 'empty-archive)]
+    [(cons r rest) (case rest ['() r] [_ (better r (best rest))])]))
+
+;;; ==================================================================
+;;; Tests. Two iterations: the analyzer revises once, then stops.
+
+(script two-iterations
+  [planner   (reply "[{\"name\":\"activity\",\"rationale\":\"primary goal\",\"kind\":{\"tag\":\"Weighted\",\"dir\":{\"tag\":\"Maximize\"},\"weight\":80}}]")
+             (out 40) (latency 3s)
+             (reply "[{\"name\":\"activity\",\"rationale\":\"primary goal\",\"kind\":{\"tag\":\"Weighted\",\"dir\":{\"tag\":\"Maximize\"},\"weight\":80}},{\"name\":\"stability\",\"rationale\":\"top candidates are unstable\",\"kind\":{\"tag\":\"Filter\"}}]")
+             (out 70) (latency 3s)]
+  [optimizer (reply "[{\"candidate\":\"c1\",\"score\":120},{\"candidate\":\"c2\",\"score\":340}]")
+             (out 30) (latency 5s)
+             (reply "[{\"candidate\":\"c3\",\"score\":710},{\"candidate\":\"c4\",\"score\":560}]")
+             (out 30) (latency 5s)]
+  [analyzer  (reply "{\"tag\":\"Revise\",\"report\":\"Scores are low and the top candidates are unstable.\",\"objectives\":[{\"name\":\"stability\",\"rationale\":\"add a stability filter\",\"kind\":{\"tag\":\"Filter\"}}]}")
+             (out 60) (latency 4s)
+             (reply "{\"tag\":\"Done\",\"report\":\"Converged: the best candidate satisfies every objective.\"}")
+             (out 25) (latency 4s)])
+
+(under ([script two-iterations] [cost $1.00] [time 5min])
+
+  ;; The whole loop runs, and the archive holds both iterations' candidates.
+  (check-expect (length (saga claude "Design a stable, active compound." 3)) 4)
+
+  ;; Retrospective selection finds the best candidate overall, from iteration 2.
+  (check-expect (best (saga claude "Design a stable, active compound." 3))
+                (Rated [candidate "c3"] [score 710]))
+
+  ;; The analyzer's choice drives the loop: it stops on `Done`, after two
+  ;; iterations, even though it was given fuel for three.
+  (check-within (saga claude "Design a stable, active compound." 3)
+                ([time 24s]))              ; 3 + (5 + 4) + (5 + 4) + 3 planner
+
+  ;; A sum type with two shapes of constructor comes back correctly: `Weighted`
+  ;; carries a nested datatype and a number, `Filter` carries nothing.
+  (check-expect (plan claude "Design a stable, active compound." "none yet")
+                (list (Objective [name 'activity] [rationale "primary goal"]
+                                 [kind (Weighted Maximize 80)])))
+
+  ;; Fuel bounds the loop by construction: with no fuel, the archive is empty
+  ;; and only the first plan is paid for.
+  (check-expect (saga claude "Design a stable, active compound." 0) '()))
+
+;;; The budget is the real stop, not the fuel. With a penny, the first `ask`
+;;; is refused and the whole search fails before anything is spent.
+(under ([script two-iterations] [cost $0.000001] [time 5min])
+  (check-fail   (saga claude "Design a stable, active compound." 3) OverBudget)
+  (check-within (catch (saga claude "Design a stable, active compound." 3) e 0)
+                ([cost $0] [time 0s])))

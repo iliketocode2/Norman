@@ -1,4 +1,4 @@
-# Reading notes: three papers, read against Ramsey
+# Reading notes: seven papers, read against Ramsey
 
 The yardstick is the *Seven Lessons* booklet. For each paper we ask four questions.
 What does it say the forms of agent data are? Does it give semantics, and are
@@ -375,7 +375,100 @@ construction. The paper's cost argument fails on its own data.
 
 ---
 
-## Synthesis: requirements the six papers put on our design
+## 7. Du et al., *Accelerating Scientific Discovery with Autonomous Goal-evolving Agents* (SAGA, arXiv 2512.21782, 2026)
+
+**What it is.** A bi-level agent framework for scientific design. The inner loop
+optimizes candidates against the current objectives; the **outer loop evolves
+the objectives themselves**. Four modules: a *planner* proposes objectives, an
+*implementer* turns each into an executable scoring function, an *optimizer*
+searches for candidates, an *analyzer* reports on the population and decides
+whether to stop. Three autonomy levels decide which module's output a human
+reviews. Applied to five design problems, two with wet-lab validation.
+
+It is the only one of these papers with experimental results outside a
+benchmark, and the only one whose central claim is about *specifications*
+rather than about execution.
+
+**Worth taking**
+
+- **The motivating failure is a specification bug, and it's the best external
+  evidence this project has.** In the chemical-process task (§S7.5.1) the
+  optimizer found flowsheets that passed the feed straight through: perfect
+  "recovery," moderate "purity," no separation at all. The authors call it an
+  "objective loophole." Fixed proxies get exploited, and the fix is to state
+  the specification better. That is the project's premise, found independently.
+- **Objectives are data with forms.** An objective is *candidate-wise*,
+  *population-wise*, or a *filter* (§S1.1.1). A filter is pass/fail and has
+  neither a direction nor a weight; the other two have both. Two shapes of
+  constructor, which is a sum type, which is Step 1.
+- **The analyzer's output is a choice,** continue-with-changes or stop. The
+  outer loop is case analysis on it, exactly as CP-Agent's loop is case
+  analysis on `Exec`/`Done`. The same form scales from the inner loop to the
+  outer one.
+- **Planning and implementation are coupled by failure.** If the implementer
+  can't realize an objective, it tells the planner *why* and the planner
+  revises, up to a configured number of attempts (§S1.2, phase 2). That's
+  `repair` — failure as a value, fed back into the context — applied to a plan
+  rather than to a reply.
+- **Selection is retrospective.** The selector ranks every candidate from every
+  iteration, "so that high-quality solutions from early iterations exploring
+  different objective combinations are retained" (§S1.2, phase 5). The best
+  answer may predate the best objectives.
+- **Autonomy is a property of a region, not a parameter.** Co-pilot,
+  semi-pilot and autopilot differ only in which decisions a human approves.
+  Nothing else about the program changes. That is the shape of a *scope*, like
+  `budget`.
+- **Efficiency is a headline result.** SAGA reports oracle calls as a first-class
+  number (12,000 against Germinal's 21,120 and BoltzGen's 60,000) and scores
+  methods on it. Cost belongs in the evaluation, not the appendix.
+
+**Critique**
+
+- **No semantics and no laws,** as with every other paper here. SAGA is a Python
+  framework configured by YAML. There is nothing to reason with, only something
+  to run.
+- **The objective language is prose.** An objective's "description" is a
+  paragraph of natural language, and the conventions that make scores
+  composable — normalize to [0,1], higher is better, filters return 1.0 or 0.0
+  — are delivered as *prompt text* in the context block (§S2.2.3). So the
+  contract that every scorer must satisfy is enforced by asking nicely. This is
+  precisely what the survey (§5.5) wanted a language to carry, and it is the
+  clearest opening SAGA leaves us.
+- **Their own ablation undercuts the headline, in at least one task.** §S2.3.1
+  reports that for antibiotics "the objectives coming out after iteration 1
+  cannot improve the quality of molecules obviously," and that the three
+  autonomy modes perform similarly. If most of the gain is in iteration 1, then
+  most of the gain is from *writing the objectives down at all*, not from
+  evolving them. The nanobody and chemical-process tasks show more movement
+  across iterations, so this is task-dependent rather than fatal — but it is a
+  caution against building machinery for many iterations.
+- **The weights are nudged, not searched.** The transcripts adjust weights by
+  hand-sized steps: `ptm` 3.0 → 1.0, `liability_score` 2.0 → 3.0. The paper
+  also says the RL optimizer is "sensitive to the selected objective weights"
+  and "not always stable," with three replicates. The claim to search a
+  combinatorial space of objectives *and* their weights is well supported for
+  the objectives and weakly supported for the weights.
+- **The held-out metrics are proxies chosen by the same people.** The guard
+  against gaming the objectives is a second set of computational oracles. The
+  real check is the wet lab, and there the paper is commendably plain: 4 of 28
+  compounds inhibited growth, and only with a permeabilizer; 1 of those 4 was
+  non-cytotoxic at its MIC; 3 of 24 nanobodies bound, at 300–400 nM. Those are
+  real hits honestly reported, not a refutation of the method — but they are
+  a long way from the headline framing.
+- **Safety of model-authored code is a deployment detail.** Generated scorers
+  run in Docker behind MCP. That's sensible practice, not a guarantee, and
+  nothing in the framework prevents a scorer from being granted more than it
+  needs.
+
+**Takeaway:** the most useful paper of the seven for *what to build next*. Its
+architecture is a program, and writing that program in µNorman
+([`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)) was the fastest way
+yet to find out what the language is missing. See
+[`10-saga.md`](10-saga.md).
+
+---
+
+## Synthesis: requirements the seven papers put on our design
 
 | Requirement | Source | Where it lands in Ramsey's process |
 |---|---|---|
@@ -398,3 +491,9 @@ construction. The paper's cost argument fails on its own data.
 | Subtask boundaries are instrumentation points | RSTD | Named ask sites in the trace |
 | Failures must be injectable to be tested | RSTD (0–2% natural rate) | Fault entries in the scripted oracle |
 | Agency level = where model output flows | Control paper hierarchy | Future information-flow analysis in the effect system |
+| What to optimize is itself discovered, and changes | SAGA outer loop | Objectives are ordinary data; no new form needed (`saga-loop.nrm`) |
+| A proxy objective gets exploited; specifications are wrong at first | SAGA's "objective loophole" | The premise of the whole project: write the specification down, then fix it |
+| Tool results have a declared shape | SAGA's scorers return numbers | **A gap:** `ASK` carries a type, `CALL` does not (`10` §2.1) |
+| Some decisions need a human's approval | SAGA's three autonomy levels | **A gap:** no form for consulting a human (`10` §2.2) |
+| Tools may be authored during the run | SAGA's implementer | Derived capabilities: the host's sandbox, not the model, confers authority (`10` §2.3) |
+| Selection ranges over every candidate, not the last batch | SAGA's selector | Ordinary data threaded through the loop; already expressible |

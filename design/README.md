@@ -14,12 +14,12 @@ for what.
 
 > **Status:** designed and implemented, with models and tools scripted. A Rust
 > interpreter runs the design's example programs and laws: 35 example tests,
-> 26 law tests, 39 tests of the predefined functions and 11 oracle tests all
-> pass. Thirteen laws are also checked on 150 random scripts each, and the
+> 27 law tests, 39 tests of the predefined functions, 11 oracle tests and 7
+> tests of SAGA's bi-level loop ([`10`](10-saga.md)) all pass. Thirteen laws are also checked on 150 random scripts each, and the
 > budget invariant is checked in every state of every scripted run. A suite of
-> deliberately wrong tests fails, as it must. The live model client is built
-> and tested against a local stub server, but it hasn't yet sent a request to
-> the real API. Live mode has no tools yet. See
+> deliberately wrong tests fails, as it must. The live model client has made
+> real calls against Claude Sonnet 5 ([`09`](09-live-oracle.md) §6a); live mode
+> still has no tools. See
 > [`08-implementation-notes.md`](08-implementation-notes.md).
 >
 > ```
@@ -114,14 +114,29 @@ Everything inside gets at most $0.50 and 10 minutes. Nested budgets take the
 smaller limit, and whatever the inside spends is charged to the outside.
 
 **How the budget can never be overspent.** Before calling the model, `ask`
-*reserves* the worst-case cost. That's the input size (known, because the
-context is explicit) plus the largest answer the **type** allows. If the
-reservation doesn't fit, the model is never called and nothing is charged.
-Afterward, only the actual cost is kept.
+*reserves* the worst-case cost: everything it is about to send, plus the
+largest answer the **type** allows. If the reservation doesn't fit, the model
+is never called and nothing is charged. Afterward, only the actual cost is
+kept.
 
-This is why types carry size bounds. A `Verdict` with 400-byte reasons
-reserves about $0.007. The same type with unlimited text reserves the model's
-whole output limit, about $0.12, and a $0.05 budget refuses it.
+**The type is on both sides of that sum,** which is easy to miss. It bounds the
+answer, and it is *also* sent with the question, as a JSON schema, on every
+single ask. In the first real call the schema was **478 of 538 input tokens** —
+89% of the input, for a context of 175 characters
+([`09`](09-live-oracle.md) §6a). So a type costs money twice, and the two
+costs pull in different directions:
+
+- **Bounding an answer shrinks the reservation.** A `Verdict` with 400-byte
+  reasons reserves about $0.007 at the example's prices. The same type with
+  unlimited text reserves the model's whole output limit, about $0.12, and a
+  $0.05 budget refuses it. This is why types carry size bounds.
+- **Enriching a type makes every ask dearer on input,** for as long as the
+  program runs — another constructor, another field, a longer field name. No
+  bound on the text *inside* those fields helps, because what is sent is the
+  schema, not the answer. A loop re-sends it every iteration.
+
+Law A3 in [`06`](06-algebraic-laws.md) once claimed that a smaller answer
+always means a smaller reservation. The first real call showed it was false.
 
 ### 4. An agent loop in ten lines
 
@@ -228,9 +243,9 @@ These are stated as theorems in [`04`](04-formal-definition.md) §8 and
   One isn't caught at all: a concurrent step that reads its remaining budget.
   That's allowed by design; such a step just falls outside guarantee 4. The
   checker will catch all three before the program runs.
-- **No real model call yet, and no real tools.** The live client is tested
-  against a local stub server only. Tools are scripted, so programs that use
-  them, such as the CP-Agent example, can't yet run against a real model.
+- **No real tools.** `ask` works against a real model, but `call` doesn't:
+  live mode has no tool hosts. So programs that use a tool, such as the
+  CP-Agent example, still can't run end to end against a real model.
 - **A small standard library.** There's no way yet to turn a number or a value
   such as a `Verdict` into text, or to take strings apart.
 - **Models are not deterministic, and µNorman doesn't pretend they are.** It
@@ -309,6 +324,8 @@ Ramsey's point exactly: proofs are most useful when they fail.
 | [`07-small-step-semantics.md`](07-small-step-semantics.md) | the event-by-event machine for concurrency and shared budgets | implement the interpreter, or see who wins a budget race |
 | [`08-implementation-notes.md`](08-implementation-notes.md) | how to run it; rule-to-code map; every deliberate deviation; what the tests found | work on the interpreter |
 | [`09-live-oracle.md`](09-live-oracle.md) | connecting `ask` to a real model: request mapping, types to JSON Schema, reservations from `count_tokens`, refusals, the real clock. **The default model is Claude Sonnet 5, set in one place so it can change.** | connect µNorman to a model API |
+| [`10-saga.md`](10-saga.md) | what writing SAGA's bi-level loop in µNorman found: typed `call`, a form for consulting a human, derived capabilities | see what the language is missing, and why |
+| [`../LIVE-SETUP.md`](../LIVE-SETUP.md) | the operator's companion to `09`: getting an API key, setting it, capping the spend, and the plan for the first real call | actually run against a real model |
 
 Where documents disagree, the later one wins. Each correction is also noted at
 the place it corrects.

@@ -232,6 +232,16 @@ mod tests {
         t
     }
 
+    /// A type whose answers are tiny but whose schema is large: twelve
+    /// constructors, each carrying one one-byte field.
+    fn wide(t: &mut TypeEnv) {
+        let cons = ["Aa", "Bb", "Cc", "Dd", "Ee", "Ff", "Gg", "Hh", "Ii", "Jj", "Kk", "Ll"]
+            .iter()
+            .map(|k| ConDef { name: Rc::from(*k), fields: vec![(Rc::from("v"), Type::Text(Some(1)))] })
+            .collect();
+        t.add_datatype(Rc::from("Wide"), cons).unwrap();
+    }
+
     fn req(messages: &[(&str, &str)], ty: Type) -> AskReq {
         AskReq {
             site: "analyst".into(),
@@ -417,5 +427,29 @@ mod tests {
         assert_eq!(parse_count(200, r#"{"input_tokens": 1234}"#), Ok(1234));
         assert!(matches!(parse_count(429, "{}"), Err(Failure::Transient(_))));
         assert!(matches!(parse_count(401, "{}"), Err(Failure::Fatal(_))));
+    }
+    /// Law A3 of `06` says a smaller output bound means a smaller reservation.
+    /// That ignores the schema, which is sent as *input* on every ask: the
+    /// first real call measured it at 478 of 538 input tokens (design/09 §3).
+    /// Output bound and schema size are independent, so A3 is false. Here a
+    /// type with a 60x smaller answer has a 3x larger schema.
+    #[test]
+    fn a_smaller_output_bound_can_cost_more_input() {
+        let mut t = theta();
+        wide(&mut t);
+        let narrow = Type::Named(Rc::from("Wide"));
+        let broad = Type::Text(Some(4000));
+
+        let bound_narrow = t.bound(&narrow).expect("bounded");
+        let bound_broad = t.bound(&broad).expect("bounded");
+        let schema = |ty: &Type| output_schema(&t, ty).unwrap().0.to_string().len();
+
+        assert!(bound_narrow < bound_broad, "{bound_narrow} is not below {bound_broad}");
+        assert!(
+            schema(&narrow) > schema(&broad),
+            "Wide's schema is {} bytes, (Text 4000)'s is {}",
+            schema(&narrow),
+            schema(&broad)
+        );
     }
 }

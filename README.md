@@ -6,12 +6,18 @@ concurrency. It's designed in the style of Norman Ramsey's *Programming
 Languages: Build, Prove, and Compare*, and implemented as a definitional
 interpreter in Rust.
 
-Start with the guide: [design/README.md](design/README.md).
+Start with the guide: [design/README.md](design/README.md). To point `ask` at a
+real model, see [LIVE-SETUP.md](LIVE-SETUP.md) — including why an answer's
+**type** is most of what you pay for on input, since its JSON schema is sent
+with every ask.
 
 ```
 cargo run -- examples/step5-examples.nrm    # load a program and run its unit tests
 cargo test                                  # the design's example results and laws
 ```
+
+No API key is needed for either command. Models answer from scripts, and the
+live client is tested against a local stub server.
 
 ## License
 
@@ -79,3 +85,9 @@ number there is given after each entry.
   arXiv:2605.15425v1.
   [PDF](theory/Runtime-Structured%20Task%20Decomposition%20Agentic%20Coding%20Systems.pdf).
   Reading notes §6.
+- Yuanqi Du, Botao Yu, Tianyu Liu, Tony Shen, Junwu Chen, Jan G. Rittig,
+  Kunyang Sun, Yikun Zhang, et al. "Accelerating Scientific Discovery with
+  Autonomous Goal-evolving Agents." arXiv:2512.21782v2, March 2026.
+  [PDF](theory/SAGA.pdf). Code at <https://github.com/btyu/SAGA> (MIT).
+  Reading notes §7; what it asks of µNorman is in
+  [`design/10-saga.md`](design/10-saga.md).

@@ -223,9 +223,69 @@ the mode.
    - **Credentials** come from `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` as
      a bearer token. `ANTHROPIC_BASE_URL` overrides the endpoint (that's how
      the stub is reached).
-4. **One opt-in real call.** `cargo test -- --ignored` with
-   `ANTHROPIC_API_KEY` set runs the analyst example against Sonnet 5. It costs
-   well under $0.01.
+4. ✅ **One opt-in real call.**
+   `cargo test --test live_real -- --ignored --nocapture` with
+   `ANTHROPIC_API_KEY` set asks Claude Sonnet 5 for a `Verdict`.
+   [`tests/live_real.rs`](../tests/live_real.rs); three tests, two of which
+   spend money, together well under a cent.
+   [`LIVE-SETUP.md`](../LIVE-SETUP.md) is the operator's companion: how to get
+   a credential and how to cap the spend.
+
+---
+
+## 6a. What the first real call found
+
+Run on 2026-10-06, against `claude-sonnet-5`.
+
+```
+result:  (Sell "A significant revenue decline combined with a steep 17-point
+          gross margin contraction signals deteriorating pricing power…")
+spent:   $0.001846
+  ask analyst  in 538 tok, out 77 tok, cost $0.001846, 177..2625 ms, ok
+```
+
+**Four things that had only ever been checked against our own stub now hold
+against the real API.**
+
+1. **The schema is accepted.** A sum type compiles to an `anyOf` of tagged
+   objects, wrapped in `{"value": …}` because the root isn't an object (§2).
+   The API took it and the model obeyed it.
+2. **The answer validated.** `validate_Θ` turned the reply into a real
+   `Verdict`. The reason came back at 175 bytes, inside the type's 400 — even
+   though the schema never states that bound, which is enforced afterwards. One
+   sample, so this is encouraging rather than conclusive.
+3. **The reservation bounded the bill,** with no `over-reservation` in the
+   trace. The thinking allowance of 2000 tokens was ample: the model spent 77
+   output tokens in total on this task.
+4. **An unaffordable ask is refused for free** on the live path too: $0 spent,
+   no trace entry, the model never called.
+
+**And one surprise, which is the reason to make the call.**
+
+The context was about 175 characters, but the ask billed **538 input tokens**.
+Asking `count_tokens` (which is free) for the same request with and without
+`output_config` says where they went:
+
+| | tokens |
+|---|---|
+| messages alone | 60 |
+| messages + schema | 538 |
+| **the schema** | **478** (from 521 bytes of JSON) |
+| what the test tokenizer predicts (`05`, convention 4) | 39 |
+
+**The schema is 89% of the input, and it is re-sent on every ask.** Three
+consequences:
+
+- **Decision D is what makes Theorem 1 hold in live mode.** Counting the real
+  request, rather than estimating from the context, is not a refinement: an
+  estimate from the context alone would have been thirteen times too small, and
+  every reservation would have been wrong.
+- **A type costs money on input, not just on output.** `04`'s cost model and
+  law A1 of `06` both priced an ask as `price_m(|ctx|, max_out(m, τ))`. The
+  type appears in *both* arguments: `price_m(|ctx| + |schema(τ)|, max_out(m,
+  τ))`. Law A3 was false as a result (`06` §7, #9).
+- **Prompt caching stops being a nicety** (§7). In a loop like CP-Agent the
+  same schema is re-sent every iteration. Caching it is worth real money.
 
 ---
 

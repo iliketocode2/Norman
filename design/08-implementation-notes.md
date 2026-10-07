@@ -22,9 +22,11 @@ Current results:
 | Step 6 law instances and non-law counterexamples | 26 of 26 pass |
 | Step 9 tests of the initial basis ([`../examples/step9-revisit.nrm`](../examples/step9-revisit.nrm)) | 39 of 39 pass |
 | Scripted-oracle tests ([`../examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm)) | 11 of 11 pass |
+| SAGA's bi-level loop ([`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)) | 7 of 7 pass |
 | Random tests of 13 laws ([`../tests/properties.rs`](../tests/properties.rs)) | 150 cases each, all pass |
 | The same harness on 3 false laws | finds a counterexample to each, as it must |
 | Must-fail suite ([`../tests/must-fail.nrm`](../tests/must-fail.nrm)) | 8 of 8 fail, as they must |
+| One real API call ([`../tests/live_real.rs`](../tests/live_real.rs)) | 3 tests, `#[ignore]`d; they spend money, and `cargo test` skips them |
 
 Every scripted run also checks Theorem 1′ (the budget invariant) in every
 state it reaches. See "The budget invariant is checked" below.
@@ -84,14 +86,20 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
    definition. Ramsey's own interpreters behave the same way.
 3. **The test tokenizer.** A context's size is the sum, over its messages, of
    role name + content + 4 bytes. Tokens are ⌈bytes ÷ 4⌉. That's the
-   convention `05` fixes for scripted mode; a live model would report real
-   counts.
+   convention `05` fixes for scripted mode; a live model reports real counts.
+   **It understates a live ask by about an order of magnitude**, because it
+   counts only the messages, and the JSON schema is sent as input too: for the
+   analyst ask, 39 predicted against 538 billed (`09` §6a). This is a
+   *fidelity* gap, not a soundness one — Theorem 1 holds in live mode because
+   the reservation comes from `count_tokens` on the real request, not from this
+   tokenizer — but every cost in the scripted examples is far below what the
+   same program would really pay.
 4. **A scripted reply longer than `max_out`** is treated as truncated. It
    fails `Invalid` and is charged at `max_out`, so the charge never exceeds the
    reservation (Theorem 1′).
 5. **Hosts are scripted only.** `cost_κ(op) = 0` for every host. There's no
    real Python kernel or filesystem yet. Kernels implement `fork` natively.
-6. **The live oracle exists but hasn't yet made a real call.** Steps 1–3 of
+6. **The live oracle has made real calls** (`09` §6a, step 4 ✅). Steps 1–4 of
    [`09`](09-live-oracle.md) are done. The machine talks to an `Oracle` trait
    ([`src/host.rs`](../src/host.rs)), which is implemented by scripts and by
    the live client ([`src/live.rs`](../src/live.rs), run with `--live`). The
@@ -99,7 +107,8 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
    is next. Refusals, the default model grant (Claude Sonnet 5, set in
    [`src/defaults.rs`](../src/defaults.rs)) and thinking allowances are in
    place and tested in
-   [`examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm).
+   [`examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm). Live mode
+   still has no tool hosts, so `call` is a checked run-time error there.
 7. **`check-equiv 'exact`** compares results, money, time, and the trace by
    (site, kind, cost, start, end, outcome). It ignores workflow paths, because
    the same computation can legitimately run at a different path (for
@@ -151,6 +160,14 @@ true and a false result for every predicate.
 - The nested-retry law had lost its side condition when fix #1 made `retry`
   accept negative counts.
 
+**The first real call found a tenth problem** (`06` §7, #9), and it is the one
+no amount of scripted testing could have found. The ask billed 538 input tokens
+for a 175-character context, because **the schema is sent with every ask** and
+accounted for 478 of them. Law A1 had priced an ask as `price_m(|ctx|,
+max_out(m, τ))`, leaving the type out of the input entirely, which made law A3
+false. The scripted tokenizer had hidden this by counting only messages. See
+`09` §6a.
+
 **The budget invariant is checked** (Lesson 6: representation invariants
 "can be coded, typechecked, and tested"). Only `reserve` and `settle` move
 money, so after each one the machine checks `spent + reserved ≤ limit` on the
@@ -169,11 +186,11 @@ specification on every other test.
 
 ## What's next
 
-- **One real call** (step 4 of [`09`](09-live-oracle.md)). The live client
-  is built and tested against a stub server, but no request has reached the
-  real API. One call would confirm that the API accepts our schemas and that
-  the token-count margin holds. Cancelled calls can then be refunded down to
-  reported usage (`07` §5).
+- **Prompt caching** (`09` §7). Newly urgent: the schema is 89% of an ask's
+  input and is re-sent every iteration of a loop (`09` §6a).
+- **A scripted tokenizer that includes the schema,** so scripted costs predict
+  live ones. Today they are about an order of magnitude low (deviation 3).
+- **Refunding cancelled calls** down to reported usage (`07` §5).
 - **Real hosts.** A Python kernel and a filesystem capability, with `fork`.
 - **A read-eval-print loop,** for interactive use.
 - **The type and effect system** (Lesson 5). It makes askability, ownership
@@ -183,3 +200,6 @@ specification on every other test.
   They're still tested only indirectly.
 - **More examples.** P3 (the committee) and P5 (ProofFlow) from `01`/`02` as
   runnable programs.
+- **The three changes SAGA argues for** ([`10`](10-saga.md)): a result type on
+  `call`, declared at the grant; a `consult` effect for the decisions a human
+  should approve; and `show`, so values can be rendered back into a prompt.
