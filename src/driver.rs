@@ -8,6 +8,7 @@ use crate::machine::{self, Outcome, Res, WorldConfig, match_pattern};
 use crate::parser::Parser;
 use crate::types::TypeEnv;
 use crate::value::*;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -19,10 +20,47 @@ pub struct Interp {
     next_cap: u64,
     /// Print each failing test's message (on by default).
     pub verbose: bool,
-    /// When set, `ask` is answered by a real model (design/09); otherwise by scripts.
+    /// When set, `ask` is answered by a real model (design/09); otherwise by
+    /// scripts. Native only: wasm has no sockets, so there it is scripts alone.
+    #[cfg(not(target_arch = "wasm32"))]
     pub live: Option<crate::live::LiveConfig>,
     /// Print the trace of each top-level evaluation: one line per ask or call.
     pub trace: bool,
+    /// Everything the interpreter reports, kept as a value rather than only
+    /// written to the terminal. Natively it is echoed to stdout and stderr as
+    /// well; on wasm, where there is no terminal, it is the only output there
+    /// is, and the documentation playground displays it.
+    out: RefCell<String>,
+}
+
+impl Interp {
+    /// Report a line: to the transcript always, and to the terminal natively.
+    fn say(&self, line: impl std::fmt::Display) {
+        #[cfg(not(target_arch = "wasm32"))]
+        println!("{}", line);
+        let mut out = self.out.borrow_mut();
+        out.push_str(&line.to_string());
+        out.push('\n');
+    }
+
+    /// Report a problem: like `say`, but to stderr natively.
+    fn complain(&self, line: impl std::fmt::Display) {
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!("{}", line);
+        let mut out = self.out.borrow_mut();
+        out.push_str(&line.to_string());
+        out.push('\n');
+    }
+
+    /// The transcript so far.
+    pub fn transcript(&self) -> String {
+        self.out.borrow().clone()
+    }
+
+    /// Forget the transcript, so the next load starts clean.
+    pub fn clear_transcript(&self) {
+        self.out.borrow_mut().clear();
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -57,8 +95,10 @@ impl Interp {
             scripts: HashMap::new(),
             next_cap: 1,
             verbose: true,
+            #[cfg(not(target_arch = "wasm32"))]
             live: None,
             trace: false,
+            out: RefCell::new(String::new()),
         };
         for p in Prim::ALL {
             i.globals.insert(Rc::from(p.name()), Value::Prim(p));
@@ -84,19 +124,19 @@ impl Interp {
             let top = match top {
                 Ok(t) => t,
                 Err(msg) => {
-                    eprintln!("syntax error: {}", msg);
+                    self.complain(format!("syntax error: {}", msg));
                     continue;
                 }
             };
             match top {
                 Top::Def(d) => {
                     if let Err(msg) = self.evaldef(d) {
-                        eprintln!("{}: {}", sx.loc(), msg);
+                        self.complain(format!("{}: {}", sx.loc(), msg));
                     }
                 }
                 Top::Use(f) => match self.load_file(&dir.join(&f)) {
                     Ok(_) => {}
-                    Err(msg) => eprintln!("{}: {}", sx.loc(), msg),
+                    Err(msg) => self.complain(format!("{}: {}", sx.loc(), msg)),
                 },
                 Top::Grant(x, spec) => {
                     let v = match spec {
@@ -142,7 +182,7 @@ impl Interp {
             Def::Exp(e) => {
                 // As in Ramsey's interpreters, a top-level expression's value is printed.
                 let v = self.eval_top(e)?;
-                println!("{}", v);
+                self.say(&v);
                 self.globals.insert(Rc::from("it"), v);
             }
             Def::Define(f, lambda) => {
@@ -170,6 +210,7 @@ impl Interp {
             None => None,
         };
         let world = WorldConfig { cost: cfg.cost, time: cfg.time, script };
+        #[cfg(not(target_arch = "wasm32"))]
         let outcome = match &self.live {
             None => machine::run(&self.globals, &self.theta, &world, e.clone()),
             Some(live) => {
@@ -178,8 +219,13 @@ impl Interp {
             }
         }
         .map_err(|e| format!("run-time error: {}", e.0))?;
+        #[cfg(target_arch = "wasm32")]
+        let outcome = machine::run(&self.globals, &self.theta, &world, e.clone())
+            .map_err(|e| format!("run-time error: {}", e.0))?;
         if self.trace {
-            print_trace(&outcome);
+            for line in trace_lines(&outcome) {
+                self.say(line);
+            }
         }
         Ok(outcome)
     }
@@ -201,17 +247,17 @@ impl Interp {
                 Ok(()) => s.passed += 1,
                 Err(msg) => {
                     if self.verbose {
-                        eprintln!("{}: {}", t.test.loc, msg);
+                        self.complain(format!("{}: {}", t.test.loc, msg));
                     }
                 }
             }
         }
         if s.total > 0 {
             match (s.passed, s.total) {
-                (p, t) if p == t && t == 1 => println!("{}: The only test passed.", file),
-                (p, t) if p == t => println!("{}: All {} tests passed.", file, t),
-                (0, t) => println!("{}: All {} tests failed.", file, t),
-                (p, t) => println!("{}: {} of {} tests passed.", file, p, t),
+                (p, t) if p == t && t == 1 => self.say(format!("{}: The only test passed.", file)),
+                (p, t) if p == t => self.say(format!("{}: All {} tests passed.", file, t)),
+                (0, t) => self.say(format!("{}: All {} tests failed.", file, t)),
+                (p, t) => self.say(format!("{}: {} of {} tests passed.", file, p, t)),
             }
         }
         s
@@ -324,9 +370,10 @@ impl Interp {
 }
 
 /// One line per ask or call: site, tokens, cost, when it started and ended, and how it ended.
-fn print_trace(o: &Outcome) {
+fn trace_lines(o: &Outcome) -> Vec<String> {
+    let mut lines = vec![];
     for t in &o.trace {
-        println!(
+        lines.push(format!(
             "  trace: {} {:<12} in {:>6}  out {:>6}  {:>10}  {:>7} → {:<7} {}",
             t.kind,
             t.site,
@@ -336,9 +383,10 @@ fn print_trace(o: &Outcome) {
             fmt_dur(t.start),
             fmt_dur(t.end),
             t.outcome
-        );
+        ));
     }
     if !o.trace.is_empty() {
-        println!("  total: spent {}, took {}", fmt_money(o.spent), fmt_dur(o.elapsed));
+        lines.push(format!("  total: spent {}, took {}", fmt_money(o.spent), fmt_dur(o.elapsed)));
     }
+    lines
 }

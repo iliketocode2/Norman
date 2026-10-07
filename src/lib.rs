@@ -20,8 +20,14 @@ pub mod defaults;
 pub mod driver;
 pub mod host;
 pub mod lexer;
+/// The live oracle needs HTTP, threads and a real clock, so it is native-only.
+/// On wasm the interpreter is scripted, which is what the documentation
+/// playground runs.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod live;
 pub mod machine;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 pub mod parser;
 pub mod types;
 pub mod value;

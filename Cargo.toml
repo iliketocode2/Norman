@@ -5,13 +5,27 @@ edition = "2024"
 description = "A definitional interpreter for µNorman, a language for AI agents"
 license = "MIT OR Apache-2.0"
 
-[lib]
-path = "src/lib.rs"
-
 [[bin]]
 name = "norman"
 path = "src/main.rs"
 
+[lib]
+path = "src/lib.rs"
+# `cdylib` for the wasm build that powers the documentation playground;
+# `rlib` so the binary and the tests can still link against it.
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 serde_json = "1"
+
+# The live oracle is native-only: wasm has no sockets, threads or clock.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = "2"
+
+# The playground ships over the wire, so optimize the wasm for size.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -47,6 +47,31 @@ mode does and doesn't do, and
 5. Ensure all tests pass: `cargo test`.
 6. Open a pull request.
 
+## The documentation site
+
+[`docs/`](docs/) is the site at <https://iliketocode2.github.io/Norman/>. GitHub
+Pages serves it straight from that folder on the default branch, so there is no
+deployment step: merging to `main` publishes it.
+
+It runs the real interpreter, compiled to WebAssembly from the same `src/`. To
+rebuild after changing the interpreter:
+
+```bash
+./scripts/build-docs.sh
+```
+
+That compiles to `wasm32-unknown-unknown`, copies the module into `docs/`, and
+then **runs every example on the site** through it. A broken example fails the
+script, and CI fails too if the committed `docs/munorman.wasm` has drifted from
+`src/`.
+
+- The `.wasm` is committed on purpose: it is what lets Pages work with no CI.
+- `docs/examples.js` is generated from the verified blocks in `docs/index.html`;
+  don't edit the shared ones by hand.
+- Anything that can't run in a browser — the live oracle, HTTP, threads, the
+  real clock — is behind `#[cfg(not(target_arch = "wasm32"))]`. Keep it that
+  way, or the site stops building.
+
 ## Code Style
 
 - Follow the formatting in [`rustfmt.toml`](rustfmt.toml) (`cargo fmt`; 120

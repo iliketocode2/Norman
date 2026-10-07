@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>µNorman — a small language for AI agents</title>
+<meta name="description" content="µNorman is a small programming language for AI agents: typed model calls, budgets in money and time, capabilities for tools, and dataflow concurrency. Every example on this page runs in your browser.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>µ</text></svg>">
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="./">µNorman</a>
+    <nav>
+      <a href="#tour">Tour</a>
+      <a href="playground.html">Playground</a>
+      <a href="#guarantees">Guarantees</a>
+      <a href="#status">Status</a>
+      <a href="https://github.com/iliketocode2/Norman">GitHub</a>
+      <button class="theme" type="button" aria-label="Switch between light and dark">☾</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <h1>A small language for AI&nbsp;agents</h1>
+    <p class="tagline">Typed model calls, budgets in money and time, tools as capabilities, and concurrency that follows the data.</p>
+    <p class="lede">
+      Today&rsquo;s agent frameworks are libraries. The things that matter most &mdash; how much an agent
+      may spend, how long it may run, which tools it may touch, what shape an answer must have &mdash;
+      live in those libraries as <em>conventions</em>, and nothing checks that they are followed.
+      µNorman makes them part of the language, writes down precisely what every construct means,
+      and proves the properties it promises.
+    </p>
+
+    <div class="badges">
+      <span class="badge good">Every example here really runs</span>
+      <span class="badge">No API key</span>
+      <span class="badge">Deterministic</span>
+      <span class="badge">Rust → WebAssembly, 285&nbsp;KB</span>
+      <span class="badge">MIT or Apache-2.0</span>
+    </div>
+
+    <div class="cta">
+      <a class="primary" href="playground.html">Open the playground</a>
+      <a href="#tour">Take the tour</a>
+      <a href="https://github.com/iliketocode2/Norman">Source and design documents</a>
+    </div>
+  </section>
+
+  <div class="note">
+    <span class="label">How this page works</span>
+    <p>
+      The interpreter on this page is the same Rust program as the command-line one, compiled to
+      WebAssembly. Models answer from <strong>scripts</strong>: canned replies with a simulated clock,
+      keyed by where in the program each call happens. So every example below is exact and repeatable,
+      costs nothing, and runs entirely on your machine. Press <strong>Run</strong> and see.
+    </p>
+  </div>
+
+  <h2 id="why">What a language can do that a library can&rsquo;t</h2>
+  <p>
+    Six papers shaped this design. Each points at something that belongs in a language rather than
+    in a library.
+  </p>
+  <table>
+    <thead><tr><th>Problem</th><th>What µNorman does</th></tr></thead>
+    <tbody>
+      <tr><td>Model answers have no reliable shape</td><td>every <code>ask</code> names the <strong>type</strong> of answer it expects</td></tr>
+      <tr><td>Agents decide between options</td><td>answers can be <strong>choices</strong>, and programs branch on them</td></tr>
+      <tr><td>Cost and deadlines are hard limits</td><td><strong>money and time</strong> are built in; the budget can never be overspent</td></tr>
+      <tr><td>Latency compounds</td><td>one <strong>shared clock</strong> per budget scope, with deadlines everywhere</td></tr>
+      <tr><td>A failed step shouldn&rsquo;t rerun everything</td><td>failures are <strong>values</strong>, and <code>retry</code> wraps one step</td></tr>
+      <tr><td>Agents shouldn&rsquo;t touch tools they weren&rsquo;t given</td><td>tools are <strong>capabilities</strong>; a model can never create one</td></tr>
+    </tbody>
+  </table>
+  <p class="small muted">
+    There is one honest caveat, and it is in <a href="#status">Status</a>: today most of these are
+    enforced when the program <em>runs</em>.
+  </p>
+
+  <h2 id="tour">A tour, in six runnable examples</h2>
+
+  <h3>1. Ask a model for a typed answer</h3>
+  <p>
+    <code>ask</code> takes a model, the <strong>type</strong> of answer you want, and the context the
+    model sees. The answer comes back as a real value of that type, or the <code>ask</code> fails.
+    Context is an ordinary list you build and pass: nothing accumulates behind your back.
+  </p>
+  <div class="example">
+    <div class="head"><span class="title">typed-ask.nrm</span>
+      <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model [in 3] [out 15] [ceiling 8000]))
+
+(datatype Verdict
+  [Buy  (reason (Text 400))]
+  [Hold (reason (Text 400))]
+  [Sell (reason (Text 400))])
+
+(define analyst-ctx (filing)
+  (list (Message [role System] [content "You are an equity analyst."])
+        (Message [role User]   [content filing])))
+
+;; A script: what the model says, how big the reply is, how long it takes.
+(script sell
+  [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Margins are compressing.\"}")
+           (out 20) (latency 2s)])
+
+(under ([script sell] [cost $1.00] [time 1min])
+  (check-expect (ask claude Verdict (analyst-ctx "FY2025 10-K") 'analyst)
+                (Sell "Margins are compressing."))
+  ;; the same call, measured: at most a cent and two seconds
+  (check-within (ask claude Verdict (analyst-ctx "FY2025 10-K") 'analyst)
+                ([cost $0.01] [time 2s])))</code></pre>
+    <div class="result"></div>
+  </div>
+
+  <h3>2. Failure is a value you can handle</h3>
+  <p>
+    If a reply doesn&rsquo;t fit the type, or the provider is down, or the money or time runs out,
+    <code>ask</code> produces a <strong>failure</strong>: one of <code>Invalid</code>,
+    <code>ToolError</code>, <code>Refused</code>, <code>OverBudget</code>, <code>PastDeadline</code>
+    or <code>Raised</code>. Agents fail often, so failure is part of the language, not a crash.
+  </p>
+  <div class="example">
+    <div class="head"><span class="title">failure.nrm</span>
+      <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model [in 3] [out 15] [ceiling 8000]))
+
+(datatype Verdict
+  [Buy  (reason (Text 400))]
+  [Hold (reason (Text 400))]
+  [Sell (reason (Text 400))])
+
+(define ctx () (list (Message [role User] [content "FY2025 10-K"])))
+
+(define analyst (model)
+  (catch (ask model Verdict (ctx) 'analyst)
+         err
+         (Hold "analysis unavailable")))
+
+;; The model replies with prose where a Verdict was required.
+(script garbled
+  [analyst (reply "I think you should sell.") (out 8) (latency 1s)])
+
+(under ([script garbled] [cost $1.00] [time 1min])
+  (check-fail   (ask claude Verdict (ctx) 'analyst) (Invalid _))
+  (check-expect (analyst claude) (Hold "analysis unavailable")))</code></pre>
+    <div class="result"></div>
+  </div>
+
+  <h3>3. The budget can never be overspent</h3>
+  <p>
+    Before calling the model, <code>ask</code> <strong>reserves</strong> the worst case: everything it
+    is about to send, plus the largest answer the type allows. If the reservation doesn&rsquo;t fit,
+    the model is never called and nothing is charged. This is why types carry size bounds &mdash; and
+    why the same program with an unbounded answer type is refused.
+  </p>
+  <div class="example">
+    <div class="head"><span class="title">budget.nrm</span>
+      <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model [in 3] [out 15] [ceiling 8000]))
+
+(datatype Verdict [Sell (reason (Text 400))])   ; bounded: reserves about $0.007
+(datatype Loose   [LSell (reason Text)])        ; unbounded: reserves about $0.12
+
+(define ctx () (list (Message [role User] [content "FY2025 10-K"])))
+
+(script both
+  [tight (reply "{\"tag\":\"Sell\",\"reason\":\"Margins fell.\"}")  (out 20) (latency 2s)]
+  [loose (reply "{\"tag\":\"LSell\",\"reason\":\"Margins fell.\"}") (out 20) (latency 2s)])
+
+(under ([script both] [cost $0.05] [time 1min])
+  (check-expect (ask claude Verdict (ctx) 'tight) (Sell "Margins fell."))
+
+  ;; The same question with an unbounded answer type will not fit $0.05.
+  (check-fail (ask claude Loose (ctx) 'loose) OverBudget)
+
+  ;; And refusing costs nothing at all: no money, no time, no call.
+  (check-within (catch (ask claude Loose (ctx) 'loose) e 0)
+                ([cost $0] [time 0s])))</code></pre>
+    <div class="result"></div>
+  </div>
+
+  <h3>4. An agent loop is case analysis on the model&rsquo;s answer</h3>
+  <p>
+    This is the CP-Agent design: ask for the next step, run any code it writes, feed the result back,
+    stop when it says it is done. Because the answer is a <em>choice</em>, the loop is an ordinary
+    <code>case</code>. The enclosing <code>budget</code> guarantees it stops.
+  </p>
+  <div class="example">
+    <div class="head"><span class="title">react.nrm</span>
+      <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model [in 3] [out 15] [ceiling 8000]))
+(grant py     (kernel))                   ; a stateful tool, from the host
+
+(datatype Step
+  [Exec (code (Text 4000))]               ; "run this and show me the output"
+  [Done (code (Text 4000))])              ; "this is my final answer"
+
+;; A tool error becomes an observation the model can read. Nothing else does.
+(define observe (py code)
+  (catch (call py exec code) e
+    (case e [(ToolError m) m] [_ (fail e)])))
+
+(define react (model py ctx)
+  (case (ask model Step ctx 'react)
+    [(Exec code)
+       (react model py
+              (append ctx (list (Message [role Assistant] [content code])
+                                (Message [role Tool]      [content (observe py code)]))))]
+    [(Done code) code]))
+
+(define cp-agent (model py task)
+  (budget ([cost $0.50] [time 10min])
+    (react model py (list (Message [role User] [content task])))))
+
+(script cp
+  [react   (reply "{\"tag\":\"Exec\",\"code\":\"x = 6 * 7\"}")   (out 12) (latency 3s)
+           (reply "{\"tag\":\"Done\",\"code\":\"print(42)\"}")   (out 16) (latency 3s)]
+  [py/exec (result "") (latency 1s)])
+
+(under ([script cp] [cost $1.00] [time 5min])
+  (check-expect (cp-agent claude py "Compute 6 * 7.") "print(42)")
+  ;; two asks at 3s and one tool call at 1s
+  (check-within (cp-agent claude py "Compute 6 * 7.") ([cost $0.05] [time 7s])))</code></pre>
+    <div class="result"></div>
+  </div>
+
+  <h3>5. Concurrency follows the data</h3>
+  <p>
+    A <code>workflow</code> is a set of named steps, and <strong>the dependencies come from the names
+    each step mentions</strong>. Any step whose inputs are ready runs immediately. Below, the same
+    four model calls take 40 seconds as a dataflow graph and 60 seconds forced into
+    &ldquo;run two, wait, run two&rdquo; &mdash; at identical cost. Concurrency saves time, never money.
+  </p>
+  <div class="example">
+    <div class="head"><span class="title">workflow.nrm</span>
+      <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model [in 3] [out 15] [ceiling 8000]))
+
+(define step-ctx (name)
+  (list (Message [role User] [content (string-append "Do step " name)])))
+
+;; c needs a and b; d needs only a. Mentioning a name creates the edge.
+(define n-graph (m)
+  (workflow ([a (ask m (Text 20) (step-ctx "a") 'a)]
+             [b (ask m (Text 20) (step-ctx "b") 'b)]
+             [c (begin a b (ask m (Text 20) (step-ctx "c") 'c))]
+             [d (begin a   (ask m (Text 20) (step-ctx "d") 'd))])
+    (list a b c d)))
+
+;; The same work, forced into two phases.
+(define n-graph-par (m)
+  (let* ([ab (par (ask m (Text 20) (step-ctx "a") 'a)
+                  (ask m (Text 20) (step-ctx "b") 'b))]
+         [cd (par (ask m (Text 20) (step-ctx "c") 'c)
+                  (ask m (Text 20) (step-ctx "d") 'd))])
+    (list (. ab fst) (. ab snd) (. cd fst) (. cd snd))))
+
+;; `elapsed` is six lines of µNorman, built on the (remaining) observer.
+(define elapsed (thunk)
+  (let* ([t0 (. (remaining) time)] [_ (thunk)] [t1 (. (remaining) time)])
+    (- t0 t1)))
+
+(script dag
+  [a (reply "\"A\"") (out 2) (latency 10s)]
+  [b (reply "\"B\"") (out 2) (latency 30s)]
+  [c (reply "\"C\"") (out 2) (latency 10s)]
+  [d (reply "\"D\"") (out 2) (latency 30s)])
+
+(under ([script dag] [cost $1.00] [time 5min])
+  (check-expect (n-graph claude) (list "A" "B" "C" "D"))
+  (check-expect (elapsed (lambda () (n-graph claude)))     40s)   ; critical path
+  (check-expect (elapsed (lambda () (n-graph-par claude))) 60s))  ; fork and join</code></pre>
+    <div class="result"></div>
+  </div>
+
+  <h3>6. Laws, and the refactors that are <em>not</em> safe</h3>
+  <p>
+    Every construct has algebraic laws, so you know which rewrites preserve meaning. Just as useful
+    are the <strong>non-laws</strong>. A compiler would happily merge two identical
+    <code>ask</code>s into one &mdash; and change the answer, because a model is a relation, not a
+    function. µNorman therefore never caches a model answer automatically.
+  </p>
+  <div class="example">
+    <div class="head"><span class="title">laws.nrm</span>
+      <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model [in 3] [out 15] [ceiling 8000]))
+
+(datatype Verdict
+  [Buy  (reason (Text 400))]
+  [Sell (reason (Text 400))])
+
+(define ask-v ()
+  (ask claude Verdict (list (Message [role User] [content "FY2025 10-K"])) 'analyst))
+
+(script two-answers
+  [analyst (reply "{\"tag\":\"Buy\",\"reason\":\"One.\"}")  (out 10) (latency 2s)
+           (reply "{\"tag\":\"Sell\",\"reason\":\"Two.\"}") (out 10) (latency 2s)])
+
+(under ([script two-answers] [cost $1.00] [time 1min])
+
+  ;; NOT a law: common-subexpression elimination. Two asks, two answers.
+  ;; An optimizer that rewrote this to (Pair [fst a] [snd a]) would be wrong.
+  (check-expect (let* ([a (ask-v)] [b (ask-v)]) (Pair [fst a] [snd b]))
+                (Pair [fst (Buy "One.")] [snd (Sell "Two.")]))
+
+  ;; A law that does hold: catching a failure only to re-raise it changes
+  ;; nothing at all -- not the value, not the money, not the clock, not the trace.
+  (check-equiv (catch (ask-v) x (fail x)) (ask-v) 'exact))</code></pre>
+    <div class="result"></div>
+  </div>
+
+  <h2 id="guarantees">What µNorman guarantees</h2>
+  <p>These are stated as theorems in the design documents. In plain words:</p>
+  <ol>
+    <li><strong>The budget is never overspent,</strong> even with many steps running at once. The interpreter checks this invariant in every state it reaches.</li>
+    <li><strong>A model can&rsquo;t hand your program a tool.</strong> Authority comes only from the host.</li>
+    <li><strong>No answer is accepted after the deadline.</strong></li>
+    <li><strong>Concurrency doesn&rsquo;t change answers.</strong> A workflow gives the same result as running its steps one at a time &mdash; provided no step reads its own remaining budget, and no limit binds.</li>
+    <li><strong>Every model call and tool call is recorded</strong> in a trace. That is what makes testing, replay and cost profiling possible.</li>
+  </ol>
+
+  <h2 id="status">Status, honestly</h2>
+  <p>
+    µNorman is a research prototype, designed in the style of Norman Ramsey&rsquo;s
+    <em>Programming Languages: Build, Prove, and Compare</em> and his
+    <em>Seven Lessons in Program Design</em>. It is not ready to build a product on, and this section
+    says why rather than leaving you to find out.
+  </p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>What works</h3>
+      <p>The language, its semantics, its laws, and an interpreter that runs them. 127 unit tests, 13 laws checked on 150 random scripts each, and a suite of deliberately wrong tests that must fail.</p>
+    </div>
+    <div class="card">
+      <h3>It talks to a real model</h3>
+      <p><code>ask</code> works against the Anthropic API. The first real call confirmed the schema, the typed answer and the budget guarantee.</p>
+    </div>
+    <div class="card">
+      <h3>No real tools yet</h3>
+      <p><code>call</code> is scripted. There is no Python kernel or filesystem host, so an agent that uses a tool can&rsquo;t yet run end to end against a real model.</p>
+    </div>
+    <div class="card">
+      <h3>No static checking yet</h3>
+      <p>The guarantees above are enforced when a program <em>runs</em>. A type and effect system is designed but not built; it is what would move the checks to compile time.</p>
+    </div>
+    <div class="card">
+      <h3>A very small standard library</h3>
+      <p>There is no number-to-string, no substring, no way to render a value back into a prompt. Real programs hit this within minutes.</p>
+    </div>
+    <div class="card">
+      <h3>Performance is a hypothesis</h3>
+      <p>Concurrency, hard budgets and typed answers should make agents cheaper and more predictable. That has been shown in simulation, never measured against a real workload.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <span class="label">One finding worth your attention</span>
+    <p>
+      The first real API call billed <strong>538 input tokens for a 175-character prompt</strong>.
+      The answer&rsquo;s type is sent with every ask as a JSON schema, and it accounted for 478 of
+      them &mdash; 89% of the input. A type costs money twice: bounding an <em>answer</em> shrinks the
+      reservation, but adding a constructor or a field makes every ask dearer on input, for as long as
+      the program runs. That falsified one of the algebraic laws, which had priced an ask without its
+      schema.
+    </p>
+  </div>
+
+  <h2 id="more">Going further</h2>
+  <ul>
+    <li><a href="playground.html">The playground</a> &mdash; write and run your own µNorman.</li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/README.md">The guide</a> &mdash; the language explained in depth.</li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/04-formal-definition.md">The formal definition</a> &mdash; grammar, abstract syntax, big-step semantics, theorems.</li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/06-algebraic-laws.md">The laws</a> &mdash; every law, the tempting non-laws, and the nine problems writing them found.</li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/design/00-reading-notes.md">Reading notes</a> &mdash; critical reviews of the seven papers behind the design.</li>
+    <li><a href="https://github.com/iliketocode2/Norman/blob/main/LIVE-SETUP.md">Running against a real model</a> &mdash; getting a key, capping the spend.</li>
+  </ul>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>µNorman — dual-licensed MIT or Apache-2.0.</span>
+    <span>The interpreter on this page is WebAssembly, compiled from the project&rsquo;s Rust source.</span>
+  </div>
+</footer>
+
+<script type="module">
+  import { activateExamples, activateChrome } from './norman.js';
+  activateChrome();
+  activateExamples();
+</script>
+</body>
+</html>
