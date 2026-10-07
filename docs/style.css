@@ -226,18 +226,39 @@ p code, li code, td code { background: var(--bg-code); border: 1px solid var(--l
 .editor-head .spacer { margin-left: auto; }
 .editor-head button.run { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 550; }
 
-.editor { position: relative; height: 26rem; background: var(--bg-code); }
-.editor pre, .editor textarea {
+/* The editor is a transparent textarea laid exactly over a highlighted <pre>.
+   Only the textarea scrolls; script copies its scroll offsets onto the <pre>.
+   Giving both `overflow: auto` would put a scrollbar on each, which narrows
+   the pre's content box and slides the highlighting out of line with the text.
+   Every property that affects glyph position must match on both. */
+.editor {
+  position: relative;
+  height: 28rem;
+  min-height: 12rem;
+  background: var(--bg-code);
+  overflow: hidden;   /* `resize` needs a non-visible overflow */
+  resize: vertical;   /* drag the bottom edge to make the editor taller */
+}
+.editor > pre, .editor > textarea {
   position: absolute; inset: 0; margin: 0; padding: 0.9rem 1rem; border: 0;
   font-family: var(--mono); font-size: 0.875rem; line-height: 1.55;
-  white-space: pre; overflow: auto; tab-size: 2;
+  letter-spacing: normal; word-spacing: normal; tab-size: 2;
+  white-space: pre; overflow-wrap: normal; word-break: normal;
+  scroll-behavior: auto;   /* never inherit the page's smooth scrolling */
 }
-.editor pre { pointer-events: none; background: transparent; }
-.editor textarea {
+/* The visible layer. Scrolled by script, never by the user. */
+.editor > pre {
+  overflow: hidden; pointer-events: none;
+  background: transparent; color: var(--fg);
+}
+/* The real editor, on top: invisible but for its caret and selection. */
+.editor > textarea {
+  overflow: auto;
   background: transparent; color: transparent; caret-color: var(--fg);
   resize: none; outline: none;
 }
-.editor textarea::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.editor > textarea::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.editor > textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .out-wrap { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
 .out-head { padding: 0.45rem 0.9rem; background: var(--bg-soft); border-bottom: 1px solid var(--line); font-size: 0.82rem; color: var(--fg-soft); }
