@@ -38,6 +38,11 @@ fn python() -> Option<&'static str> {
 
 /// Load `examples/cp-agent.nrm` and run one task against the real world.
 fn solve(task: &str) -> Option<Outcome> {
+    solve_within(task, Config::default())
+}
+
+/// The same, under a given money and time limit.
+fn solve_within(task: &str, limits: Config) -> Option<Outcome> {
     let live = match LiveConfig::from_env() {
         Ok(c) => c,
         Err(msg) => {
@@ -62,9 +67,7 @@ fn solve(task: &str) -> Option<Outcome> {
     let forms = munorman::lexer::read_all(&src, "<task>").expect("the task parses");
     let e = munorman::parser::Parser::new(&interp.theta).exp(&forms[0]).expect("the task parses");
 
-    let outcome = interp
-        .run_live_with_hosts(&Config::default(), &e, live, &hosts)
-        .expect("no run-time error");
+    let outcome = interp.run_live_with_hosts(&limits, &e, live, &hosts).expect("no run-time error");
     Some(outcome)
 }
 
@@ -134,4 +137,35 @@ fn cp_agent_solves_a_problem_that_needs_more_than_one_step() {
         }
         Res::Fail(f) => panic!("the agent failed: {f}"),
     }
+}
+
+/// The claim a plain script cannot make: **the budget is a hard cap.**
+///
+/// The same agent, on the same problem, given less money than it needs. It
+/// stops, it says why, and it has spent no more than it was allowed. Nothing
+/// about the program changed — only the limit it was given.
+#[test]
+#[ignore = "spends real money and runs model-authored Python; run with --ignored"]
+fn the_budget_stops_the_agent_and_is_never_exceeded() {
+    // Enough for roughly one model call, not enough to finish.
+    let cap = 2_000; // $0.002
+    let Some(o) = solve_within(
+        "What is the sum of all multiples of 3 or 5 below 1000?",
+        Config { cost: Some(cap), ..Config::default() },
+    ) else {
+        return;
+    };
+    report("the same task, capped at $0.002", &o);
+
+    match &o.result {
+        Res::Fail(f) => assert!(f.to_string().contains("OverBudget"), "expected OverBudget, got {f}"),
+        Res::Val(v) => panic!("it finished within $0.002, so raise the cap to make the point: {v}"),
+    }
+    assert!(o.spent <= cap, "spent {} of a {} cap", fmt_money(o.spent), fmt_money(cap));
+    println!(
+        "
+   the cap held: spent {} of {}",
+        fmt_money(o.spent),
+        fmt_money(cap)
+    );
 }

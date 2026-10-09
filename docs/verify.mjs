@@ -102,7 +102,7 @@ for (const [name, source] of Object.entries(EXAMPLES)) {
 // Every runnable block shown on a page. Only blocks inside a `.example`
 // container are programs; a `<pre class="syntax">` on the reference page is a
 // grammar, and running it would be meaningless.
-for (const file of ['index.html', 'reference.html', 'playground.html']) {
+for (const file of ['index.html', 'watch.html', 'reference.html', 'playground.html']) {
   const full = path.join(here, file);
   if (!fs.existsSync(full)) continue;
   const html = fs.readFileSync(full, 'utf8');
