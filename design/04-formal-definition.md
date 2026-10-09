@@ -84,6 +84,9 @@ def       ::= (val variable-name exp)
 
 xdef      ::= (use file-name)
             | (grant variable-name host-spec)
+
+host-spec ::= (model {[id string] | [in n] | [out n] | [ceiling n] | [think n]})
+            | ((kernel | filesystem | http) {[op-name ty]})   ; each operation's result type
             | (script Script-name {site-script})
             | (under ({config}) {unit-test})
             | unit-test
@@ -467,6 +470,38 @@ Read these rules the way Ramsey reads IFTRUE:
   heart of Theorem 1 (§8).
 
 #### CALL
+
+**A grant declares what its operations answer with** (`10` §2.1). `ASK` has
+always carried a type and `CALL` has not, so every tool result was `Text`. The
+type is declared at the **grant**, not the call site: the grant is already the
+host-program contract, one declaration serves every call site, and the
+capability then carries its own interface, which is Lesson 6.
+
+```scheme
+(grant py (kernel [exec (Text 4000)] [count Num] [solve Outcome]))
+(call py count "wc -l")        ; a Num, not the text "7"
+```
+
+Four rules:
+
+1. **A grant with no declarations is open:** any operation, result `Text`.
+   That is what every program written before this did, so nothing broke.
+2. **A grant with declarations is closed:** only those operations, plus `fork`
+   on a kernel. Calling another is a **checked run-time error**, because it is
+   a mistake in the program, not a failure of the world.
+3. **A declared `Text` takes the result verbatim,** and only its bound is
+   checked.
+4. **Any other declared type reads the result as JSON** and validates it with
+   `validate_Θ`, exactly as a model's reply is validated. Failure is `Invalid`,
+   so `retry` handles a malformed tool result for free.
+
+Rules 3 and 4 are a deliberate asymmetry with `ASK`, where a `Text` answer
+arrives as a JSON string. The two channels differ: a model emits JSON because a
+schema told it to, while a tool emits bytes. The grant says what those bytes
+mean.
+
+Reservations are unchanged: `cost_κ(op) = 0` for every host, so a declared type
+bounds what a result may *be*, not what it may cost.
 
 ```
 ⟨e, Θ, ρ, W₀⟩ ⇓ ⟨CAP(κ), W₁⟩     ⟨eᵢ, Θ, ρ, Wᵢ⟩ ⇓ ⟨vᵢ, Wᵢ₊₁⟩  for i = 1…n

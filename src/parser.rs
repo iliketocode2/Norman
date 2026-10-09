@@ -305,9 +305,28 @@ impl<'a> Parser<'a> {
                 }
                 HostSpec::Model { id, in_price: i, out_price: o, ceiling: c, think: t }
             }
-            "kernel" => HostSpec::Kernel,
-            "filesystem" => HostSpec::Filesystem,
-            "http" => HostSpec::Http,
+            "kernel" | "filesystem" | "http" => {
+                // `(kernel [exec (Text 4000)] [count Num])`: each operation
+                // with the type of its result. None at all means an open
+                // interface, which is what every program had before.
+                let mut ops: Vec<(Name, Type)> = vec![];
+                for item in &spec[1..] {
+                    let Some([name, ty]) = item.list() else {
+                        return perr(item, "expected [operation type]");
+                    };
+                    let op = self.lower(name, "an operation name")?;
+                    if ops.iter().any(|(n, _)| *n == op) {
+                        return perr(name, format!("operation {} is declared twice", op));
+                    }
+                    ops.push((op, self.ty(ty)?));
+                }
+                let ops = std::rc::Rc::new(ops);
+                match kind {
+                    "kernel" => HostSpec::Kernel(ops),
+                    "filesystem" => HostSpec::Filesystem(ops),
+                    _ => HostSpec::Http(ops),
+                }
+            }
             _ => return perr(&args[1], "a host is (model …), (kernel), (filesystem) or (http)"),
         };
         Ok(Top::Grant(x, spec))

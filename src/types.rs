@@ -488,7 +488,12 @@ mod tests {
     #[test]
     fn capabilities_and_functions_cannot_be_shown() {
         let t = theta();
-        let cap = Value::Cap(crate::value::Cap { id: 1, kind: crate::value::CapKind::Kernel, key: Rc::from("py") });
+        let cap = Value::Cap(crate::value::Cap {
+            id: 1,
+            kind: crate::value::CapKind::Kernel,
+            key: Rc::from("py"),
+            ops: Rc::new(vec![]),
+        });
         assert!(t.show(&cap).is_err());
         assert!(t.show(&Value::Prim(crate::value::Prim::Add)).is_err());
         assert!(t.show(&Value::Cons(Rc::new(Value::Num(1)), Rc::new(Value::Num(2)))).is_err(), "improper list");

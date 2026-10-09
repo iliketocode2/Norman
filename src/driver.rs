@@ -150,9 +150,9 @@ impl Interp {
                                 ceiling,
                             }))
                         }
-                        HostSpec::Kernel => self.cap(&x, CapKind::Kernel),
-                        HostSpec::Filesystem => self.cap(&x, CapKind::Filesystem),
-                        HostSpec::Http => self.cap(&x, CapKind::Http),
+                        HostSpec::Kernel(ops) => self.cap(&x, CapKind::Kernel, ops),
+                        HostSpec::Filesystem(ops) => self.cap(&x, CapKind::Filesystem, ops),
+                        HostSpec::Http(ops) => self.cap(&x, CapKind::Http, ops),
                     };
                     self.globals.insert(x, v);
                 }
@@ -166,9 +166,9 @@ impl Interp {
         Ok(self.run_tests(file, tests))
     }
 
-    fn cap(&mut self, key: &Name, kind: CapKind) -> Value {
+    fn cap(&mut self, key: &Name, kind: CapKind, ops: crate::ast::Ops) -> Value {
         self.next_cap += 1;
-        Value::Cap(Cap { id: self.next_cap, kind, key: key.clone() })
+        Value::Cap(Cap { id: self.next_cap, kind, key: key.clone(), ops })
     }
 
     /// The definition judgment ⟨d, Θ, ρ, W⟩ → ⟨Θ′, ρ′, W′⟩. Top-level

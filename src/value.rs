@@ -1,6 +1,6 @@
 //! Values (04 §4) and environments.
 
-use crate::ast::{Lambda, Name};
+use crate::ast::{Lambda, Name, Ops};
 use crate::lexer::quote;
 use std::fmt;
 use std::rc::Rc;
@@ -143,6 +143,22 @@ pub struct Cap {
     pub kind: CapKind,
     /// The grant name; scripts key calls as `key/op`. Forked kernels share it.
     pub key: Name,
+    /// What the grant declared this capability can do, and what each operation
+    /// answers with. Empty means an open interface, and `Text`.
+    pub ops: Ops,
+}
+
+impl Cap {
+    /// The declared result type of `op`, if the grant named one.
+    pub fn result_type(&self, op: &str) -> Option<&crate::ast::Type> {
+        self.ops.iter().find(|(name, _)| &**name == op).map(|(_, ty)| ty)
+    }
+
+    /// A declared interface is closed: only what it names may be called.
+    /// `fork` is a kernel's own operation and is always available.
+    pub fn offers(&self, op: &str) -> bool {
+        self.ops.is_empty() || self.result_type(op).is_some() || (op == "fork" && self.kind == CapKind::Kernel)
+    }
 }
 
 #[derive(Debug, Clone)]
