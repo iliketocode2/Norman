@@ -15,6 +15,7 @@
     <a class="brand" href="./">µNorman</a>
     <nav>
       <a href="#tour">Tour</a>
+      <a href="watch.html">Watch it work</a>
       <a href="reference.html">Reference</a>
       <a href="playground.html">Playground</a>
       <a href="#guarantees">Guarantees</a>
@@ -39,6 +40,7 @@
 
     <div class="badges">
       <span class="badge good">Every example here really runs</span>
+      <span class="badge good">CP-Agent works end to end</span>
       <span class="badge">No API key</span>
       <span class="badge">Deterministic</span>
       <span class="badge">Rust → WebAssembly, 285&nbsp;KB</span>
@@ -47,6 +49,7 @@
 
     <div class="cta">
       <a class="primary" href="playground.html">Open the playground</a>
+      <a href="watch.html">Watch it solve a problem</a>
       <a href="#tour">Take the tour</a>
       <a href="https://github.com/iliketocode2/Norman">Source and design documents</a>
     </div>
@@ -336,12 +339,12 @@
       <p>The language, its semantics, its laws, and an interpreter that runs them. 127 unit tests, 13 laws checked on 150 random scripts each, and a suite of deliberately wrong tests that must fail.</p>
     </div>
     <div class="card">
-      <h3>It talks to a real model</h3>
-      <p><code>ask</code> works against the Anthropic API. The first real call confirmed the schema, the typed answer and the budget guarantee.</p>
+      <h3>It runs, for real</h3>
+      <p>CP-Agent solves problems against Claude Sonnet 5 with a real Python kernel. <a href="watch.html">The traces are here</a>, including the budget refusing to start a run it couldn&rsquo;t afford.</p>
     </div>
     <div class="card">
-      <h3>No real tools yet</h3>
-      <p><code>call</code> is scripted. There is no Python kernel or filesystem host, so an agent that uses a tool can&rsquo;t yet run end to end against a real model.</p>
+      <h3>One tool, no sandbox</h3>
+      <p>There is a real Python kernel; there is no filesystem or HTTP host, and no <code>fork</code>. The kernel runs model-authored code unsandboxed, which is fine on your own machine and nowhere else.</p>
     </div>
     <div class="card">
       <h3>No static checking yet</h3>
@@ -353,7 +356,7 @@
     </div>
     <div class="card">
       <h3>Performance is a hypothesis</h3>
-      <p>Concurrency, hard budgets and typed answers should make agents cheaper and more predictable. That has been shown in simulation, never measured against a real workload.</p>
+      <p>µNorman makes an agent&rsquo;s behaviour knowable and bounded. It does <em>not</em> make the model better, and nothing here has been measured against a baseline. <a href="watch.html#doesnt">What the traces don&rsquo;t show</a>.</p>
     </div>
   </div>
 

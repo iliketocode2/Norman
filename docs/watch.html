@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch it work — µNorman</title>
+<meta name="description" content="CP-Agent running in µNorman against a real model and a real Python kernel: the complete traces, what they show, and what they don't.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>µ</text></svg>">
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="./">µNorman</a>
+    <nav>
+      <a href="./#tour">Tour</a>
+      <a href="watch.html" aria-current="page">Watch it work</a>
+      <a href="reference.html">Reference</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/iliketocode2/Norman">GitHub</a>
+      <button class="theme" type="button" aria-label="Switch between light and dark">☾</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1 style="font-size:2.1rem">Watch it work</h1>
+  <p class="lede">
+    CP-Agent — ask a model for the next step, run the Python it writes, feed the output back, stop
+    when it says it is done — running in µNorman against <strong>Claude Sonnet&nbsp;5</strong> and a
+    <strong>real Python process</strong>. These are the actual traces, not reconstructions.
+  </p>
+
+  <div class="note">
+    <span class="label">Why a trace, and not a demo video</span>
+    <p>
+      Every effect in µNorman goes through <code>ask</code> or <code>call</code>, and every one is
+      recorded with its cost and timing. The account below is produced <em>by the language</em>, not
+      by instrumentation someone remembered to add. That is the artifact this project exists to
+      make, so it is what this page shows.
+    </p>
+  </div>
+
+  <h2 id="run-1">1. A problem it solves in one step</h2>
+  <p class="muted small">Task: <em>What is the sum of all multiples of 3 or 5 below 1000?</em></p>
+<pre class="syntax">┌─ sum of multiples of 3 or 5 below 1000
+│  ask   step     469 in    50 out   $0.001438    182ms → 2845ms   ok
+│  call  py/exec     0 in     0 out       $0.00   2845ms → 2916ms   ok
+│  ask   step     524 in    24 out   $0.001288   3037ms → 4695ms   ok
+│
+│  2 model calls, 1 kernel calls
+│  spent $0.002726 of the $0.50 budget in 4695ms
+└─ answer: <span class="lit">"233168"</span></pre>
+  <p>
+    The model wrote Python, the kernel ran it, and the output came back as the next message in the
+    context. Note the shape of the second ask: 524 input tokens against the first one's 469, because
+    the conversation grew by the code and its output.
+  </p>
+
+  <h2 id="run-2">2. A problem that needs it to check its own work</h2>
+  <p class="muted small">Task: <em>A farmer has chickens and cows, 30 heads and 74 legs. How many of each? Work it out with code and check your answer.</em></p>
+<pre class="syntax">┌─ chickens and cows
+│  ask   step     489 in   130 out   $0.002278    150ms → 3336ms   ok
+│  call  py/exec     0 in     0 out       $0.00   3336ms → 3425ms   ok
+│  ask   step     598 in    65 out   $0.001846   3525ms → 4929ms   ok
+│
+│  2 model calls, 1 kernel calls
+│  spent $0.004124 of the $0.50 budget in 4929ms
+└─ answer: <span class="lit">"7 cows and 23 chickens (7*4+23*2=74 legs, 7+23=30 heads)."</span></pre>
+
+  <h2 id="run-3">3. The same agent, given less money than it needs</h2>
+  <p class="muted small">The identical program and problem, under a cap of $0.002 instead of $0.50.</p>
+<pre class="syntax">┌─ the same task, capped at $0.002
+│
+│  0 model calls, 0 kernel calls
+│  spent $0.00 of the $0.50 budget in 188ms
+└─ failed: <span class="lit">OverBudget</span>
+
+   the cap held: spent $0.00 of $0.002</pre>
+  <p>
+    <strong>Zero model calls, and nothing spent.</strong> Before any call, <code>ask</code> reserves
+    the worst case — the input it is about to send, plus the largest answer the type allows, plus the
+    thinking allowance. That reservation did not fit $0.002, so the model was never contacted. The
+    agent did not start and fail partway; it refused to start.
+  </p>
+  <p>
+    This is the one claim on this page that a hand-written agent script cannot make. A budget in a
+    library is a counter somebody remembers to check. Here it is enforced before the money is spent,
+    on every effect, with no way around it — the program has no door to the outside except
+    <code>ask</code> and <code>call</code>.
+  </p>
+
+  <h2 id="same-program">The same program, running here</h2>
+  <p>
+    The source below is the one that produced those traces. The only difference is the host: live, a
+    real model and a real Python process; here, a script and a simulated clock. Press
+    <strong>Run</strong> — this executes in your browser, free and offline.
+  </p>
+  <div class="example">
+    <div class="head"><span class="title">cp-agent.nrm</span>
+      <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model))                       ; defaults: Claude Sonnet 5
+(grant py     (kernel [exec (Text 4000)]))   ; a real Python process in live mode
+
+(datatype Step
+  [Exec (code (Text 2000))]      ; "run this and show me the output"
+  [Done (answer (Text 500))])    ; "this is my final answer"
+
+;; A tool error becomes an observation the model can read. Nothing else does:
+;; running out of money is not something to explain to a model.
+(define observe (k code)
+  (catch (call k exec code) e
+    (case e [(ToolError m) m] [_ (fail e)])))
+
+(define react (model k ctx fuel)
+  (if (<= fuel 0)
+      (fail 'out-of-fuel)
+      (case (ask model Step ctx 'step)
+        [(Exec code)
+           (react model k
+                  (append ctx (list (Message [role Assistant] [content (show (Exec code))])
+                                    (Message [role Tool]      [content (observe k code)])))
+                  (- fuel 1))]
+        [(Done answer) answer])))
+
+(define cp-agent (model k task)
+  (budget ([cost $0.50] [time 5min])
+    (react model k (list (Message [role User] [content task])) 8)))
+
+;; Scripted, the model and kernel are canned, so this is exact and free.
+(script solving
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"print(sum(range(101)))\"}") (out 20) (latency 3s)
+           (reply "{\"tag\":\"Done\",\"answer\":\"5050\"}")                 (out 12) (latency 2s)]
+  [py/exec (result "5050") (latency 1s)])
+
+(under ([script solving] [cost $1.00] [time 5min])
+  (check-expect (cp-agent claude py "What is the sum of 0 to 100?") "5050")
+  (check-within (cp-agent claude py "What is the sum of 0 to 100?") ([time 6s])))
+
+;; A kernel error is not a crash: the message goes back to the model.
+(script recovering
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"print(undefined_name)\"}") (out 20) (latency 2s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"print(42)\"}")             (out 18) (latency 2s)
+           (reply "{\"tag\":\"Done\",\"answer\":\"42\"}")                  (out 12) (latency 2s)]
+  [py/exec (error "NameError: name 'undefined_name' is not defined") (latency 1s)
+           (result "42") (latency 1s)])
+
+(under ([script recovering] [cost $1.00] [time 5min])
+  (check-expect (cp-agent claude py "Print 42.") "42"))</code></pre>
+    <div class="result"></div>
+  </div>
+
+  <h2 id="shows">What these runs show</h2>
+  <ul>
+    <li><strong>It works end to end.</strong> A real model writing real code, executed in a real process, with the output fed back.</li>
+    <li><strong>One source, two worlds.</strong> The same file runs against a live model or against a script with a simulated clock. The scripted run is deterministic, costs nothing, needs no key, and is what the test suite uses — so the failure paths (a kernel error, a bad reply, running out of fuel) are tested exactly, every time, instead of being hoped for.</li>
+    <li><strong>The account is complete by construction.</strong> Nothing can reach the outside world without appearing in that trace, because the language has no other way out.</li>
+    <li><strong>The budget is a cap, not a counter.</strong> Run 3 proves it: refused before spending, not detected afterwards.</li>
+  </ul>
+
+  <h2 id="doesnt">What they do <em>not</em> show</h2>
+  <div class="note">
+    <span class="label">Read this before believing anything above</span>
+    <p>
+      <strong>These runs are not a comparison, and they do not show that µNorman makes an agent
+      better.</strong> There is no baseline here. The same two model calls issued from a plain Python
+      script would have cost the same, because the tokens are the tokens.
+    </p>
+  </div>
+  <p>
+    More precisely:
+  </p>
+  <ul>
+    <li><strong>A language cannot make a model smarter.</strong> Answer quality comes from the model and the prompt. CP-Agent's own paper found a 50-line prompt beat an 800-line one, and that imposing structure on the loop <em>hurt</em>. Scaffolding is not free.</li>
+    <li><strong>Nothing here is cheaper or faster than the obvious alternative.</strong> What µNorman changes is that the cost is <em>bounded in advance</em> and <em>recorded</em>, not that it is lower.</li>
+    <li><strong>Two problems, one run each.</strong> That is an existence proof, not evidence. Model output varies between runs even at temperature zero.</li>
+    <li><strong>The concurrency argument is untested here.</strong> µNorman's dataflow <code>workflow</code> finds the critical path — 40 seconds against 60 for the same four calls — but that is <a href="./#tour">simulated</a>. CP-Agent is sequential and exercises none of it.</li>
+  </ul>
+  <p>
+    The experiment that <em>would</em> settle it is a known one: port CP-Agent, run it against the
+    Python original on a slice of CP-Bench, and measure task success, dollars per solved problem, and
+    wall-clock time. That has not been done. Until it is, &ldquo;µNorman improves performance&rdquo;
+    is a hypothesis, and this page is careful not to pretend otherwise.
+  </p>
+  <p>
+    What these runs do support is a narrower claim, and the one the project actually makes:
+    <strong>µNorman does not make an agent better, it makes an agent's behaviour knowable and
+    bounded.</strong>
+  </p>
+
+  <h2 id="yourself">Running it yourself</h2>
+  <p>Scripted, free, no key:</p>
+  <pre class="syntax">cargo run -- examples/cp-agent.nrm</pre>
+  <p>Live, with <code>ANTHROPIC_API_KEY</code> set and Python on the PATH — a few cents:</p>
+  <pre class="syntax">cargo test --test live_cp_agent -- --ignored --nocapture</pre>
+  <p>
+    <a href="https://github.com/iliketocode2/Norman/blob/main/LIVE-SETUP.md">LIVE-SETUP.md</a>
+    covers getting a key and capping the spend.
+  </p>
+
+  <div class="note">
+    <span class="label">Two honest limitations of this host</span>
+    <p>
+      The Python kernel <strong>has no sandbox</strong>: it runs model-authored code with the
+      permissions of whoever started it. That is a stated assumption for a research prototype on a
+      developer's own machine, and the thing to fix before anyone else runs it. It also
+      <strong>does not implement <code>fork</code></strong>, so two concurrent steps cannot share a
+      kernel — forking a live interpreter means either an OS-level fork, which is fragile, or
+      replaying the session into a fresh process, which is only correct if everything was
+      deterministic. CP-Agent never forks, so the cost is not worth paying yet.
+    </p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>µNorman — dual-licensed MIT or Apache-2.0.</span>
+    <span>Traces captured 2026-10-08 against claude-sonnet-5.</span>
+  </div>
+</footer>
+
+<script type="module">
+  import { activateExamples, activateChrome } from './norman.js';
+  activateChrome();
+  activateExamples();
+</script>
+</body>
+</html>
