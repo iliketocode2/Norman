@@ -241,8 +241,15 @@ struct Wf {
 }
 
 enum ReqKind {
-    Ask { model: Rc<ModelSpec>, ty: Type },
-    Call,
+    Ask {
+        model: Rc<ModelSpec>,
+        ty: Type,
+    },
+    /// `ty` is what the grant declared this operation answers with. `Text`
+    /// when the grant said nothing, which is an open interface.
+    Call {
+        ty: Type,
+    },
 }
 
 /// An in-flight request, from the machine's side: what was reserved, where,
@@ -1056,15 +1063,23 @@ impl<'a> Machine<'a> {
         }
         if op == "fork" && cap.kind == CapKind::Kernel {
             self.next_cap += 1;
-            let forked = Cap { id: self.next_cap, kind: cap.kind, key: cap.key.clone() };
+            let forked = Cap { id: self.next_cap, kind: cap.kind, key: cap.key.clone(), ops: cap.ops.clone() };
             self.set(tid, Ctl::Ret(Value::Cap(forked)));
             return Ok(());
         }
+        // A grant that declares its operations is a closed interface: calling
+        // one it never named is a mistake in the program, not a failure of the
+        // world, so it is a checked run-time error.
+        if !cap.offers(op) {
+            let known: Vec<&str> = cap.ops.iter().map(|(n, _)| &**n).collect();
+            return stuck(format!("{} does not offer {}; it offers {}", cap.key, op, known.join(", ")));
+        }
+        let ty = cap.result_type(op).cloned().unwrap_or(Type::Text(None));
         let site = format!("{}/{}", cap.key, op);
         let rid = self.next_rid;
         self.oracle.issue_call(rid, &site, &args, self.now).map_err(RtErr)?;
         // cost_κ(op) = 0 for every host so far.
-        self.enqueue(tid, s, site, 0, ReqKind::Call);
+        self.enqueue(tid, s, site, 0, ReqKind::Call { ty });
         Ok(())
     }
 
@@ -1111,7 +1126,7 @@ impl<'a> Machine<'a> {
     fn complete(&mut self, r: Request, c: Completion) -> Rt<()> {
         let (price_in, price_out, ty) = match &r.kind {
             ReqKind::Ask { model, ty } => (model.in_price, model.out_price, Some(ty.clone())),
-            ReqKind::Call => (0, 0, None),
+            ReqKind::Call { ty } => (0, 0, Some(ty.clone())),
         };
         let raise = |name: &str, fields: Vec<Value>| Ctl::Raise(failure(name, fields));
         let (in_tokens, out_tokens, ctl, outcome) = match c {
@@ -1136,7 +1151,24 @@ impl<'a> Machine<'a> {
             Completion::ProviderError { msg, input_tokens } => {
                 (input_tokens, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg))
             }
-            Completion::ToolResult { text } => (0, 0, Ctl::Ret(Value::str(&text)), "ok".to_string()),
+            Completion::ToolResult { text } => {
+                // A tool answers with bytes, not with a schema, so a declared
+                // `Text` takes the result verbatim and only its bound is
+                // checked. Any other type reads those bytes as JSON and
+                // validates them exactly as a model's reply is validated.
+                let ty = ty.as_ref().expect("a tool result completes a call");
+                let value = match ty {
+                    Type::Text(bound) if bound.is_none_or(|n| text.len() as u64 <= n) => Some(Value::str(&text)),
+                    Type::Text(_) => None,
+                    _ => {
+                        serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|j| self.theta.validate(&j, ty))
+                    }
+                };
+                match value {
+                    Some(v) => (0, 0, Ctl::Ret(v), "ok".to_string()),
+                    None => (0, 0, raise("Invalid", vec![Value::str(&text)]), "invalid".to_string()),
+                }
+            }
             Completion::ToolError { msg } => {
                 (0, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg))
             }

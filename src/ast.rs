@@ -209,6 +209,10 @@ pub enum Def {
     Record(Name, Vec<(Name, Type)>),
 }
 
+/// A capability's interface: the operations it offers and what each answers
+/// with. The grant is the host-program contract, so this is where it belongs.
+pub type Ops = std::rc::Rc<Vec<(Name, Type)>>;
+
 /// What a `grant` hands to the program.
 #[derive(Debug, Clone)]
 pub enum HostSpec {
@@ -221,9 +225,11 @@ pub enum HostSpec {
         ceiling: u64,
         think: u64,
     },
-    Kernel,
-    Filesystem,
-    Http,
+    /// A tool. The operations it declares, each with the type of its result.
+    /// Empty means the interface is open: any operation, result `Text`.
+    Kernel(Ops),
+    Filesystem(Ops),
+    Http(Ops),
 }
 
 /// One scripted reply (05, "Conventions for scripted mode").

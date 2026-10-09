@@ -38,7 +38,20 @@ and it was free.
 
 ## 2. What it couldn't express
 
-### 2.1 `call` has no result type
+### 2.1 `call` has no result type — **done**
+
+> **Built.** A grant now declares each operation's result type
+> (`04` §6.5, CALL), and `examples/typed-tools.nrm` tests it. The rest of this
+> section is the argument that led there, kept because the reasoning is the
+> useful part.
+>
+> Two things changed from the proposal below. A declared interface is
+> **closed**, so calling an operation the grant never named is a checked
+> run-time error — a grant with no declarations stays open, which is why no
+> existing program broke. And a declared `Text` takes the host's bytes
+> verbatim while every other type reads them as JSON, because a tool emits
+> bytes where a model emits JSON by schema.
+
 
 **The asymmetry is visible in the abstract syntax** (`04` §3):
 
@@ -193,7 +206,7 @@ tool host, and the type and effect system.
 
 | | Work | Size | Why |
 |---|---|---|---|
-| 1 | **Typed grants** (§2.1) | small | Removes an asymmetry already visible in the abstract syntax, and makes §2.3 free. The validator exists; the rule gains one premise. |
+| ✅ | **Typed grants** (§2.1) | done | A grant declares each operation's result type; the interface is closed when it does. |
 | 2 | **`consult`** (§2.2) | medium | The only real gap. Needs its own design pass first: forms, rules, laws, and a decision on whether `Declined` is retryable. |
 | 3 | **`show`** (§2.4) | small | Already on the list for other reasons; SAGA makes the case sharper. |
 | — | Everything else | — | Library, host, or not ours. |

@@ -390,6 +390,19 @@ and are not askable; `show` writes them in µNorman's literal syntax instead.
 Capabilities and functions cannot be shown at all, which is what keeps
 authority out of a prompt.
 
+### Tool results
+
+```
+(T1) (call κ op args…)  :  τ        where κ's grant declares op : τ            ; spec
+(T2) a result that does not fit τ  ==  (fail (Invalid raw))                    ; spec
+```
+
+T2 is what makes a malformed tool result ordinary: it is the same failure a
+malformed model reply produces, so `retry` and `repair` reach it without
+knowing a tool was involved. An **undeclared** operation is not covered here at
+all, because it is a checked run-time error rather than a failure — the program
+is wrong, not the world.
+
 ### Non-laws
 
 Lesson 2 teaches that some properties look true and aren't. These are the

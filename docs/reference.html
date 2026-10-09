@@ -210,8 +210,8 @@
     <pre class="syntax">(<span class="lit">call</span> <span class="meta">capability</span> <span class="meta">op</span> {<span class="meta">exp</span>})</pre>
     <p>
       Use a tool once. The capability comes from <a href="#hosts"><code>grant</code></a> and can only
-      come from there. A tool result is currently always <code>Text</code>; unlike <code>ask</code>,
-      <code>call</code> does not yet name the type of its result.
+      come from there. What the operation answers with is declared by the grant, not written at the
+      call site — see <a href="#hosts">Hosts and capabilities</a>.
     </p>
 
     <h3 id="fail-catch" data-short="fail and catch">fail and catch</h3>
@@ -387,9 +387,33 @@
 
     <h2 id="hosts">Hosts and capabilities</h2>
     <pre class="syntax">(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">model</span> [<span class="lit">id</span> <span class="meta">"…"</span>] [<span class="lit">in</span> <span class="meta">n</span>] [<span class="lit">out</span> <span class="meta">n</span>] [<span class="lit">ceiling</span> <span class="meta">n</span>] [<span class="lit">think</span> <span class="meta">n</span>]))
-(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">kernel</span>))        <span class="meta">; stateful</span>
-(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">filesystem</span>))    <span class="meta">; stateful</span>
-(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">http</span>))          <span class="meta">; stateless</span></pre>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">kernel</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))        <span class="meta">; stateful</span>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">filesystem</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))    <span class="meta">; stateful</span>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">http</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))          <span class="meta">; stateless</span></pre>
+
+    <h3 id="tool-types" data-short="What a tool answers with">What a tool answers with</h3>
+    <p>
+      A grant declares each operation's result type, so a tool's answer is typed the same way a
+      model's is. The declaration lives at the grant rather than the call site because the grant is
+      already the host–program contract, and because a capability should carry its own interface.
+    </p>
+    <pre class="syntax">(<span class="lit">grant</span> py (<span class="lit">kernel</span> [exec (<span class="lit">Text</span> 4000)] [count <span class="lit">Num</span>] [solve Outcome]))
+(<span class="lit">call</span> py count <span class="meta">"wc -l"</span>)        <span class="meta">; a Num, not the text "7"</span></pre>
+    <ol>
+      <li><strong>A grant with no declarations is open:</strong> any operation, result <code>Text</code>.</li>
+      <li><strong>A grant with declarations is closed:</strong> only those operations, plus <code>fork</code> on a kernel. Calling another is a checked run-time error — the program is wrong, not the world.</li>
+      <li><strong>A declared <code>Text</code> takes the result verbatim,</strong> and only its bound is checked.</li>
+      <li><strong>Any other type reads the result as JSON</strong> and validates it, exactly as a model's reply is validated. Failure is <code>Invalid</code>, so <code>retry</code> handles a malformed tool result for free.</li>
+    </ol>
+    <div class="note">
+      <span class="label">Why 3 and 4 differ</span>
+      <p>
+        An <code>ask</code> that wants <code>Text</code> receives a JSON string; a <code>call</code>
+        that wants <code>Text</code> receives raw bytes. The channels really are different — a model
+        emits JSON because a schema told it to, while a tool emits bytes, and the grant is what says
+        what those bytes mean.
+      </p>
+    </div>
     <p>
       Every model field is optional and falls back to a default. Prices are in micro-dollars per
       token: <code>[in 3]</code> is $3 per million input tokens. <strong>Prices are stated here, not

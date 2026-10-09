@@ -1,0 +1,127 @@
+;;; typed-tools.nrm: Step 5 for typed grants (design/10-saga.md §2.1).
+;;;
+;;; `ASK` carries a type in the abstract syntax and `CALL` does not, so every
+;;; tool result has been Text. The mission statement's first row says "every
+;;; `ask` names the type of answer it expects"; this makes that true of every
+;;; effect, not just one of them.
+;;;
+;;; The type is declared at the **grant**, not the call site, because the grant
+;;; is already the host-program contract -- it is where a model's prices and
+;;; ceiling live. One declaration serves every call site, and the capability
+;;; carries its own interface, which is Lesson 6.
+;;;
+;;; Four rules, which these tests fix:
+;;;
+;;;   1. A grant with no declarations is open: any operation, result Text.
+;;;      That is what every existing program already does.
+;;;   2. A grant with declarations is closed: only those operations, plus
+;;;      `fork` on a kernel. Calling another is a checked run-time error.
+;;;   3. A declared `Text` takes the host's result verbatim, bound and all.
+;;;   4. Any other declared type reads the result as JSON and validates it,
+;;;      exactly as `ask` validates a reply. Failure is `Invalid`.
+
+(datatype Outcome
+  [Solved (answer Num)]
+  [Stuck  (why (Text 100))])
+
+;;; ==================================================================
+;;; Rule 1. An undeclared grant is open, and behaves exactly as before.
+
+(grant plain (kernel))
+
+(script plain-run
+  [plain/exec    (result "42") (latency 1s)]
+  [plain/anything (result "no interface was declared") (latency 1s)])
+
+(under ([script plain-run] [cost $1.00] [time 1min])
+  (check-expect (call plain exec "print(42)") "42")    ; Text, as it always was
+  ;; and with nothing declared, any operation is allowed
+  (check-expect (call plain anything "x") "no interface was declared"))
+
+;;; ==================================================================
+;;; Rule 2. A declared grant is closed.
+
+(grant py (kernel [exec (Text 20)] [count Num] [solve Outcome]))
+
+(script typed
+  [py/exec       (result "hello") (latency 1s)]
+  [py/count      (result "7") (latency 1s)]
+  [py/solve      (result "{\"tag\":\"Solved\",\"answer\":42}") (latency 1s)]
+  ;; The host would happily answer this one; the grant is what refuses.
+  [py/frobnicate (result "the host would have answered") (latency 1s)])
+
+(under ([script typed] [cost $1.00] [time 1min])
+  ;; An operation the grant never mentioned is a mistake in the program, so it
+  ;; is a checked run-time error -- not a failure the program could catch.
+  (check-error (call py frobnicate "x"))
+  ;; `fork` is a kernel's own operation and stays available.
+  (check-expect (call py exec "x") "hello"))
+
+;;; ==================================================================
+;;; Rule 3. A declared Text is verbatim, and its bound is enforced.
+
+(under ([script typed] [cost $1.00] [time 1min])
+  (check-expect (call py exec "x") "hello")
+  (check-expect (string-length (call py exec "x")) 5))
+
+(grant tiny (kernel [exec (Text 3)]))
+
+(script too-long
+  [tiny/exec (result "hello") (latency 1s)])     ; 5 bytes, over the bound of 3
+
+(under ([script too-long] [cost $1.00] [time 1min])
+  ;; Over the bound is Invalid -- a failure, not a crash, so it is catchable.
+  (check-fail   (call tiny exec "x") (Invalid _))
+  (check-expect (catch (call tiny exec "x") e (case e [(Invalid raw) raw] [_ "other"]))
+                "hello"))
+
+;;; ==================================================================
+;;; Rule 4. Any other type reads the result as JSON and validates it.
+
+(under ([script typed] [cost $1.00] [time 1min])
+  (check-expect (call py count "wc -l")        7)
+  (check-expect (+ (call py count "wc -l") 1)  8)      ; a real Num, not text
+  (check-expect (call py solve "x + 1 = 43")   (Solved 42)))
+
+;;; A result that does not fit the declared type is Invalid, exactly as a
+;;; model's reply would be -- so `retry` handles it for free.
+
+(script wrong-shape
+  [py/count (result "not a number") (latency 1s)
+            (result "11") (latency 1s)]
+  [py/solve (result "{\"tag\":\"Melted\"}") (latency 1s)])
+
+(under ([script wrong-shape] [cost $1.00] [time 1min])
+  (check-fail   (call py count "wc -l") (Invalid _))
+  (check-expect (retry 1 (lambda () (call py count "wc -l"))) 11)
+  (check-fail   (call py solve "x") (Invalid _)))      ; no such constructor
+
+;;; ==================================================================
+;;; What has not changed: a tool that fails is still a ToolError, and that is
+;;; still what `observe` turns into an observation for the model to read.
+
+(script broken
+  [py/exec (error "NameError: x is not defined") (latency 1s)])
+
+(define observe (k code)
+  (catch (call k exec code) e
+    (case e [(ToolError m) m] [_ (fail e)])))
+
+(under ([script broken] [cost $1.00] [time 1min])
+  (check-fail   (call py exec "print(x)") (ToolError _))
+  (check-expect (observe py "print(x)") "NameError: x is not defined"))
+
+;;; ==================================================================
+;;; `fork` still gives a second owner, and the copy keeps the interface.
+
+(script forked
+  [py/exec (result "one") (latency 1s)
+           (result "two") (latency 1s)])
+
+(under ([script forked] [cost $1.00] [time 1min])
+  (check-expect (let* ([py2 (call py fork)])
+                  (workflow ([a (call py exec "x = 1")] [b (call py2 exec "x = 2")])
+                    (list a b)))
+                (list "one" "two"))
+  ;; The forked kernel is closed in the same way its parent is.
+  (check-error (let* ([py2 (call py fork)]) (call py2 frobnicate "x"))))

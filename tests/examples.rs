@@ -45,6 +45,13 @@ fn string_and_show_tests_all_pass() {
 }
 
 #[test]
+fn typed_tool_tests_all_pass() {
+    let s = load("examples/typed-tools.nrm");
+    assert!(s.total >= 18, "expected at least 18 tests, found {}", s.total);
+    assert!(s.all_passed(), "{} of {} typed-tool tests passed", s.passed, s.total);
+}
+
+#[test]
 fn scripted_oracle_tests_all_pass() {
     let s = load("examples/oracle-scripted.nrm");
     assert!(s.total >= 10, "expected at least 10 tests, found {}", s.total);
