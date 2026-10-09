@@ -27,6 +27,7 @@ pub mod lexer;
 pub mod live;
 pub mod machine;
 pub mod parser;
+pub mod tools;
 pub mod types;
 pub mod value;
 #[cfg(target_arch = "wasm32")]

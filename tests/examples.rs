@@ -52,6 +52,13 @@ fn typed_tool_tests_all_pass() {
 }
 
 #[test]
+fn cp_agent_tests_all_pass() {
+    let s = load("examples/cp-agent.nrm");
+    assert!(s.total >= 4, "expected at least 4 tests, found {}", s.total);
+    assert!(s.all_passed(), "{} of {} CP-Agent tests passed", s.passed, s.total);
+}
+
+#[test]
 fn scripted_oracle_tests_all_pass() {
     let s = load("examples/oracle-scripted.nrm");
     assert!(s.total >= 10, "expected at least 10 tests, found {}", s.total);

@@ -230,6 +230,31 @@ impl Interp {
         Ok(outcome)
     }
 
+    /// Evaluate `e` in live mode with real tool hosts.
+    ///
+    /// Separate from `run_in` because hosts are borrowed for the length of the
+    /// run, and because a program that reaches a real side effect should say
+    /// so at the call site rather than depend on interpreter state.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn run_live_with_hosts(
+        &self,
+        cfg: &Config,
+        e: &ExpRef,
+        live: crate::live::LiveConfig,
+        hosts: &crate::tools::HostRegistry,
+    ) -> Result<Outcome, String> {
+        let world = WorldConfig { cost: cfg.cost, time: cfg.time, script: None };
+        let oracle = Box::new(crate::live::LiveOracle::with_hosts(&self.theta, live, hosts));
+        let outcome = machine::run_with(&self.globals, &self.theta, &world, oracle, e.clone())
+            .map_err(|e| format!("run-time error: {}", e.0))?;
+        if self.trace {
+            for line in trace_lines(&outcome) {
+                self.say(line);
+            }
+        }
+        Ok(outcome)
+    }
+
     /// Parse and evaluate one expression under `cfg`: for tests and embedding.
     pub fn eval_source(&self, src: &str, cfg: &Config) -> Result<Outcome, String> {
         let forms = read_all(src, "<source>")?;

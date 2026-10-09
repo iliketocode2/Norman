@@ -16,8 +16,12 @@ use crate::host::{AskReq, Completion, Count, CountError, Oracle};
 use crate::types::TypeEnv;
 use crate::value::Value;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
+
+/// Shared by every `LiveOracle::new`, which has no hosts.
+static EMPTY_REGISTRY: OnceLock<crate::tools::HostRegistry> = OnceLock::new();
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 
@@ -54,11 +58,33 @@ impl LiveConfig {
     }
 }
 
-/// A reply, as a worker thread hands it back: `Ok((status, body))`, or a network error.
+/// What a worker thread hands back.
+enum Answer {
+    /// An HTTP reply: `Ok((status, body))`, or a network error.
+    Http(Result<(u16, String), String>),
+    /// A tool's result, or a tool error the program can catch.
+    Tool(Result<String, String>),
+}
+
 struct Arrival {
     rid: u64,
     at: Instant,
-    result: Result<(u16, String), String>,
+    answer: Answer,
+}
+
+/// What an in-flight request is waiting for.
+enum Pending {
+    /// An ask, and whether its answer is wrapped as `{"value": …}`.
+    Ask {
+        wrapped: bool,
+    },
+    Call,
+}
+
+/// A running host: its worker thread, and the queue feeding it. Calls to one
+/// host are serialized, because a stateful host does one thing at a time.
+struct Running {
+    tx: Sender<(u64, String, Vec<String>)>,
 }
 
 pub struct LiveOracle<'a> {
@@ -68,17 +94,64 @@ pub struct LiveOracle<'a> {
     start: Instant,
     tx: Sender<Arrival>,
     rx: Receiver<Arrival>,
-    /// In-flight asks, and whether each answer is wrapped as {"value": …}.
-    inflight: HashMap<u64, bool>,
+    /// In-flight requests, and what each is waiting for.
+    inflight: HashMap<u64, Pending>,
+    /// The hosts this run may use, and the ones it has already started.
+    registry: &'a crate::tools::HostRegistry,
+    hosts: HashMap<String, Running>,
     /// A reply that arrived after the machine's limit, held for a later `next`.
     held: Vec<Arrival>,
 }
 
 impl<'a> LiveOracle<'a> {
     pub fn new(theta: &'a TypeEnv, cfg: LiveConfig) -> LiveOracle<'a> {
+        Self::with_hosts(theta, cfg, EMPTY_REGISTRY.get_or_init(Default::default))
+    }
+
+    /// A live oracle that can also reach real tools.
+    pub fn with_hosts(theta: &'a TypeEnv, cfg: LiveConfig, registry: &'a crate::tools::HostRegistry) -> LiveOracle<'a> {
         let agent = ureq::AgentBuilder::new().timeout(cfg.timeout).build();
         let (tx, rx) = channel();
-        LiveOracle { theta, cfg, agent, start: Instant::now(), tx, rx, inflight: HashMap::new(), held: vec![] }
+        LiveOracle {
+            theta,
+            cfg,
+            agent,
+            start: Instant::now(),
+            tx,
+            rx,
+            inflight: HashMap::new(),
+            held: vec![],
+            registry,
+            hosts: HashMap::new(),
+        }
+    }
+
+    /// Start a host on its own thread, the first time its capability is used.
+    fn start_host(&mut self, key: &str) -> Result<&Running, String> {
+        if !self.hosts.contains_key(key) {
+            let made = self.registry.make(key).ok_or_else(|| {
+                if self.registry.is_empty() {
+                    format!("live mode has no tool hosts, so '{}' cannot be called (09 §7)", key)
+                } else {
+                    format!("live mode has no host for '{}'; it has {}", key, self.registry.keys().join(", "))
+                }
+            })?;
+            let mut host = made?;
+            let (req_tx, req_rx) = channel::<(u64, String, Vec<String>)>();
+            let out = self.tx.clone();
+            std::thread::spawn(move || {
+                // One host, one thread, one call at a time.
+                while let Ok((rid, op, args)) = req_rx.recv() {
+                    let result = host.call(&op, &args);
+                    if out.send(Arrival { rid, at: Instant::now(), answer: Answer::Tool(result) }).is_err() {
+                        break; // the run ended
+                    }
+                }
+                host.close();
+            });
+            self.hosts.insert(key.to_string(), Running { tx: req_tx });
+        }
+        Ok(&self.hosts[key])
     }
 
     fn ms(&self, t: Instant) -> i64 {
@@ -86,10 +159,17 @@ impl<'a> LiveOracle<'a> {
     }
 
     /// Turn an arrival into a completion, or a checked run-time error for a fatal status.
-    fn completion(&self, a: Arrival, wrapped: bool) -> Result<Completion, String> {
-        match a.result {
-            Ok((status, body)) => anthropic::parse_response(status, &body, wrapped),
-            Err(e) => Ok(Completion::ProviderError { msg: format!("network error: {}", e), input_tokens: 0 }),
+    fn completion(&self, a: Arrival, pending: Pending) -> Result<Completion, String> {
+        match (a.answer, pending) {
+            (Answer::Http(Ok((status, body))), Pending::Ask { wrapped }) => {
+                anthropic::parse_response(status, &body, wrapped)
+            }
+            (Answer::Http(Err(e)), _) => {
+                Ok(Completion::ProviderError { msg: format!("network error: {}", e), input_tokens: 0 })
+            }
+            (Answer::Tool(Ok(text)), _) => Ok(Completion::ToolResult { text }),
+            (Answer::Tool(Err(msg)), _) => Ok(Completion::ToolError { msg }),
+            (Answer::Http(Ok(_)), Pending::Call) => Err("internal error: an HTTP reply completed a call".into()),
         }
     }
 }
@@ -132,19 +212,32 @@ impl<'a> Oracle for LiveOracle<'a> {
 
     fn issue_ask(&mut self, rid: u64, req: AskReq, _now: i64) -> Result<(), String> {
         let (body, wrapped) = anthropic::request_body(self.theta, &req)?;
-        self.inflight.insert(rid, wrapped);
+        self.inflight.insert(rid, Pending::Ask { wrapped });
         let (agent, cfg, tx) = (self.agent.clone(), self.cfg.clone(), self.tx.clone());
         let body = body.to_string();
         std::thread::spawn(move || {
             let result = post(&agent, &cfg, MESSAGES_PATH, &body);
             // The receiver may be gone if the run already ended; that's fine.
-            let _ = tx.send(Arrival { rid, at: Instant::now(), result });
+            let _ = tx.send(Arrival { rid, at: Instant::now(), answer: Answer::Http(result) });
         });
         Ok(())
     }
 
-    fn issue_call(&mut self, _rid: u64, site: &str, _args: &[Value], _now: i64) -> Result<(), String> {
-        Err(format!("live mode has no tool hosts yet, so call site '{}' can't be answered (09 §7)", site))
+    fn issue_call(&mut self, rid: u64, site: &str, args: &[Value], _now: i64) -> Result<(), String> {
+        let (key, op) = site.split_once('/').ok_or_else(|| format!("malformed call site '{}'", site))?;
+        // Arguments cross a thread boundary, so they go as text: a string
+        // verbatim, anything else as `show` would write it.
+        let args: Vec<String> = args
+            .iter()
+            .map(|v| match v {
+                Value::Str(s) => Ok(s.to_string()),
+                other => self.theta.show(other),
+            })
+            .collect::<Result<_, _>>()?;
+        let op = op.to_string();
+        self.start_host(key)?.tx.send((rid, op, args)).map_err(|_| format!("the host for '{}' has stopped", key))?;
+        self.inflight.insert(rid, Pending::Call);
+        Ok(())
     }
 
     /// Abandon a request. Its worker thread finishes on its own; the reply is discarded.
@@ -186,19 +279,21 @@ impl<'a> Oracle for LiveOracle<'a> {
                 self.held.push(arrival);
                 return Ok(None);
             }
-            let wrapped = self.inflight.remove(&arrival.rid).unwrap();
+            let pending = self.inflight.remove(&arrival.rid).unwrap();
             let rid = arrival.rid;
-            let mut batch = vec![(rid, self.completion(arrival, wrapped)?)];
+            let mut batch = vec![(rid, self.completion(arrival, pending)?)];
             // Whatever else has already arrived joins the batch, in issue order.
             while let Ok(more) = self.rx.try_recv() {
-                match self.inflight.get(&more.rid).copied() {
-                    Some(w) if limit.is_none_or(|l| self.ms(more.at) <= l) => {
-                        self.inflight.remove(&more.rid);
+                match self.inflight.contains_key(&more.rid) {
+                    true if limit.is_none_or(|l| self.ms(more.at) <= l) => {
+                        let p = self.inflight.remove(&more.rid).unwrap();
                         let r = more.rid;
-                        batch.push((r, self.completion(more, w)?));
+                        batch.push((r, self.completion(more, p)?));
                     }
-                    Some(_) => self.held.push(more),
-                    None => {}
+                    // In flight, but it arrived after the limit: hold it.
+                    true => self.held.push(more),
+                    // Cancelled earlier: discard it.
+                    false => {}
                 }
             }
             batch.sort_by_key(|(r, _)| *r);
