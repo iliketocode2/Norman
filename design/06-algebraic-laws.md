@@ -373,6 +373,23 @@ The pair A3/A4 names the **two separate trade-offs** a type makes:
   on *every* ask, for as long as the program runs. A richer answer is not free
   just because it is bounded.
 
+### `show`, the inverse of validation
+
+```
+(S1) validate (show v) τ  ==  v          for askable τ and v : τ          ; round trip
+(S2) (show v₁) == (show v₂)  ⟺  v₁ == v₂   for showable v                ; canonical
+```
+
+S1 is the reason `show` produces JSON rather than prose: a value written into a
+prompt can be read back out of the model's answer unchanged. It is checked on
+one value of every form in `src/types.rs`, and mutation-tested — renaming the
+discriminator or dropping a string's quotes both break it.
+
+S1 is stated only for **askable** τ. Money, durations and ∞ have no JSON form
+and are not askable; `show` writes them in µNorman's literal syntax instead.
+Capabilities and functions cannot be shown at all, which is what keeps
+authority out of a prompt.
+
 ### Non-laws
 
 Lesson 2 teaches that some properties look true and aren't. These are the

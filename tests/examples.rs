@@ -38,6 +38,13 @@ fn saga_loop_tests_all_pass() {
 }
 
 #[test]
+fn string_and_show_tests_all_pass() {
+    let s = load("examples/strings.nrm");
+    assert!(s.total >= 40, "expected at least 40 tests, found {}", s.total);
+    assert!(s.all_passed(), "{} of {} string tests passed", s.passed, s.total);
+}
+
+#[test]
 fn scripted_oracle_tests_all_pass() {
     let s = load("examples/oracle-scripted.nrm");
     assert!(s.total >= 10, "expected at least 10 tests, found {}", s.total);

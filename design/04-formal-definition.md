@@ -657,6 +657,9 @@ already proved about the core, with no new cases.
 - arithmetic `+ - * /` and comparisons `= < >` on Num, and on money and
   durations of the same kind
 - `cons`, `list` (variadic), `string-append`, `string-length`, `println`
+- `show`, which writes a value as text that reads back (§7.3)
+- `substring`, `string-truncate`, `string-contains?` — byte-oriented, as
+  `string-length` and the bound in `(Text n)` are
 - `(remaining)`, which returns a `Resources` record for the current scope
   (`02` §C4)
 
@@ -713,6 +716,37 @@ already proved about the core, with no new cases.
     [(Some x) x]
     [None     (fail 'none-accepted)]))
 ```
+
+### 7.3 `show`
+
+`(show v)` writes a value as text that can be read back. For every **askable**
+type it produces exactly the JSON that `ask` validates, which gives the law
+
+```
+validate (show v) τ  =  v          for askable τ and v : τ
+```
+
+so `show` is the inverse of `validate_Θ` (`05`, Step 4). It needs Θ, because a
+constructor's fields are positional in the value and named in its definition.
+It is proved on one value of every form by `show_round_trips_through_validate`
+in [`../src/types.rs`](../src/types.rs).
+
+Three things the law does not cover, each deliberate:
+
+- **Money, durations and ∞ are not askable,** and JSON has no such thing. They
+  are written in µNorman's own literal syntax — `$0.50`, `40s`, `∞` — bare at
+  the top level, where a prompt should read naturally, and as JSON strings when
+  nested.
+- **Capabilities, models and functions cannot be shown at all.** A checked
+  run-time error, not a failure. Authority must never reach a prompt, and a
+  function has no written form.
+- **The key `tag` is reserved.** A constructor with a field of that name would
+  overwrite its own discriminator, so `show` refuses rather than producing JSON
+  that silently means something else. Writing `show` is what found this; the
+  encoding had always reserved the name without saying so.
+
+Keys are emitted in sorted order, so `show` is **canonical**: equal values
+always produce identical text.
 
 `best-of` shows sugar and recursion together. `k` concurrent attempts come from
 a recursive `par`. The workflow law makes their cost add up and their time the

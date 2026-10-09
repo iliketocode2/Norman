@@ -57,6 +57,10 @@ pub enum Prim {
     List,
     StringAppend,
     StringLength,
+    Show,
+    Substring,
+    StringTruncate,
+    StringContains,
     Println,
     Remaining,
 }
@@ -75,12 +79,16 @@ impl Prim {
             Prim::List => "list",
             Prim::StringAppend => "string-append",
             Prim::StringLength => "string-length",
+            Prim::Show => "show",
+            Prim::Substring => "substring",
+            Prim::StringTruncate => "string-truncate",
+            Prim::StringContains => "string-contains?",
             Prim::Println => "println",
             Prim::Remaining => "remaining",
         }
     }
 
-    pub const ALL: [Prim; 13] = [
+    pub const ALL: [Prim; 17] = [
         Prim::Add,
         Prim::Sub,
         Prim::Mul,
@@ -92,6 +100,10 @@ impl Prim {
         Prim::List,
         Prim::StringAppend,
         Prim::StringLength,
+        Prim::Show,
+        Prim::Substring,
+        Prim::StringTruncate,
+        Prim::StringContains,
         Prim::Println,
         Prim::Remaining,
     ];

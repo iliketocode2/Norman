@@ -337,19 +337,31 @@
         <tr><td class="sig">+ - * /</td><td>on <code>Num</code>, and on money or durations of the same kind. Scaling takes a <code>Num</code>.</td></tr>
         <tr><td class="sig">= &lt; &gt;</td><td>comparison; <code>&lt;</code> and <code>&gt;</code> also order strings</td></tr>
         <tr><td class="sig">cons · list</td><td><code>list</code> is variadic</td></tr>
-        <tr><td class="sig">string-append · string-length</td><td>length is in bytes. These are the only string primitives.</td></tr>
+        <tr><td class="sig">string-append · string-length</td><td>length is in bytes</td></tr>
+        <tr><td class="sig">show</td><td>write a value as text that reads back — see <a href="#show">below</a></td></tr>
+        <tr><td class="sig">substring · string-truncate · string-contains?</td><td>byte offsets, as everything else is. <code>substring</code> is a checked error out of range or mid-character; <code>string-truncate</code> is the safe cut.</td></tr>
         <tr><td class="sig">println</td><td>print a value</td></tr>
         <tr><td class="sig">(remaining)</td><td>a <code>Resources</code> record for the current scope: <code>(. (remaining) cost)</code> and <code>… time</code></td></tr>
       </tbody>
     </table>
-    <div class="note">
-      <span class="label">A real limitation</span>
-      <p>
-        There is no number-to-string, no substring, and no way to render a value such as a
-        <code>Verdict</code> back into a prompt. A program can only put text into a context that it
-        already has as text. This is the first thing a real agent runs into.
-      </p>
-    </div>
+    <h4 id="show">show</h4>
+    <p>
+      <code>(show v)</code> writes a value as text that <strong>reads back</strong>. For every
+      askable type it produces exactly the JSON that <code>ask</code> validates, which is what lets
+      you put a value into a prompt and read the answer back out:
+    </p>
+    <pre class="syntax">validate (show v) τ  =  v          <span class="meta">for askable τ and v : τ</span></pre>
+    <p>
+      So <code>(show (Sell "Margins fell."))</code> is
+      <code>{"reason":"Margins fell.","tag":"Sell"}</code>. Keys come out sorted, which makes
+      <code>show</code> canonical: equal values always produce identical text.
+    </p>
+    <p>Three things sit outside that law, each on purpose:</p>
+    <ul>
+      <li><strong>Money, durations and ∞ are not askable</strong>, and JSON has none of them. They are written in µNorman's own literal syntax — <code>$0.50</code>, <code>40s</code>, <code>∞</code> — bare at the top level so a prompt reads naturally, and as strings when nested.</li>
+      <li><strong>Capabilities, models and functions cannot be shown at all.</strong> That is a checked run-time error: authority must never reach a prompt, and a function has no written form.</li>
+      <li><strong>The key <code>tag</code> is reserved.</strong> A constructor with a field of that name would overwrite its own discriminator, so <code>show</code> refuses rather than quietly producing JSON that means something else.</li>
+    </ul>
 
     <h3 id="basis-functions" data-short="Predefined functions">Predefined functions</h3>
     <p>These are written in µNorman itself, and each is defined by algebraic laws.</p>

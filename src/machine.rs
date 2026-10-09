@@ -907,6 +907,52 @@ impl<'a> Machine<'a> {
                     other => return stuck(format!("string-length needs a string, got {}", other)),
                 }
             }
+            // `show` is the only primitive that needs Θ: a constructor's
+            // field names live in its definition, not in the value.
+            Prim::Show => {
+                arity(1)?;
+                Value::str(&self.theta.show(&args[0]).map_err(RtErr)?)
+            }
+            Prim::Substring => {
+                arity(3)?;
+                let (s, i, j) = match (&args[0], &args[1], &args[2]) {
+                    (Str(s), Num(i), Num(j)) => (s, *i, *j),
+                    _ => return stuck(format!("substring needs a string and two numbers, got {}", args[0])),
+                };
+                if i < 0 || j < i || j as usize > s.len() {
+                    return stuck(format!("substring {}..{} is outside a string of {} bytes", i, j, s.len()));
+                }
+                let (i, j) = (i as usize, j as usize);
+                // Offsets are in bytes, as `string-length` and `(Text n)` are.
+                // Splitting a character would not produce text at all.
+                match s.get(i..j) {
+                    Some(sub) => Value::str(sub),
+                    None => return stuck(format!("substring {}..{} splits a character", i, j)),
+                }
+            }
+            Prim::StringTruncate => {
+                arity(2)?;
+                let (s, n) = match (&args[0], &args[1]) {
+                    (Str(s), Num(n)) => (s, *n),
+                    _ => return stuck(format!("string-truncate needs a string and a number, got {}", args[0])),
+                };
+                if n < 0 {
+                    return stuck(format!("string-truncate needs a length of zero or more, got {}", n));
+                }
+                // The safe cut: at most n bytes, never splitting a character.
+                let mut end = (n as usize).min(s.len());
+                while end > 0 && !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                Value::str(&s[..end])
+            }
+            Prim::StringContains => {
+                arity(2)?;
+                match (&args[0], &args[1]) {
+                    (Str(s), Str(sub)) => Bool(s.contains(&**sub)),
+                    _ => return stuck(format!("string-contains? needs two strings, got {}", args[0])),
+                }
+            }
             Prim::Println => {
                 arity(1)?;
                 println!("{}", args[0]);

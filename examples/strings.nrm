@@ -1,0 +1,134 @@
+;;; strings.nrm: Step 5 for `show` and the string primitives.
+;;;
+;;; Written before the code, as Ramsey writes triangle.imp's tests before
+;;; triangle. The question these answer is "what should `show` return on each
+;;; form of value?", and the forms of a value are the cases the primitive must
+;;; dispatch on (Step 1).
+;;;
+;;; `show` is Haskell's `show`, not a pretty-printer: it produces a
+;;; representation that can be read back. For every askable type it is exactly
+;;; the JSON that `ask` validates, so the round-trip law holds:
+;;;
+;;;     validate (show v) τ  =  v        for askable τ and v : τ
+;;;
+;;; That law is proved on every form by `show_round_trips` in src/types.rs,
+;;; which can see `validate`; these tests fix what the text itself looks like.
+
+(grant claude (model [in 3] [out 15] [ceiling 8000]))
+
+(datatype Verdict
+  [Buy  (reason (Text 400))]
+  [Hold]                                  ; a constructor with no fields
+  [Sell (reason (Text 400))])
+
+(record Point (x Num) (y Num))
+
+;;; ==================================================================
+;;; Group 1. `show` on each form of value.
+
+;; Atoms. Text is quoted, because `show` produces something readable back --
+;; the same reason Haskell's `show "hi"` is "\"hi\"".
+(check-expect (show 42)        "42")
+(check-expect (show -7)        "-7")
+(check-expect (show #t)        "true")
+(check-expect (show #f)        "false")
+(check-expect (show "hi")      "\"hi\"")
+(check-expect (show 'declined) "\"declined\"")
+
+;; Text containing characters JSON must escape.
+(check-expect (show "a\"b")    "\"a\\\"b\"")
+(check-expect (show "a\nb")    "\"a\\nb\"")
+
+;; Lists.
+(check-expect (show '())            "[]")
+(check-expect (show (list 1 2 3))   "[1,2,3]")
+(check-expect (show (list "a" "b")) "[\"a\",\"b\"]")
+
+;; Constructors carry a tag, and their fields by name. A nullary constructor
+;; is just its tag -- the shape `ask` already validates. Keys come out sorted,
+;; so `show` is canonical: equal values always produce identical text.
+(check-expect (show (Sell "Margins fell.")) "{\"reason\":\"Margins fell.\",\"tag\":\"Sell\"}")
+(check-expect (show Hold)                   "{\"tag\":\"Hold\"}")
+
+;; Records have no tag: they have exactly their fields.
+(check-expect (show (Point [x 3] [y 4])) "{\"x\":3,\"y\":4}")
+
+;; Nesting.
+(check-expect (show (list (Point [x 1] [y 2]) (Point [x 3] [y 4])))
+              "[{\"x\":1,\"y\":2},{\"x\":3,\"y\":4}]")
+
+;;; ==================================================================
+;;; Group 2. Money, durations and ∞ are NOT askable, so the round-trip law
+;;; says nothing about them. JSON has no such thing, so `show` renders them in
+;;; µNorman's own literal syntax -- which is what a person or a model should
+;;; read -- and as strings when they sit inside a structure.
+
+(check-expect (show $0.50)    "$0.50")
+(check-expect (show $1.00)    "$1.00")
+(check-expect (show $0.000375) "$0.000375")
+(check-expect (show 40s)      "40s")
+(check-expect (show 10min)    "10min")
+(check-expect (show 250ms)    "250ms")
+
+;;; ==================================================================
+;;; Group 3. The point of all this: putting a value into a prompt.
+
+(define verdict-prompt (v)
+  (string-append "Your previous answer was " (show v) ". Reconsider it."))
+
+(check-expect (verdict-prompt (Buy "Cheap on earnings."))
+              "Your previous answer was {\"reason\":\"Cheap on earnings.\",\"tag\":\"Buy\"}. Reconsider it.")
+
+;; And telling a model what it has left to spend, which needs no new form:
+;; `(remaining)` was already there, but until now its value could not be said.
+(define budget-note ()
+  (string-append "You have " (show (. (remaining) cost))
+                 " and " (show (. (remaining) time)) " left."))
+
+(under ([cost $0.25] [time 30s])
+  (check-expect (budget-note) "You have $0.25 and 30s left."))
+
+;; With no limit at all, both are ∞.
+(check-expect (budget-note) "You have ∞ and ∞ left.")
+
+;;; ==================================================================
+;;; Group 4. Substrings. Offsets are in bytes, as `string-length` and the
+;;; bounds in `(Text n)` are, because bytes are what bound tokens.
+
+(check-expect (substring "hello world" 0 5)  "hello")
+(check-expect (substring "hello world" 6 11) "world")
+(check-expect (substring "hello" 0 0)        "")
+(check-expect (substring "hello" 5 5)        "")
+
+;; Out of range, backwards, or splitting a character are checked run-time
+;; errors, not silent nonsense.
+(check-error (substring "hello" 0 99))
+(check-error (substring "hello" 3 1))
+(check-error (substring "héllo" 0 2))        ; é is two bytes; 2 is inside it
+
+;;; `string-truncate` is the safe cut: at most n bytes, never splitting a
+;;; character. This is how an observation is made to fit a (Text n) bound.
+(check-expect (string-truncate "hello world" 5) "hello")
+(check-expect (string-truncate "hello" 99)      "hello")
+(check-expect (string-truncate "hello" 0)       "")
+(check-expect (string-truncate "héllo" 2)       "h")     ; would have split é
+(check-expect (string-length (string-truncate "héllo" 2)) 1)
+
+;;; `string-contains?` is a predicate, so Step 9 asks for both answers.
+(check-expect (string-contains? "NameError: x" "NameError") #t)
+(check-expect (string-contains? "NameError: x" "TypeError") #f)
+(check-expect (string-contains? "anything" "")             #t)
+(check-expect (string-contains? "" "x")                    #f)
+
+;;; ==================================================================
+;;; Group 5. What cannot be shown. A capability must never reach a prompt,
+;;; and a function has no written form at all.
+
+(datatype Bad [Oops (tag Text)])          ; `tag` is the discriminator's key
+(check-error (show (Oops "x")))
+
+(grant py (kernel))
+(check-error (show py))
+(check-error (show claude))
+(check-error (show (lambda (x) x)))
+(check-error (show show))
