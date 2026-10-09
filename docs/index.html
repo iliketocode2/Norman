@@ -15,7 +15,7 @@
     <a class="brand" href="./">µNorman</a>
     <nav>
       <a href="#tour">Tour</a>
-      <a href="watch.html">Watch it work</a>
+      <a href="watch.html">Demo</a>
       <a href="reference.html">Reference</a>
       <a href="playground.html">Playground</a>
       <a href="#guarantees">Guarantees</a>
@@ -39,11 +39,9 @@
     </p>
 
     <div class="badges">
-      <span class="badge good">Every example here really runs</span>
-      <span class="badge good">CP-Agent works end to end</span>
       <span class="badge">No API key</span>
       <span class="badge">Deterministic</span>
-      <span class="badge">Rust → WebAssembly, 285&nbsp;KB</span>
+      <span class="badge">Rust to WebAssembly, 285&nbsp;KB</span>
       <span class="badge">MIT or Apache-2.0</span>
     </div>
 
@@ -65,7 +63,7 @@
 
   <h2 id="why">What a language can do that a library can&rsquo;t</h2>
   <p>
-    Six papers shaped this design. Each points at something that belongs in a language rather than
+    Six papers inspired this design. I believe that each points at something that belongs in a language rather than
     in a library.
   </p>
   <table>
@@ -329,8 +327,7 @@
   <p>
     µNorman is a research prototype, designed in the style of Norman Ramsey&rsquo;s
     <em>Programming Languages: Build, Prove, and Compare</em> and his
-    <em>Seven Lessons in Program Design</em>. It is not ready to build a product on, and this section
-    says why rather than leaving you to find out.
+    <em>Seven Lessons in Program Design</em>.
   </p>
 
   <div class="cards">
@@ -339,12 +336,8 @@
       <p>The language, its semantics, its laws, and an interpreter that runs them. 127 unit tests, 13 laws checked on 150 random scripts each, and a suite of deliberately wrong tests that must fail.</p>
     </div>
     <div class="card">
-      <h3>It runs, for real</h3>
-      <p>CP-Agent solves problems against Claude Sonnet 5 with a real Python kernel. <a href="watch.html">The traces are here</a>, including the budget refusing to start a run it couldn&rsquo;t afford.</p>
-    </div>
-    <div class="card">
-      <h3>One tool, no sandbox</h3>
-      <p>There is a real Python kernel; there is no filesystem or HTTP host, and no <code>fork</code>. The kernel runs model-authored code unsandboxed, which is fine on your own machine and nowhere else.</p>
+      <h3>It runs!</h3>
+      <p>CP-Agent solves problems against Claude Sonnet 5 with a Python kernel. <a href="watch.html">The traces are here</a>, including the budget refusing to start a run it couldn&rsquo;t afford.</p>
     </div>
     <div class="card">
       <h3>No static checking yet</h3>
