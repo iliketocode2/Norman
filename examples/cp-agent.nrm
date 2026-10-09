@@ -1,0 +1,95 @@
+;;; cp-agent.nrm: the CP-Agent loop, written to run against a real model and a
+;;; real Python kernel.
+;;;
+;;; This is P1 from design/01, and the design's flagship example. Until now it
+;;; could only run against scripts, because live mode had no tool hosts. The
+;;; program is unchanged by that: the same source runs scripted or live, and
+;;; only the host differs.
+;;;
+;;;   Scripted (free, offline):  cargo run -- examples/cp-agent.nrm
+;;;   Live (spends money):       cargo test --test live_cp_agent -- --ignored --nocapture
+;;;
+;;; The shape is the CP-Agent paper's: ask the model for the next step, run any
+;;; code it writes, feed the output back, and stop when it says it is done.
+;;; Because the answer is a *choice*, the loop is an ordinary `case`.
+
+(grant claude (model))                       ; defaults: Claude Sonnet 5
+(grant py     (kernel [exec (Text 4000)]))   ; a real Python process in live mode
+
+(datatype Step
+  [Exec (code (Text 2000))]    ; "run this and show me the output"
+  [Done (answer (Text 500))])  ; "this is my final answer"
+
+(val cp-prompt
+  "You solve problems by writing Python. Reply with Exec to run code, and you
+will be shown its output. Reply with Done when you have the answer. Write
+small steps, and print what you want to see.")
+
+;; A tool error becomes an observation the model can read and react to.
+;; Nothing else does: running out of money or time is not something to
+;; explain to a model, it is something that stops the program.
+(define observe (k code)
+  (catch (call k exec code) e
+    (case e
+      [(ToolError m) m]
+      [_             (fail e)])))
+
+(define react (model k ctx fuel)
+  (if (<= fuel 0)
+      (fail 'out-of-fuel)
+      (case (ask model Step ctx 'step)
+        [(Exec code)
+           (react model k
+                  (append ctx (list (Message [role Assistant] [content (show (Exec code))])
+                                    (Message [role Tool]      [content (observe k code)])))
+                  (- fuel 1))]
+        [(Done answer) answer])))
+
+;; The budget is the real stop. Fuel only bounds the recursion so the program
+;; is obviously terminating; the budget is what guarantees it.
+(define cp-agent (model k task)
+  (budget ([cost $0.50] [time 5min])
+    (react model k
+           (list (Message [role System] [content cp-prompt])
+                 (Message [role User]   [content task]))
+           8)))
+
+;;; ==================================================================
+;;; Scripted: the same program, with the model and the kernel canned, so the
+;;; loop can be tested for free and exactly.
+
+(script solving
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"print(sum(range(101)))\"}") (out 20) (latency 3s)
+           (reply "{\"tag\":\"Done\",\"answer\":\"5050\"}")                 (out 12) (latency 2s)]
+  [py/exec (result "5050") (latency 1s)])
+
+(under ([script solving] [cost $1.00] [time 5min])
+  (check-expect (cp-agent claude py "What is the sum of 0 to 100?") "5050")
+  ;; Two asks and one kernel call: 3 + 1 + 2 seconds.
+  (check-within (cp-agent claude py "What is the sum of 0 to 100?") ([time 6s])))
+
+;;; A kernel that errors is not a crash: the message goes back to the model,
+;;; which is the whole reason `observe` exists.
+
+(script recovering
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"print(undefined_name)\"}") (out 20) (latency 2s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"print(42)\"}")             (out 18) (latency 2s)
+           (reply "{\"tag\":\"Done\",\"answer\":\"42\"}")                  (out 12) (latency 2s)]
+  [py/exec (error "NameError: name 'undefined_name' is not defined") (latency 1s)
+           (result "42") (latency 1s)])
+
+(under ([script recovering] [cost $1.00] [time 5min])
+  (check-expect (cp-agent claude py "Print 42.") "42"))
+
+;;; Fuel runs out before the budget does, and says so.
+
+(script forever
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"pass\"}") (out 10) (latency 1s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"pass\"}") (out 10) (latency 1s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"pass\"}") (out 10) (latency 1s)]
+  [py/exec (result "") (latency 0s)
+           (result "") (latency 0s)
+           (result "") (latency 0s)])
+
+(under ([script forever] [cost $1.00] [time 5min])
+  (check-fail (react claude py (list (Message [role User] [content "go"])) 2) (Raised _)))
