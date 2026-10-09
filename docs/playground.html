@@ -80,6 +80,17 @@
     </tbody>
   </table>
 
+  <h3>Text and values</h3>
+  <table>
+    <tbody>
+      <tr><td><code>(show <em>v</em>)</code></td><td>write a value as text that reads back: <code>validate (show v) τ = v</code></td></tr>
+      <tr><td><code>(string-append <em>a</em> <em>b</em> …)</code> · <code>(string-length <em>s</em>)</code></td><td>length is in bytes</td></tr>
+      <tr><td><code>(substring <em>s</em> <em>i</em> <em>j</em>)</code></td><td>byte offsets; a checked error out of range or mid-character</td></tr>
+      <tr><td><code>(string-truncate <em>s</em> <em>n</em>)</code></td><td>the safe cut: at most <em>n</em> bytes, never splitting a character</td></tr>
+      <tr><td><code>(string-contains? <em>s</em> <em>sub</em>)</code></td><td>a predicate</td></tr>
+    </tbody>
+  </table>
+
   <h3>Failures</h3>
   <p class="small">
     <code>Invalid</code> (the reply didn&rsquo;t fit the type) ·
@@ -105,8 +116,8 @@
     <p>
       <strong>Constructors take positional arguments</strong> (<code>(Sell "reason")</code>) while
       <strong>records take named ones</strong> (<code>(Message [role User] [content "hi"])</code>).
-      And the standard library is very small: there is no number-to-string and no substring yet, so
-      a prompt can only carry text you already have.
+      And to put a value into a prompt, use <code>(show v)</code>: it writes the same JSON that
+      <code>ask</code> validates, so what you write out reads back in.
     </p>
   </div>
 

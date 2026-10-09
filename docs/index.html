@@ -348,8 +348,8 @@
       <p>The guarantees above are enforced when a program <em>runs</em>. A type and effect system is designed but not built; it is what would move the checks to compile time.</p>
     </div>
     <div class="card">
-      <h3>A very small standard library</h3>
-      <p>There is no number-to-string, no substring, no way to render a value back into a prompt. Real programs hit this within minutes.</p>
+      <h3>A small standard library</h3>
+      <p><code>show</code> writes any value as text that reads back, and there are substrings, so a program can build real prompts. It is still small: no sorting, no maps, no regular expressions.</p>
     </div>
     <div class="card">
       <h3>Performance is a hypothesis</h3>

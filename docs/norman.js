@@ -56,6 +56,8 @@ const KEYWORDS = new Set([
 const FORMS = new Set([
   'ask', 'call', 'fail', 'catch', 'budget', 'workflow', 'par', 'and', 'or',
   'retry', 'repair', 'best-of', 'window', 'remaining', 'attempt', 'first-some',
+  'show', 'substring', 'string-truncate', 'string-contains?',
+  'string-append', 'string-length',
 ]);
 
 const CHECKS = /^check-(expect|assert|error|fail|within|equiv)$/;
