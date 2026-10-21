@@ -20,6 +20,23 @@ cargo test                                  # the design's example results and l
 
 No API key is needed for either command.
 
+**Status: research prototype.** The guarantees are enforced when a program
+runs; the static type and effect system is designed but not built. Nothing has
+been benchmarked against a hand-written agent.
+
+### Running against a real model and real Python
+
+```
+cargo run -- --live --trace examples/cp-agent.nrm                     # asks go to Claude; calls fail
+cargo run -- --live --python python3 --trace examples/cp-agent.nrm    # calls run real Python too
+```
+
+> **Warning: `--python` has no sandbox.** It runs whatever code the model
+> writes, with your user's permissions, on your machine. Use it only in a
+> throwaway environment (a container or VM) you're willing to lose. A deadline
+> that cuts a call kills the Python process, but nothing limits what the code
+> can do before then.
+
 ## License
 
 µNorman is dual-licensed under either of
@@ -32,9 +49,8 @@ interpreter is written in. Apache-2.0 adds an explicit patent grant.
 
 This covers the project's own work: the language design documents in
 [`design/`](design/), the interpreter in [`src/`](src/), and the examples and
-tests. **It does not cover the papers in [`theory/`](theory/).** They remain
-the copyright of their authors and publishers, and they're cited in the
-Bibliography below.
+tests. The papers the design draws on are not distributed here; they're cited
+in the Bibliography below, with links to where they're published.
 
 Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in this work, as defined in the Apache-2.0 license,
@@ -42,18 +58,17 @@ shall be dual licensed as above, without any additional terms or conditions.
 
 ## Bibliography
 
-The source papers are in [`theory/`](theory/). Each one is reviewed critically
-in [`design/00-reading-notes.md`](design/00-reading-notes.md), and the section
+Each paper is reviewed critically in
+[`design/00-reading-notes.md`](design/00-reading-notes.md), and the section
 number there is given after each entry.
 
 ### Program design and programming-language theory
 
-- Norman Ramsey. *Seven Lessons in Program Design.* Tufts University.
-  [PDF](theory/Seven_Lessons_in_Program_Design.pdf). The nine-step design
-  process the whole project follows.
+- Norman Ramsey. *Seven Lessons in Program Design.* Tufts University. The
+  nine-step design process the whole project follows.
 - Norman Ramsey. "An Imperative Core." Chapter 1 of *Programming Languages:
   Build, Prove, and Compare.* Cambridge University Press, 2022.
-  [PDF](theory/Ramsey%20-%20An%20Imperative%20Core.pdf). The model for µNorman's
+  <https://www.cs.tufts.edu/~nr/build-prove-compare/>. The model for µNorman's
   syntax, operational semantics, metatheory and definitional interpreter.
 
 ### Agentic systems
@@ -61,34 +76,29 @@ number there is given after each entry.
 - Huanting Wang, Jingzhi Gong, Huawei Zhang, Jie Xu, and Zheng Wang. "AI
   Agentic Programming: A Survey of Techniques, Challenges, and Opportunities."
   arXiv:2508.11126v2, September 2025.
-  [PDF](theory/AI%20Agentic%20Programming%20-%20A%20Survey.pdf). Reading notes §1.
+  <https://arxiv.org/abs/2508.11126>. Reading notes §1.
 - Muyukani Kizito. "Turn: A Language for Agentic Computation."
-  arXiv:2603.08755v1, March 2026.
-  [PDF](theory/Turn%20-%20A%20language%20for%20Agentic%20Computation.pdf).
+  arXiv:2603.08755v1, March 2026. <https://arxiv.org/abs/2603.08755>.
   Reading notes §2.
 - Stefan Szeider. "CP-Agent: Agentic Constraint Programming." In *3rd
   International Workshop on Large Language Models for Code (LLM4Code '26)*,
-  Rio de Janeiro, 2026. doi:10.1145/3786181.3788711.
-  [PDF](theory/CP%20Agent.pdf). Reading notes §3.
+  Rio de Janeiro, 2026. <https://doi.org/10.1145/3786181.3788711>.
+  Reading notes §3.
 - Xinglin Wang, Zishen Liu, Shaoxiong Feng, Peiwen Yuan, Yiwei Li, Jiayi Shi,
   Yueqi Zhang, Chuyi Tan, Ji Zhang, Boyuan Pan, Yao Hu, and Kan Li. "On Time,
   Within Budget: Constraint-Driven Online Resource Allocation for Agentic
   Workflows." arXiv:2605.06110v2, May 2026.
-  [PDF](theory/Constraint-Driven%20Online%20Resource%20Allocation%20for%20Agentic%20Workflows.pdf).
-  Reading notes §4.
+  <https://arxiv.org/abs/2605.06110>. Reading notes §4.
 - Ali Eslami and Jiangbo Yu. "A Control-Theoretic Foundation for Agentic
   Systems." arXiv:2603.10779v4, March 2026.
-  [PDF](theory/Control-Theoretic%20Foundation%20for%20Agentic%20Development.pdf).
-  Reading notes §5.
+  <https://arxiv.org/abs/2603.10779>. Reading notes §5.
 - Shubhi Asthana, Bing Zhang, Chad DeLuca, Hima Patel, and Ruchi Mahindru.
   "Runtime-Structured Task Decomposition for Agentic Coding Systems." In *ACM
   Workshop on Agentic Software Engineering (ACM CAIS 2026)*, San Jose, 2026.
-  arXiv:2605.15425v1.
-  [PDF](theory/Runtime-Structured%20Task%20Decomposition%20Agentic%20Coding%20Systems.pdf).
-  Reading notes §6.
+  arXiv:2605.15425v1. <https://arxiv.org/abs/2605.15425>. Reading notes §6.
 - Yuanqi Du, Botao Yu, Tianyu Liu, Tony Shen, Junwu Chen, Jan G. Rittig,
   Kunyang Sun, Yikun Zhang, et al. "Accelerating Scientific Discovery with
   Autonomous Goal-evolving Agents." arXiv:2512.21782v2, March 2026.
-  [PDF](theory/SAGA.pdf). Code at <https://github.com/btyu/SAGA> (MIT).
+  <https://arxiv.org/abs/2512.21782>. Code at <https://github.com/btyu/SAGA> (MIT).
   Reading notes §7; what it asks of µNorman is in
   [`design/10-saga.md`](design/10-saga.md).

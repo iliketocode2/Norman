@@ -12,6 +12,7 @@ running the tests (Step 9) found.
 cargo build
 cargo run -- examples/step5-examples.nrm      # or: target/debug/norman FILE.nrm …
 cargo test                                    # Steps 5, 6, 9, the laws, and the must-fail suite
+cargo run -- --live --python python3 FILE.nrm # a real model and a real (unsandboxed) Python
 ```
 
 Current results:
@@ -23,10 +24,15 @@ Current results:
 | Step 9 tests of the initial basis ([`../examples/step9-revisit.nrm`](../examples/step9-revisit.nrm)) | 39 of 39 pass |
 | Scripted-oracle tests ([`../examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm)) | 11 of 11 pass |
 | SAGA's bi-level loop ([`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)) | 7 of 7 pass |
+| Strings and `show` ([`../examples/strings.nrm`](../examples/strings.nrm)) | 45 of 45 pass |
+| Typed grants ([`../examples/typed-tools.nrm`](../examples/typed-tools.nrm)) | 18 of 18 pass |
+| CP-Agent, scripted ([`../examples/cp-agent.nrm`](../examples/cp-agent.nrm)) | 6 of 6 pass |
+| Live client against a local stub server ([`../tests/live_stub.rs`](../tests/live_stub.rs)) | 9 of 9 pass |
+| Live `call` against real hosts, including Python ([`../tests/live_tools.rs`](../tests/live_tools.rs)) | 12 of 12 pass |
 | Random tests of 13 laws ([`../tests/properties.rs`](../tests/properties.rs)) | 150 cases each, all pass |
 | The same harness on 3 false laws | finds a counterexample to each, as it must |
 | Must-fail suite ([`../tests/must-fail.nrm`](../tests/must-fail.nrm)) | 8 of 8 fail, as they must |
-| One real API call ([`../tests/live_real.rs`](../tests/live_real.rs)) | 3 tests, `#[ignore]`d; they spend money, and `cargo test` skips them |
+| Real API calls ([`../tests/live_real.rs`](../tests/live_real.rs), [`../tests/live_cp_agent.rs`](../tests/live_cp_agent.rs)) | 6 tests, `#[ignore]`d; they spend money, and `cargo test` skips them |
 
 Every scripted run also checks Theorem 1′ (the budget invariant) in every
 state it reaches. See "The budget invariant is checked" below.
@@ -97,18 +103,30 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
 4. **A scripted reply longer than `max_out`** is treated as truncated. It
    fails `Invalid` and is charged at `max_out`, so the charge never exceeds the
    reservation (Theorem 1′).
-5. **Hosts are scripted only.** `cost_κ(op) = 0` for every host. There's no
-   real Python kernel or filesystem yet. Kernels implement `fork` natively.
+5. **One real host, and no money cost for tools.** `cost_κ(op) = 0` for every
+   host: a `call` takes time but never money. Live mode has one real host, a
+   Python kernel ([`src/tools.rs`](../src/tools.rs)), enabled with
+   `--python`; there's no filesystem or HTTP host. It is **not sandboxed**.
+   Scripted kernels implement `fork` natively. A live kernel can't copy its
+   state, so `fork` there is a `ToolError` (`Oracle::fork`): forking in the
+   machine alone would give a second capability id to the *same* process,
+   and the ownership check, which compares ids, would let two workflow nodes
+   share it. When a deadline or a cancellation cuts a live call, the host is
+   interrupted (the Python process is killed), so later calls on that
+   capability are tool errors.
 6. **The live oracle has made real calls** (`09` §6a, step 4 ✅). Steps 1–4 of
    [`09`](09-live-oracle.md) are done. The machine talks to an `Oracle` trait
    ([`src/host.rs`](../src/host.rs)), which is implemented by scripts and by
    the live client ([`src/live.rs`](../src/live.rs), run with `--live`). The
-   live client is tested against a local stub server. Step 4, one real call,
-   is next. Refusals, the default model grant (Claude Sonnet 5, set in
+   live client is tested against a local stub server, and CP-Agent has run
+   end to end against Claude Sonnet 5 and a real Python kernel
+   ([`../tests/live_cp_agent.rs`](../tests/live_cp_agent.rs)). Refusals, the
+   default model grant (Claude Sonnet 5, set in
    [`src/defaults.rs`](../src/defaults.rs)) and thinking allowances are in
    place and tested in
-   [`examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm). Live mode
-   still has no tool hosts, so `call` is a checked run-time error there.
+   [`examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm). Without
+   `--python`, live mode has no tool hosts, and `call` is a checked run-time
+   error.
 7. **`check-equiv 'exact`** compares results, money, time, and the trace by
    (site, kind, cost, start, end, outcome). It ignores workflow paths, because
    the same computation can legitimately run at a different path (for
@@ -191,7 +209,8 @@ specification on every other test.
 - **A scripted tokenizer that includes the schema,** so scripted costs predict
   live ones. Today they are about an order of magnitude low (deviation 3).
 - **Refunding cancelled calls** down to reported usage (`07` §5).
-- **Real hosts.** A Python kernel and a filesystem capability, with `fork`.
+- **More hosts.** A filesystem capability; a sandboxed Python kernel (today's
+  runs with the user's permissions); and a kernel that can `fork`.
 - **A read-eval-print loop,** for interactive use.
 - **The type and effect system** (Lesson 5). It makes askability, ownership
   and the `(remaining)` side condition of law W1 into compile-time checks.
@@ -200,6 +219,6 @@ specification on every other test.
   They're still tested only indirectly.
 - **More examples.** P3 (the committee) and P5 (ProofFlow) from `01`/`02` as
   runnable programs.
-- **The three changes SAGA argues for** ([`10`](10-saga.md)): a result type on
-  `call`, declared at the grant; a `consult` effect for the decisions a human
-  should approve; and `show`, so values can be rendered back into a prompt.
+- **The `consult` effect SAGA argues for** ([`10`](10-saga.md)), for the
+  decisions a human should approve. The other two changes it asked for, typed
+  grants and `show`, are done.

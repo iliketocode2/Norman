@@ -61,7 +61,7 @@
 │  spent $0.004124 of the $0.50 budget in 4929ms
 └─ answer: <span class="lit">"7 cows and 23 chickens (7*4+23*2=74 legs, 7+23=30 heads)."</span></pre>
 
-  <h2 id="run-3">3. The same agent, given less money than it needs</h2>
+  <h2 id="run-3">3. The same agent, given less than one step&rsquo;s worst case</h2>
   <p class="muted small">The identical program and problem, under a cap of $0.002 instead of $0.50.</p>
 <pre class="syntax">┌─ the same task, capped at $0.002
 │
@@ -70,23 +70,35 @@
 └─ failed: <span class="lit">OverBudget</span>
 
    the cap held: spent $0.00 of $0.002</pre>
+  <p class="muted small">
+    The trace is reproduced as captured. Its summary line says &ldquo;$0.50 budget&rdquo; because the
+    test&rsquo;s report printed that label for every run; the limit for this run was $0.002. The
+    report has since been fixed.
+  </p>
   <p>
     <strong>Zero model calls, and nothing spent.</strong> Before any call, <code>ask</code> reserves
     the worst case — the input it is about to send, plus the largest answer the type allows, plus the
-    thinking allowance. That reservation did not fit $0.002, so the model was never contacted. The
-    agent did not start and fail partway; it refused to start.
+    thinking allowance. For one CP-Agent step that is about $0.04, which does not fit $0.002, so the
+    model was never contacted.
   </p>
   <p>
-    This is the one claim on this page that a hand-written agent script cannot make. A budget in a
-    library is a counter somebody remembers to check. Here it is enforced before the money is spent,
-    on every effect, with no way around it — the program has no door to the outside except
-    <code>ask</code> and <code>call</code>.
+    Be clear about what this run shows: a refusal to <em>start</em>, not a budget stopping a loop
+    partway through. The partway case is in the program below: under a $0.041 limit, two rounds run,
+    and the third ask is refused before it is sent, having spent about $0.0005. That also shows the
+    price of the guarantee: the check is against the worst case, so a budget stops a run well before
+    the money it has actually spent reaches the limit.
+  </p>
+  <p>
+    A library can check a budget too. What µNorman adds is that the check can&rsquo;t be skipped: it
+    happens before the money is spent, on every effect, because the program has no door to the
+    outside except <code>ask</code> and <code>call</code>.
   </p>
 
   <h2 id="same-program">The same program, running here</h2>
   <p>
-    The source below is the one that produced those traces. The only difference is the host: live, a
-    real model and a real Python process; here, a script and a simulated clock. Press
+    The program below is the one that produced those traces; the tests at the end are scripted. The
+    only difference is the host: live, a real model and a real Python process; here, a script and a
+    simulated clock. Press
     <strong>Run</strong> — this executes in your browser, free and offline.
   </p>
   <div class="example">
@@ -98,6 +110,11 @@
 (datatype Step
   [Exec (code (Text 2000))]      ; "run this and show me the output"
   [Done (answer (Text 500))])    ; "this is my final answer"
+
+(val cp-prompt
+  "You solve problems by writing Python. Reply with Exec to run code, and you
+will be shown its output. Reply with Done when you have the answer. Write
+small steps, and print what you want to see.")
 
 ;; A tool error becomes an observation the model can read. Nothing else does:
 ;; running out of money is not something to explain to a model.
@@ -118,7 +135,10 @@
 
 (define cp-agent (model k task)
   (budget ([cost $0.50] [time 5min])
-    (react model k (list (Message [role User] [content task])) 8)))
+    (react model k
+           (list (Message [role System] [content cp-prompt])
+                 (Message [role User]   [content task]))
+           8)))
 
 ;; Scripted, the model and kernel are canned, so this is exact and free.
 (script solving
@@ -139,7 +159,26 @@
            (result "42") (latency 1s)])
 
 (under ([script recovering] [cost $1.00] [time 5min])
-  (check-expect (cp-agent claude py "Print 42.") "42"))</code></pre>
+  (check-expect (cp-agent claude py "Print 42.") "42"))
+
+;; The budget stops the loop partway. Each ask reserves its worst case, about
+;; $0.04; under $0.041 two rounds fit, and the third ask is refused unsent.
+(script grinding
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)]
+  [py/exec (result "") (latency 0s) (result "") (latency 0s) (result "") (latency 0s)])
+
+(define capped (cap)
+  (budget ([cost cap])
+    (react claude py
+           (list (Message [role System] [content cp-prompt])
+                 (Message [role User]   [content "Keep going."]))
+           8)))
+
+(under ([script grinding] [cost $1.00] [time 5min])
+  (check-fail   (capped $0.041) OverBudget)
+  (check-within (capped $0.041) ([cost $0.001] [time 2s])))</code></pre>
     <div class="result"></div>
   </div>
 
@@ -165,7 +204,12 @@
   <p>Local execution with the example file:</p>
   <pre class="syntax">cargo run -- examples/cp-agent.nrm</pre>
   <p>Live, with <code>ANTHROPIC_API_KEY</code> set and Python on the PATH — a few cents:</p>
-  <pre class="syntax">cargo test --test live_cp_agent -- --ignored --nocapture</pre>
+  <pre class="syntax">cargo test --test live_cp_agent -- --ignored --nocapture
+cargo run -- --live --python python3 --trace examples/cp-agent.nrm</pre>
+  <p>
+    <strong>There is no sandbox.</strong> The Python kernel runs whatever the model writes, with your
+    permissions, on your machine. Run it in a throwaway container or VM.
+  </p>
   <p>
     <a href="https://github.com/iliketocode2/Norman/blob/main/LIVE-SETUP.md">LIVE-SETUP.md</a>
     covers getting a key and capping the spend.

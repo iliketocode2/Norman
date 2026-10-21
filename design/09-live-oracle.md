@@ -214,11 +214,14 @@ the mode.
      The asks themselves are concurrent.
    - **No streaming.** A request with a very large `max_tokens` (an unbounded
      `Text` answer) can hit the 10-minute HTTP timeout.
-   - **No tool hosts in live mode.** A `call` is a checked run-time error, and
-     scripted tools can't yet be mixed with a live model.
-   - **Abandoned requests keep running.** When a deadline cuts a request, or
+   - **No tool hosts in live mode** at step 3. *Since done:* `--python` backs
+     every `kernel` grant with a real, unsandboxed Python process
+     ([`../src/tools.rs`](../src/tools.rs), `08` deviation 5). Scripted tools
+     still can't be mixed with a live model.
+   - **Abandoned asks keep running.** When a deadline cuts an ask, or
      fail-fast cancels it, its worker thread finishes the HTTP call and the
-     reply is discarded. The provider may bill for it, and µNorman charges the
+     reply is discarded. (An abandoned *call* is different: its host is
+     interrupted, which kills a Python kernel.) The provider may bill for it, and µNorman charges the
      reservation, which is the upper bound (`07` §5).
    - **Credentials** come from `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` as
      a bearer token. `ANTHROPIC_BASE_URL` overrides the endpoint (that's how

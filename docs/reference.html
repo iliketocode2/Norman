@@ -244,6 +244,8 @@
     <p>
       Steps may not share a stateful tool, because the outcome would depend on timing. Such a
       workflow is rejected before any step starts. To work in parallel on a kernel, fork it first.
+      (A scripted kernel forks freely; a live Python kernel can&rsquo;t copy its state, so there
+      <code>fork</code> fails with <code>ToolError</code>.)
       <code>par</code> is sugar for a two-step workflow and answers with a <code>Pair</code>.
     </p>
 

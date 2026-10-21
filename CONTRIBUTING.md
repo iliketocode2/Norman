@@ -62,7 +62,8 @@ rebuild after changing the interpreter:
 
 That compiles to `wasm32-unknown-unknown`, copies the module into `docs/`, and
 then **runs every example on the site** through it. A broken example fails the
-script, and CI fails too if the committed `docs/munorman.wasm` has drifted from
+script. CI runs the examples against both the committed `docs/munorman.wasm`
+and a fresh build, and leaves a notice if the committed module has drifted from
 `src/`.
 
 - The `.wasm` is committed on purpose: it is what lets Pages work with no CI.
@@ -112,8 +113,8 @@ script, and CI fails too if the committed `docs/munorman.wasm` has drifted from
 - **Implementation** ([`src/`](src/)): bug fixes, performance, and features
   that the design documents already specify. The deferred items in
   [`design/09-live-oracle.md`](design/09-live-oracle.md) §6–7 are good places
-  to start: streaming, asynchronous counting, real tool hosts, and prompt
-  caching.
+  to start: streaming, asynchronous counting, more tool hosts (a filesystem,
+  a sandboxed kernel, a kernel that can fork), and prompt caching.
 - **The library** ([`src/prelude.nrm`](src/prelude.nrm)): new predefined
   functions are written in µNorman, each with its algebraic laws stated in
   [`design/06-algebraic-laws.md`](design/06-algebraic-laws.md).
@@ -130,8 +131,8 @@ script, and CI fails too if the committed `docs/munorman.wasm` has drifted from
 ## Pull Request Process
 
 1. Ensure formatting, Clippy and tests pass locally (`cargo fmt --check`,
-   `cargo clippy --all-targets`, `cargo test`). There's no CI yet, so this is
-   on you.
+   `cargo clippy --all-targets`, `cargo test`). CI runs the same three
+   checks, plus every example on the documentation site.
 2. If your change is user-facing, update the documentation it affects: the
    guide, the relevant design document, and
    [`design/08-implementation-notes.md`](design/08-implementation-notes.md)
@@ -144,9 +145,8 @@ script, and CI fails too if the committed `docs/munorman.wasm` has drifted from
 
 By submitting a contribution, you agree that it's dual licensed under the MIT
 and Apache-2.0 licenses, as described in [`README.md`](README.md#license).
-Don't add third-party papers or other copyrighted material to
-[`theory/`](theory/) unless its license allows redistribution; cite it in the
-README's Bibliography instead.
+Don't commit third-party papers or other copyrighted material; cite it in the
+README's Bibliography, with a link to where it's published, instead.
 
 ## Questions?
 

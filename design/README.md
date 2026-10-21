@@ -12,14 +12,16 @@ by example. The formal definitions, rules and proofs are in the numbered
 documents. The [reading map](#reading-map) at the end says which one to open
 for what.
 
-> **Status:** designed and implemented, with models and tools scripted. A Rust
+> **Status:** a research prototype, designed and implemented. A Rust
 > interpreter runs the design's example programs and laws: 35 example tests,
-> 27 law tests, 39 tests of the predefined functions, 11 oracle tests and 7
-> tests of SAGA's bi-level loop ([`10`](10-saga.md)) all pass. Thirteen laws are also checked on 150 random scripts each, and the
-> budget invariant is checked in every state of every scripted run. A suite of
-> deliberately wrong tests fails, as it must. The live model client has made
-> real calls against Claude Sonnet 5 ([`09`](09-live-oracle.md) §6a); live mode
-> still has no tools. See
+> 26 law tests, 39 tests of the predefined functions, 11 oracle tests, 7 tests
+> of SAGA's bi-level loop ([`10`](10-saga.md)), 45 string and `show` tests, 18
+> typed-tool tests and 6 CP-Agent tests all pass. Thirteen laws are also
+> checked on 150 random scripts each, and the budget invariant is checked in
+> every state of every scripted run. A suite of deliberately wrong tests fails,
+> as it must. Live, `ask` goes to Claude Sonnet 5 ([`09`](09-live-oracle.md)
+> §6a), and with `--python` a `kernel` grant is a real Python process, so the
+> CP-Agent example has run end to end against both. See
 > [`08-implementation-notes.md`](08-implementation-notes.md).
 >
 > ```
@@ -130,6 +132,10 @@ costs pull in different directions:
   reasons reserves about $0.007 at the example's prices. The same type with
   unlimited text reserves the model's whole output limit, about $0.12, and a
   $0.05 budget refuses it. This is why types carry size bounds.
+- **The reservation is the smallest budget that works.** One CP-Agent step,
+  at the default prices and thinking allowance, reserves about $0.04 even
+  though it usually costs a fraction of a cent. A budget below that refuses
+  the step outright, before any model is contacted.
 - **Enriching a type makes every ask dearer on input,** for as long as the
   program runs — another constructor, another field, a longer field name. No
   bound on the text *inside* those fields helps, because what is sent is the
@@ -194,7 +200,9 @@ for. So no model output can give a program authority it wasn't granted.
 **Stateful tools have one owner at a time.** Two concurrent workflow steps
 can't share a kernel, because the outcome would depend on timing. The program
 is rejected before either step runs. To work in parallel, `fork` the kernel
-first.
+first. (A scripted kernel forks freely. A live Python kernel can't copy its
+state, so in live mode `fork` fails with `ToolError` rather than handing out a
+second handle to the same process.)
 
 ### 7. The rest is library, with laws
 
@@ -243,11 +251,16 @@ These are stated as theorems in [`04`](04-formal-definition.md) §8 and
   One isn't caught at all: a concurrent step that reads its remaining budget.
   That's allowed by design; such a step just falls outside guarantee 4. The
   checker will catch all three before the program runs.
-- **No real tools.** `ask` works against a real model, but `call` doesn't:
-  live mode has no tool hosts. So programs that use a tool, such as the
-  CP-Agent example, still can't run end to end against a real model.
-- **A small standard library.** There's no way yet to turn a number or a value
-  such as a `Verdict` into text, or to take strings apart.
+- **One real tool, with no sandbox.** With `--live --python python3`, every
+  `kernel` grant is a real Python process. It runs model-written code with
+  your permissions, so use it only in a throwaway container or VM. A deadline
+  that cuts a call kills the process; nothing limits what the code does before
+  then. A live kernel can't `fork`, and there are no filesystem or HTTP hosts
+  yet.
+- **A small standard library.** `show` writes any askable value as text that
+  reads back, and there are a few string functions (`string-append`,
+  `substring`, `string-contains?`, …). There's no sorting, no maps and no
+  regular expressions.
 - **Models are not deterministic, and µNorman doesn't pretend they are.** It
   never merges two identical-looking `ask`s or caches answers automatically.
   Caching is an explicit tool.

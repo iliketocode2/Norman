@@ -24,7 +24,7 @@ SAGA's outer loop needed nothing new:
 |---|---|---|
 | Objective: candidate-wise, population-wise, or filter | a datatype with two shapes of constructor | `Weighted` carries a direction and a weight; `Filter` carries neither |
 | Planner proposes objectives | `(ask m (List Objective 4) ctx 'planner)` | a bounded list of records, typed and validated |
-| Analyzer decides whether to continue | `(ask m Progress ctx 'analyzer)`, then `case` | `Revise` carries the next objectives, `Done` doesn't |
+| Analyzer decides whether to continue | `(ask m Progress ctx 'analyzer)`, then `case` | `Revise` carries the next objectives, `Converged` doesn't |
 | Planner reads the analyzer's report | the report is `Text`, passed to the next context | SAGA's own interface between the two is prose, so nothing is lost |
 | The loop terminates | fuel for the Peano bound, `budget` for the real one | the test shows a penny budget stopping it before anything is spent |
 | Selector ranks across every iteration | an archive threaded through the loop, and a fold | retrospective selection needs no new form |
@@ -202,13 +202,15 @@ safe, and it falls out of rules that already exist.
 
 In order, and with the honest caveat that **none of this outranks what was
 already next**: one real API call ([`09`](09-live-oracle.md) step 4), a real
-tool host, and the type and effect system.
+tool host, and the type and effect system. *(Since written: the real call and
+a real Python host are done, and so are typed grants and `show` below. The
+type and effect system and `consult` remain.)*
 
 | | Work | Size | Why |
 |---|---|---|---|
 | ✅ | **Typed grants** (§2.1) | done | A grant declares each operation's result type; the interface is closed when it does. |
 | 2 | **`consult`** (§2.2) | medium | The only real gap. Needs its own design pass first: forms, rules, laws, and a decision on whether `Declined` is retryable. |
-| 3 | **`show`** (§2.4) | small | Already on the list for other reasons; SAGA makes the case sharper. |
+| ✅ | **`show`** (§2.4) | done | Writes any askable value as JSON text that reads back (`04` §7.3). |
 | — | Everything else | — | Library, host, or not ours. |
 
 A note on sequencing: §2.1 and §2.2 both add premises about types to effect

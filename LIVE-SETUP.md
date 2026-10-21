@@ -84,6 +84,14 @@ cargo run -- --live --trace FILE.nrm
 - `--trace` prints one line per ask or call: site, tokens, cost, timing and
   outcome. Use it every time in live mode. It is the only way to see what you
   actually spent.
+- `--python EXE` (with `--live`) backs every `kernel` grant with a real Python
+  process, run by `EXE` (for example `python3`). Without it, a `call` in live
+  mode is a run-time error.
+
+> **`--python` has no sandbox.** It runs whatever code the model writes, with
+> your user's permissions. Run it in a throwaway container or VM. A deadline
+> that cuts a call kills the Python process, but nothing limits what the code
+> can do before then.
 
 `cargo test` never calls the real API. The live tests all go through a stub
 server bound to `127.0.0.1`.

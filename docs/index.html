@@ -319,7 +319,7 @@
     <li><strong>The budget is never overspent,</strong> even with many steps running at once. The interpreter checks this invariant in every state it reaches.</li>
     <li><strong>A model can&rsquo;t hand your program a tool.</strong> Authority comes only from the host.</li>
     <li><strong>No answer is accepted after the deadline.</strong></li>
-    <li><strong>Concurrency doesn&rsquo;t change answers.</strong> A workflow gives the same result as running its steps one at a time.</li>
+    <li><strong>Concurrency doesn&rsquo;t change answers.</strong> A workflow gives the same result as running its steps one at a time, when no budget or deadline binds and no step reads its own remaining budget.</li>
     <li><strong>Every model call and tool call is recorded</strong> in a trace. That is what makes testing, replay and cost profiling possible.</li>
   </ol>
 
@@ -333,7 +333,7 @@
   <div class="cards">
     <div class="card">
       <h3>What works</h3>
-      <p>The language, its semantics, its laws, and an interpreter that runs them. 127 unit tests, 13 laws checked on 150 random scripts each, and a suite of deliberately wrong tests that must fail.</p>
+      <p>The language, its semantics, its laws, and an interpreter that runs them. 187 unit tests written in µNorman, 13 laws checked on 150 random scripts each, and a suite of deliberately wrong tests that must fail.</p>
     </div>
     <div class="card">
       <h3>It runs!</h3>
