@@ -54,7 +54,7 @@ fn typed_tool_tests_all_pass() {
 #[test]
 fn cp_agent_tests_all_pass() {
     let s = load("examples/cp-agent.nrm");
-    assert!(s.total >= 4, "expected at least 4 tests, found {}", s.total);
+    assert!(s.total >= 6, "expected at least 6 tests, found {}", s.total);
     assert!(s.all_passed(), "{} of {} CP-Agent tests passed", s.passed, s.total);
 }
 

@@ -24,6 +24,11 @@ pub struct Interp {
     /// scripts. Native only: wasm has no sockets, so there it is scripts alone.
     #[cfg(not(target_arch = "wasm32"))]
     pub live: Option<crate::live::LiveConfig>,
+    /// In live mode, the Python interpreter that backs every `kernel` grant.
+    /// `None` leaves live mode with no tool hosts, so `call` is a checked
+    /// run-time error. It runs model-written code with no sandbox.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub python: Option<String>,
     /// Print the trace of each top-level evaluation: one line per ask or call.
     pub trace: bool,
     /// Everything the interpreter reports, kept as a value rather than only
@@ -97,6 +102,8 @@ impl Interp {
             verbose: true,
             #[cfg(not(target_arch = "wasm32"))]
             live: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            python: None,
             trace: false,
             out: RefCell::new(String::new()),
         };
@@ -214,7 +221,8 @@ impl Interp {
         let outcome = match &self.live {
             None => machine::run(&self.globals, &self.theta, &world, e.clone()),
             Some(live) => {
-                let oracle = Box::new(crate::live::LiveOracle::new(&self.theta, live.clone()));
+                let hosts = self.kernel_hosts();
+                let oracle = Box::new(crate::live::LiveOracle::with_hosts(&self.theta, live.clone(), &hosts));
                 machine::run_with(&self.globals, &self.theta, &world, oracle, e.clone())
             }
         }
@@ -228,6 +236,22 @@ impl Interp {
             }
         }
         Ok(outcome)
+    }
+
+    /// A Python host for every `kernel` grant, if `python` is set.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn kernel_hosts(&self) -> crate::tools::HostRegistry {
+        let mut hosts = crate::tools::HostRegistry::default();
+        if let Some(python) = &self.python {
+            for v in self.globals.values() {
+                if let Value::Cap(c) = v
+                    && c.kind == CapKind::Kernel
+                {
+                    hosts.register(&c.key, crate::tools::PythonKernel::factory(python.clone()));
+                }
+            }
+        }
+        hosts
     }
 
     /// Evaluate `e` in live mode with real tool hosts.

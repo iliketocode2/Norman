@@ -191,6 +191,32 @@ fn calls_to_different_hosts_overlap_while_one_host_serializes() {
     assert!(wall < Duration::from_millis(550), "two hosts should overlap, took {:?}", wall);
 }
 
+#[test]
+fn a_live_kernel_refuses_to_fork_rather_than_share_its_state() {
+    // Forking in the machine alone would make a second capability with its
+    // own id but the same host. The ownership check compares ids, so two
+    // workflow nodes could then share one process. Live mode refuses instead.
+    let made = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut r = HostRegistry::default();
+    let count = made.clone();
+    r.register(
+        "counter",
+        Box::new(move || {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::new(Counter::default()) as Box<dyn ToolHost>)
+        }),
+    );
+    let o = run(
+        r#"(let* ([k2 (call counter fork)])
+             (workflow ([a (call counter bump 1)] [b (call k2 bump 1)]) (list a b)))"#,
+        &r,
+    )
+    .expect("no run-time error");
+    let shown = value(&o);
+    assert!(shown.contains("ToolError") && shown.contains("cannot fork"), "{shown}");
+    assert_eq!(made.load(std::sync::atomic::Ordering::SeqCst), 0, "nothing was called");
+}
+
 // ------------------------------------------------------------- Python
 
 use munorman::tools::PythonKernel;
@@ -243,8 +269,8 @@ fn a_python_kernel_runs_code_and_keeps_its_state() {
     // And the kernel survives it.
     assert_eq!(k.call("exec", &["x".into()]).unwrap(), "10");
 
-    // `fork` says plainly that it is not implemented.
-    assert!(k.call("fork", &[]).unwrap_err().contains("cannot fork"));
+    // `fork` never reaches the host: the live oracle refuses it first
+    // (`a_live_kernel_refuses_to_fork_rather_than_share_its_state`).
 }
 
 /// The kernel through the language: a µNorman program driving real Python.
@@ -273,4 +299,39 @@ fn munorman_can_drive_a_real_python_kernel() {
     assert_eq!(value(&o), "\"42\"", "state carried from one call to the next");
     assert_eq!(o.trace.len(), 2, "one trace entry per call");
     assert!(o.trace.iter().all(|t| t.kind == "call" && t.outcome == "ok"));
+}
+
+/// A deadline that cuts a call stops the code, not just the wait for it.
+/// Without this, model-written code stuck in a loop would go on running after
+/// the program had moved on, and the process would outlive the run.
+#[test]
+fn a_deadline_kills_a_python_call_that_never_returns() {
+    let Some(exe) = python() else {
+        eprintln!("SKIPPED: no Python on the PATH");
+        return;
+    };
+    let r = python_registry(exe);
+    let mut interp = Interp::new();
+    interp
+        .load_str("(grant counter (kernel [exec (Text 4000)]))", "defs.nrm", Path::new("."))
+        .expect("definitions load");
+    let cfg = LiveConfig {
+        base_url: "http://127.0.0.1:1".into(),
+        auth: Auth::ApiKey("unused".into()),
+        timeout: Duration::from_secs(10),
+    };
+    // The first call is cut at 1s. The second finds the kernel gone: a tool
+    // error, rather than a call queued forever behind the loop.
+    let src = r#"(begin
+                   (catch (budget ([time 1s]) (call counter exec "while True: pass")) e e)
+                   (catch (call counter exec "1 + 1") e e))"#;
+    let forms = munorman::lexer::read_all(src, "<test>").unwrap();
+    let e = munorman::parser::Parser::new(&interp.theta).exp(&forms[0]).unwrap();
+    let started = std::time::Instant::now();
+    let o = interp.run_live_with_hosts(&Config::default(), &e, cfg, &r).expect("no run-time error");
+
+    assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+    assert_eq!(o.trace[0].outcome, "past-deadline");
+    let shown = value(&o);
+    assert!(shown.contains("ToolError") && shown.contains("stopped"), "{shown}");
 }

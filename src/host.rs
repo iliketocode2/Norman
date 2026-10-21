@@ -80,6 +80,13 @@ pub trait Oracle {
     fn issue_ask(&mut self, rid: u64, req: AskReq, now: i64) -> Result<(), String>;
     /// Send a call to capability site `key/op`.
     fn issue_call(&mut self, rid: u64, site: &str, args: &[Value], now: i64) -> Result<(), String>;
+    /// May the kernel granted as `key` be forked? A scripted kernel has no
+    /// state outside the script, so it forks for free. `Err` is a tool error:
+    /// a host that can't copy its state must say so, because handing out a
+    /// second handle to the *same* state would defeat the ownership check.
+    fn fork(&mut self, _key: &str) -> Result<(), String> {
+        Ok(())
+    }
     /// Abandon an in-flight request (a deadline cut, or fail-fast cancellation).
     fn cancel(&mut self, rid: u64);
     /// The earliest batch of completions at or before `limit`: everything that

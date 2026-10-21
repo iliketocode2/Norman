@@ -71,8 +71,12 @@ fn solve_within(task: &str, limits: Config) -> Option<Outcome> {
     Some(outcome)
 }
 
+/// The budget `cp-agent.nrm` gives itself, in µ$.
+const PROGRAM_BUDGET: i64 = 500_000;
+
 /// Print the trace: what the agent did, what it cost, how long it took.
-fn report(task: &str, o: &Outcome) {
+/// `limit` is the money limit the run was under, in µ$.
+fn report(task: &str, o: &Outcome, limit: i64) {
     println!("\n┌─ {task}");
     for t in &o.trace {
         println!(
@@ -91,7 +95,7 @@ fn report(task: &str, o: &Outcome) {
     let calls = o.trace.iter().filter(|t| t.kind == "call").count();
     println!("│");
     println!("│  {asks} model calls, {calls} kernel calls");
-    println!("│  spent {} of the $0.50 budget in {}", fmt_money(o.spent), fmt_dur(o.elapsed));
+    println!("│  spent {} of a {} limit in {}", fmt_money(o.spent), fmt_money(limit), fmt_dur(o.elapsed));
     match &o.result {
         Res::Val(v) => println!("└─ answer: {v}"),
         Res::Fail(f) => println!("└─ failed: {f}"),
@@ -102,7 +106,7 @@ fn report(task: &str, o: &Outcome) {
 #[ignore = "spends real money and runs model-authored Python; run with --ignored"]
 fn cp_agent_solves_a_problem_with_a_real_model_and_a_real_kernel() {
     let Some(o) = solve("What is the sum of all multiples of 3 or 5 below 1000?") else { return };
-    report("sum of multiples of 3 or 5 below 1000", &o);
+    report("sum of multiples of 3 or 5 below 1000", &o, PROGRAM_BUDGET);
 
     match &o.result {
         Res::Val(v) => {
@@ -128,7 +132,7 @@ fn cp_agent_solves_a_problem_that_needs_more_than_one_step() {
     ) else {
         return;
     };
-    report("chickens and cows", &o);
+    report("chickens and cows", &o, PROGRAM_BUDGET);
 
     match &o.result {
         Res::Val(v) => {
@@ -139,15 +143,19 @@ fn cp_agent_solves_a_problem_that_needs_more_than_one_step() {
     }
 }
 
-/// The claim a plain script cannot make: **the budget is a hard cap.**
+/// **An unaffordable run is refused before anything is spent.**
 ///
-/// The same agent, on the same problem, given less money than it needs. It
-/// stops, it says why, and it has spent no more than it was allowed. Nothing
-/// about the program changed — only the limit it was given.
+/// The same agent, on the same problem, under a $0.002 limit. One ask's
+/// worst-case reservation — the largest `Step` plus the default thinking
+/// allowance, about $0.04 — doesn't fit, so the model is never contacted and
+/// nothing is charged. Nothing about the program changed, only the limit.
+///
+/// This shows a refusal to start, not a stop partway through; that case is
+/// tested exactly, for free, by the `grinding` script in `cp-agent.nrm`.
 #[test]
 #[ignore = "spends real money and runs model-authored Python; run with --ignored"]
-fn the_budget_stops_the_agent_and_is_never_exceeded() {
-    // Enough for roughly one model call, not enough to finish.
+fn an_unaffordable_run_is_refused_before_anything_is_spent() {
+    // Less than a single ask's worst case.
     let cap = 2_000; // $0.002
     let Some(o) = solve_within(
         "What is the sum of all multiples of 3 or 5 below 1000?",
@@ -155,7 +163,7 @@ fn the_budget_stops_the_agent_and_is_never_exceeded() {
     ) else {
         return;
     };
-    report("the same task, capped at $0.002", &o);
+    report("the same task, capped at $0.002", &o, cap);
 
     match &o.result {
         Res::Fail(f) => assert!(f.to_string().contains("OverBudget"), "expected OverBudget, got {f}"),

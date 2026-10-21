@@ -25,7 +25,22 @@ pub trait ToolHost: Send {
 
     /// Shut down cleanly. Called when the world ends.
     fn close(&mut self) {}
+
+    /// A way to stop a call that is already running, from another thread.
+    /// The machine uses it when a deadline cuts a call or a workflow cancels
+    /// one: without it, the host's thread would go on running whatever it was
+    /// given — model-written code, say, stuck in a loop — after the program
+    /// has moved on. A host that can't be interrupted returns `None`.
+    ///
+    /// Interrupting may destroy the host's state. That is the honest outcome:
+    /// state left by a call that was cut off halfway can't be trusted anyway.
+    fn interrupter(&self) -> Option<Interrupt> {
+        None
+    }
 }
+
+/// Stops a host's running call, from any thread. See `ToolHost::interrupter`.
+pub type Interrupt = Box<dyn Fn() + Send>;
 
 /// Makes a host. One is called per world, so each test gets its own state.
 pub type HostFactory = Box<dyn Fn() -> Result<Box<dyn ToolHost>, String> + Send + Sync>;
@@ -61,6 +76,7 @@ impl HostRegistry {
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 /// A persistent Python interpreter: the `kernel` capability, for real.
 ///
@@ -75,14 +91,20 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 /// Unix-only and fragile with an embedded runtime, or replaying the session's
 /// history into a fresh process, which is only correct if everything the
 /// program did was deterministic. CP-Agent never forks, so the cost is not
-/// worth paying yet; `fork` on this host is a tool error that says so.
+/// worth paying yet; `fork` in live mode is a tool error that says so
+/// (`LiveOracle::fork`).
+///
+/// **A cut-off call kills the process.** When a deadline cuts a call, the
+/// interpreter is stopped rather than left running, and later calls on the
+/// same capability are tool errors: its state is gone.
 ///
 /// **It runs model-authored code with no sandbox.** The process has whatever
 /// access the user running it has. That is a deliberate, stated assumption for
 /// a research prototype on a developer's own machine, not an oversight — see
 /// `design/09-live-oracle.md`.
 pub struct PythonKernel {
-    child: Child,
+    /// Shared with the interrupter, which kills it from another thread.
+    child: Arc<Mutex<Child>>,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
 }
@@ -134,12 +156,13 @@ impl PythonKernel {
             .map_err(|e| format!("could not start {}: {}. Is Python on the PATH?", python, e))?;
         let stdin = child.stdin.take().ok_or("no stdin on the Python process")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("no stdout on the Python process")?);
-        Ok(PythonKernel { child, stdin, stdout })
+        Ok(PythonKernel { child: Arc::new(Mutex::new(child)), stdin, stdout })
     }
 
     /// A factory for the registry, so each world gets its own interpreter.
-    pub fn factory(python: &'static str) -> HostFactory {
-        Box::new(move || PythonKernel::start(python).map(|k| Box::new(k) as Box<dyn ToolHost>))
+    pub fn factory(python: impl Into<String>) -> HostFactory {
+        let python = python.into();
+        Box::new(move || PythonKernel::start(&python).map(|k| Box::new(k) as Box<dyn ToolHost>))
     }
 
     fn exec(&mut self, code: &str) -> Result<String, String> {
@@ -150,7 +173,7 @@ impl PythonKernel {
         let mut line = String::new();
         let n = self.stdout.read_line(&mut line).map_err(|e| format!("the Python kernel has stopped: {}", e))?;
         if n == 0 {
-            return Err("the Python kernel closed its output".into());
+            return Err("the Python kernel has stopped (a deadline may have cut a call), so its state is gone".into());
         }
         let reply: serde_json::Value =
             serde_json::from_str(&line).map_err(|e| format!("the Python kernel answered with nonsense: {}", e))?;
@@ -171,14 +194,23 @@ impl ToolHost for PythonKernel {
     fn call(&mut self, op: &str, args: &[String]) -> Result<String, String> {
         match op {
             "exec" => self.exec(args.first().map(String::as_str).unwrap_or("")),
-            "fork" => Err("this Python kernel cannot fork; see src/tools.rs".into()),
             other => Err(format!("a Python kernel has no operation {}", other)),
         }
     }
 
     fn close(&mut self) {
         // Closing stdin ends the driver's loop; kill it if it will not go.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let mut child = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    fn interrupter(&self) -> Option<Interrupt> {
+        let child = Arc::clone(&self.child);
+        Some(Box::new(move || {
+            // Killing the process closes its stdout, so the blocked
+            // `read_line` in `exec` returns and the host thread is free.
+            let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        }))
     }
 }

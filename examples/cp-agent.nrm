@@ -93,3 +93,35 @@ small steps, and print what you want to see.")
 
 (under ([script forever] [cost $1.00] [time 5min])
   (check-fail (react claude py (list (Message [role User] [content "go"])) 2) (Raised _)))
+
+;;; The budget stops the loop partway through, and what it spends is within
+;;; the limit. Each ask first reserves its worst case: the context, plus the
+;;; largest Step the type allows (2,024 tokens), plus the default thinking
+;;; allowance (2,000 tokens) -- about $0.04 at the default prices. Under a
+;;; $0.041 limit, two rounds fit; the third ask can't reserve, so it is
+;;; refused before the model is contacted.
+;;;
+;;; Note what that costs: the run stops having spent about $0.0005, because
+;;; what is checked is the worst case, not the likely case. Tighter answer
+;;; types and a smaller thinking allowance make the reservation, and so the
+;;; smallest workable budget, smaller.
+
+(script grinding
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)]
+  [py/exec (result "") (latency 0s)
+           (result "") (latency 0s)
+           (result "") (latency 0s)])
+
+(define capped (cap)
+  (budget ([cost cap])
+    (react claude py
+           (list (Message [role System] [content cp-prompt])
+                 (Message [role User]   [content "Keep going."]))
+           8)))
+
+(under ([script grinding] [cost $1.00] [time 5min])
+  (check-fail   (capped $0.041) OverBudget)
+  ;; Two rounds ran (2s on the simulated clock), and spending stayed tiny.
+  (check-within (capped $0.041) ([cost $0.001] [time 2s])))

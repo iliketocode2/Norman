@@ -1062,6 +1062,10 @@ impl<'a> Machine<'a> {
             return Ok(());
         }
         if op == "fork" && cap.kind == CapKind::Kernel {
+            if let Err(msg) = self.oracle.fork(&cap.key) {
+                self.raise_con(tid, "ToolError", vec![Value::str(&msg)]);
+                return Ok(());
+            }
             self.next_cap += 1;
             let forked = Cap { id: self.next_cap, kind: cap.kind, key: cap.key.clone(), ops: cap.ops.clone() };
             self.set(tid, Ctl::Ret(Value::Cap(forked)));

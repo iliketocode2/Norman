@@ -75,16 +75,17 @@ struct Arrival {
 /// What an in-flight request is waiting for.
 enum Pending {
     /// An ask, and whether its answer is wrapped as `{"value": …}`.
-    Ask {
-        wrapped: bool,
-    },
-    Call,
+    Ask { wrapped: bool },
+    /// A call, and the host it is running on.
+    Call { key: String },
 }
 
 /// A running host: its worker thread, and the queue feeding it. Calls to one
 /// host are serialized, because a stateful host does one thing at a time.
 struct Running {
     tx: Sender<(u64, String, Vec<String>)>,
+    /// Stops the host's current call, if the host supports it.
+    interrupt: Option<crate::tools::Interrupt>,
 }
 
 pub struct LiveOracle<'a> {
@@ -131,12 +132,17 @@ impl<'a> LiveOracle<'a> {
         if !self.hosts.contains_key(key) {
             let made = self.registry.make(key).ok_or_else(|| {
                 if self.registry.is_empty() {
-                    format!("live mode has no tool hosts, so '{}' cannot be called (09 §7)", key)
+                    format!(
+                        "live mode has no tool hosts, so '{}' cannot be called; \
+                         `norman --live --python python3` backs kernel grants with Python",
+                        key
+                    )
                 } else {
                     format!("live mode has no host for '{}'; it has {}", key, self.registry.keys().join(", "))
                 }
             })?;
             let mut host = made?;
+            let interrupt = host.interrupter();
             let (req_tx, req_rx) = channel::<(u64, String, Vec<String>)>();
             let out = self.tx.clone();
             std::thread::spawn(move || {
@@ -149,9 +155,15 @@ impl<'a> LiveOracle<'a> {
                 }
                 host.close();
             });
-            self.hosts.insert(key.to_string(), Running { tx: req_tx });
+            self.hosts.insert(key.to_string(), Running { tx: req_tx, interrupt });
         }
         Ok(&self.hosts[key])
+    }
+
+    fn interrupt(&self, key: &str) {
+        if let Some(stop) = self.hosts.get(key).and_then(|h| h.interrupt.as_ref()) {
+            stop();
+        }
     }
 
     fn ms(&self, t: Instant) -> i64 {
@@ -169,7 +181,22 @@ impl<'a> LiveOracle<'a> {
             }
             (Answer::Tool(Ok(text)), _) => Ok(Completion::ToolResult { text }),
             (Answer::Tool(Err(msg)), _) => Ok(Completion::ToolError { msg }),
-            (Answer::Http(Ok(_)), Pending::Call) => Err("internal error: an HTTP reply completed a call".into()),
+            (Answer::Http(Ok(_)), Pending::Call { .. }) => Err("internal error: an HTTP reply completed a call".into()),
+        }
+    }
+}
+
+/// When the run ends, stop any call still running, so a host's thread can
+/// finish and close its process instead of outliving the run.
+impl Drop for LiveOracle<'_> {
+    fn drop(&mut self) {
+        let busy: Vec<String> = self
+            .inflight
+            .values()
+            .filter_map(|p| if let Pending::Call { key } = p { Some(key.clone()) } else { None })
+            .collect();
+        for key in busy {
+            self.interrupt(&key);
         }
     }
 }
@@ -236,13 +263,25 @@ impl<'a> Oracle for LiveOracle<'a> {
             .collect::<Result<_, _>>()?;
         let op = op.to_string();
         self.start_host(key)?.tx.send((rid, op, args)).map_err(|_| format!("the host for '{}' has stopped", key))?;
-        self.inflight.insert(rid, Pending::Call);
+        self.inflight.insert(rid, Pending::Call { key: key.to_string() });
         Ok(())
     }
 
-    /// Abandon a request. Its worker thread finishes on its own; the reply is discarded.
+    /// A live host's state is a running process, which can't be copied
+    /// faithfully (see `PythonKernel`). Forking in the machine alone would
+    /// hand out a second handle to the *same* process, which two workflow
+    /// nodes could then share, so it is refused instead.
+    fn fork(&mut self, key: &str) -> Result<(), String> {
+        Err(format!("'{}' is a live host, and live hosts cannot fork", key))
+    }
+
+    /// Abandon a request. An ask's worker thread finishes on its own and the
+    /// reply is discarded. A call's host is interrupted, so whatever it was
+    /// running doesn't go on running after the program has moved on.
     fn cancel(&mut self, rid: u64) {
-        self.inflight.remove(&rid);
+        if let Some(Pending::Call { key }) = self.inflight.remove(&rid) {
+            self.interrupt(&key);
+        }
     }
 
     fn next(&mut self, limit: Option<i64>) -> Result<Option<(i64, Vec<(u64, Completion)>)>, String> {
