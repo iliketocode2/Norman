@@ -28,13 +28,24 @@
 
   <h1 style="font-size:2.1rem">Demo</h1>
   <p class="lede">
-    CP-Agent: Ask a model for the next step, run the Python it writes, feed the output back, stop
-    when it says it is done. In this case, CP-Agent runs in
-    µNorman against <strong>Claude Sonnet&nbsp;5</strong> and a
-    <strong> Python process</strong>.
+    CP-Agent is a simple agent loop from Stefan Szeider&rsquo;s paper on agentic constraint
+    programming. The model is asked what to do next. If it replies with Python code, the code runs,
+    the output is added to the conversation, and the model is asked again. When the model replies
+    that it&rsquo;s done, the loop stops and returns its answer. I wrote this loop in µNorman and ran
+    it against <strong>Claude Sonnet&nbsp;5</strong> and a real <strong>Python process</strong>.
+    Below are the traces from three of those runs.
   </p>
 
-  <h2 id="run-1">1. A problem it solves in one step</h2>
+  <h2 id="reading">How to read a trace</h2>
+  <p>
+    Each line is one time the program reached outside of itself. An <code>ask</code> line is a call
+    to the model, and a <code>call</code> line is a call to the Python kernel. The columns are the
+    input and output tokens, the cost, when the call started and ended (counted from the start of
+    the run), and how it turned out. µNorman records these lines for every run automatically, so the
+    trace is a complete record of what the agent did and what it cost.
+  </p>
+
+  <h2 id="run-1">1. A one-step problem</h2>
   <p class="muted small">Task: <em>What is the sum of all multiples of 3 or 5 below 1000?</em></p>
 <pre class="syntax">┌─ sum of multiples of 3 or 5 below 1000
 │  ask   step     469 in    50 out   $0.001438    182ms → 2845ms   ok
@@ -45,12 +56,14 @@
 │  spent $0.002726 of the $0.50 budget in 4695ms
 └─ answer: <span class="lit">"233168"</span></pre>
   <p>
-    The model wrote Python, the kernel ran it, and the output came back as the next message in the
-    context. Note the shape of the second ask: 524 input tokens against the first one's 469, because
-    the conversation grew by the code and its output.
+    The model wrote one piece of Python, the kernel ran it, and the output was added to the
+    conversation. That&rsquo;s why the second ask sent 524 input tokens instead of 469: the
+    conversation now included the code and its output. The model then replied that it was done, with
+    the answer 233168, which is correct. The whole run cost about a quarter of a cent and took under
+    5 seconds.
   </p>
 
-  <h2 id="run-2">2. A problem that needs it to check its own work</h2>
+  <h2 id="run-2">2. A word problem</h2>
   <p class="muted small">Task: <em>A farmer has chickens and cows, 30 heads and 74 legs. How many of each? Work it out with code and check your answer.</em></p>
 <pre class="syntax">┌─ chickens and cows
 │  ask   step     489 in   130 out   $0.002278    150ms → 3336ms   ok
@@ -60,9 +73,14 @@
 │  2 model calls, 1 kernel calls
 │  spent $0.004124 of the $0.50 budget in 4929ms
 └─ answer: <span class="lit">"7 cows and 23 chickens (7*4+23*2=74 legs, 7+23=30 heads)."</span></pre>
+  <p>
+    I asked the model to check its answer, so I expected more rounds than in the first problem.
+    Instead, it wrote one piece of code that solved the problem and checked the result at the same
+    time, then gave its answer. The answer is right: 23 chickens and 7 cows.
+  </p>
 
-  <h2 id="run-3">3. The same agent, given less than one step&rsquo;s worst case</h2>
-  <p class="muted small">The identical program and problem, under a cap of $0.002 instead of $0.50.</p>
+  <h2 id="run-3">3. The same problem with too little money</h2>
+  <p class="muted small">The same program and the same first problem, but with a budget of $0.002 instead of $0.50.</p>
 <pre class="syntax">┌─ the same task, capped at $0.002
 │
 │  0 model calls, 0 kernel calls
@@ -71,35 +89,36 @@
 
    the cap held: spent $0.00 of $0.002</pre>
   <p class="muted small">
-    The trace is reproduced as captured. Its summary line says &ldquo;$0.50 budget&rdquo; because the
-    test&rsquo;s report printed that label for every run; the limit for this run was $0.002. The
-    report has since been fixed.
+    (Ignore the &ldquo;$0.50 budget&rdquo; in the summary line. That was a labeling bug in my test
+    report, which I&rsquo;ve since fixed. The real limit for this run was $0.002.)
   </p>
   <p>
-    <strong>Zero model calls, and nothing spent.</strong> Before any call, <code>ask</code> reserves
-    the worst case — the input it is about to send, plus the largest answer the type allows, plus the
-    thinking allowance. For one CP-Agent step that is about $0.04, which does not fit $0.002, so the
-    model was never contacted.
+    <strong>Nothing was spent, and the model was never called.</strong> Before every model call,
+    µNorman sets aside the most that call could possibly cost: the tokens it&rsquo;s about to send,
+    plus the longest answer the <code>Step</code> type allows, plus room for the model to think. For
+    one CP-Agent step, that worst case is about $0.04. That doesn&rsquo;t fit in $0.002, so µNorman
+    refused the call before sending anything, and the run failed with <code>OverBudget</code>.
   </p>
   <p>
-    Be clear about what this run shows: a refusal to <em>start</em>, not a budget stopping a loop
-    partway through. The partway case is in the program below: under a $0.041 limit, two rounds run,
-    and the third ask is refused before it is sent, having spent about $0.0005. That also shows the
-    price of the guarantee: the check is against the worst case, so a budget stops a run well before
-    the money it has actually spent reaches the limit.
+    This run shows the agent refusing to start, not stopping partway through. The last test in the
+    program below shows the partway case: with a $0.041 limit, two rounds run, and the third model
+    call is refused before it&rsquo;s sent. By then the run has only spent about $0.0005. That&rsquo;s
+    the tradeoff of checking against the worst case. The budget can never be overspent, but a run can
+    stop long before its actual spending gets close to the limit.
   </p>
   <p>
-    A library can check a budget too. What µNorman adds is that the check can&rsquo;t be skipped: it
-    happens before the money is spent, on every effect, because the program has no door to the
-    outside except <code>ask</code> and <code>call</code>.
+    You could add a budget check like this to an agent written in Python. The difference is that in
+    µNorman the check can&rsquo;t be forgotten or skipped. A program can only reach the outside world
+    through <code>ask</code> (the model) and <code>call</code> (a tool), and both check the budget
+    before anything happens.
   </p>
 
-  <h2 id="same-program">The same program, running here</h2>
+  <h2 id="same-program">Try the same program here</h2>
   <p>
-    The program below is the one that produced those traces; the tests at the end are scripted. The
-    only difference is the host: live, a real model and a real Python process; here, a script and a
-    simulated clock. Press
-    <strong>Run</strong> — this executes in your browser, free and offline.
+    This is the program that produced the traces above, with some scripted tests added at the end.
+    In the live runs, it talked to a real model and a real Python process. Here, a script plays both
+    parts and the clock is simulated, so it&rsquo;s free and runs offline in your browser. Press
+    <strong>Run</strong> to try it.
   </p>
   <div class="example">
     <div class="head"><span class="title">cp-agent.nrm</span>
@@ -116,8 +135,9 @@
 will be shown its output. Reply with Done when you have the answer. Write
 small steps, and print what you want to see.")
 
-;; A tool error becomes an observation the model can read. Nothing else does:
-;; running out of money is not something to explain to a model.
+;; If the Python code fails, the error goes back to the model so it can fix
+;; its code. Running out of money or time doesn't go back to the model: it
+;; stops the program.
 (define observe (k code)
   (catch (call k exec code) e
     (case e [(ToolError m) m] [_ (fail e)])))
@@ -150,7 +170,7 @@ small steps, and print what you want to see.")
   (check-expect (cp-agent claude py "What is the sum of 0 to 100?") "5050")
   (check-within (cp-agent claude py "What is the sum of 0 to 100?") ([time 6s])))
 
-;; A kernel error is not a crash: the message goes back to the model.
+;; The first piece of code fails, the model sees the error, and the second works.
 (script recovering
   [step    (reply "{\"tag\":\"Exec\",\"code\":\"print(undefined_name)\"}") (out 20) (latency 2s)
            (reply "{\"tag\":\"Exec\",\"code\":\"print(42)\"}")             (out 18) (latency 2s)
@@ -161,8 +181,8 @@ small steps, and print what you want to see.")
 (under ([script recovering] [cost $1.00] [time 5min])
   (check-expect (cp-agent claude py "Print 42.") "42"))
 
-;; The budget stops the loop partway. Each ask reserves its worst case, about
-;; $0.04; under $0.041 two rounds fit, and the third ask is refused unsent.
+;; Stopping partway: each model call sets aside about $0.04 for its worst case,
+;; so with a $0.041 limit two rounds run and the third call is refused unsent.
 (script grinding
   [step    (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)
            (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)
@@ -180,39 +200,41 @@ small steps, and print what you want to see.")
   (check-fail   (capped $0.041) OverBudget)
   (check-within (capped $0.041) ([cost $0.001] [time 2s])))</code></pre>
     <div class="result"></div>
-  </div>
 
-  <h2 id="shows">What these runs show</h2>
+  <h2 id="shows">What these runs show (and what they don&rsquo;t)</h2>
   <ul>
-    <li><strong>A language cannot make a model smarter.</strong> Answer quality comes from the model and the prompt. CP-Agent's own paper found a 50-line prompt beat an 800-line one, and that imposing structure on the loop <em>hurt</em>. Scaffolding is not free.</li>
-    <li><strong>Nothing here is cheaper or faster than the obvious alternative.</strong> What µNorman changes is that the cost is <em>bounded in advance</em> and <em>recorded</em>, not that it is lower.</li>
-    <li><strong>The concurrency argument is untested here.</strong> µNorman's dataflow <code>workflow</code> finds the critical path — 40 seconds against 60 for the same four calls — but that is <a href="./#tour">simulated</a>. CP-Agent is sequential and exercises none of it.</li>
+    <li><strong>µNorman doesn&rsquo;t make the model any smarter.</strong> The quality of the answers comes from the model and the prompt. The CP-Agent paper even found that a 50-line prompt worked better than an 800-line one, and that adding more structure to the loop made the results worse.</li>
+    <li><strong>Nothing here is cheaper or faster than writing the same agent in Python.</strong> What µNorman changes is that the cost is capped before the run starts and every call is recorded.</li>
+    <li><strong>These runs don&rsquo;t test concurrency.</strong> µNorman can run independent steps at the same time, and in a <a href="./#tour">simulated example</a> four calls finish in 40 seconds instead of 60. But CP-Agent is a sequential loop, so none of that shows up here.</li>
   </ul>
   <p>
-    The experiment that <em>would</em> settle it is a known one: port CP-Agent, run it against the
-    Python original on a slice of CP-Bench, and measure task success, dollars per solved problem, and
-    wall-clock time. That has not been done. Until it is, &ldquo;µNorman improves performance&rdquo;
-    is a hypothesis, and this page is careful not to pretend otherwise.
+    To really measure performance, I would run my µNorman version of CP-Agent side by side with the
+    original Python version on part of the CP-Bench benchmark, and compare how many problems each
+    solves, the cost per solved problem, and how long each takes. I haven&rsquo;t done that yet, so I
+    can&rsquo;t claim that µNorman makes agents perform better.
   </p>
   <p>
-    What these runs do support is a narrower claim, and the one the project actually makes:
-    <strong>µNorman does not make an agent better, it makes an agent's behaviour knowable and
-    bounded.</strong>
+    What these runs do show is narrower: <strong>with µNorman, you know exactly what an agent did and
+    what it cost, and you know it can&rsquo;t spend more than you allowed.</strong>
   </p>
 
   <h2 id="yourself">Running it yourself</h2>
-  <p>Local execution with the example file:</p>
+  <p>To run the scripted tests on your own machine (free, no API key needed):</p>
   <pre class="syntax">cargo run -- examples/cp-agent.nrm</pre>
-  <p>Live, with <code>ANTHROPIC_API_KEY</code> set and Python on the PATH — a few cents:</p>
+  <p>
+    To run against the real model and a real Python process, set <code>ANTHROPIC_API_KEY</code> and
+    make sure Python is on your PATH. Each run costs a few cents:
+  </p>
   <pre class="syntax">cargo test --test live_cp_agent -- --ignored --nocapture
 cargo run -- --live --python python3 --trace examples/cp-agent.nrm</pre>
   <p>
-    <strong>There is no sandbox.</strong> The Python kernel runs whatever the model writes, with your
-    permissions, on your machine. Run it in a throwaway container or VM.
+    <strong>Warning: there is no sandbox.</strong> The Python kernel runs whatever code the model
+    writes, with your permissions, on your machine. Run it inside a container or virtual machine you
+    don&rsquo;t mind losing.
   </p>
   <p>
     <a href="https://github.com/iliketocode2/Norman/blob/main/LIVE-SETUP.md">LIVE-SETUP.md</a>
-    covers getting a key and capping the spend.
+    explains how to get an API key and how to cap your spending.
   </p>
 
 </main>
