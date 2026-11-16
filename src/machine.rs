@@ -1261,8 +1261,8 @@ impl<'a> Machine<'a> {
         });
         self.threads[tid].status = Status::Waiting;
         self.threads[tid].waiting_on = Some(wid);
-        for i in 0..n {
-            if def.nodes[i].deps.is_empty() {
+        for (i, node) in def.nodes.iter().enumerate() {
+            if node.deps.is_empty() {
                 self.spawn(wid, i);
             }
         }
