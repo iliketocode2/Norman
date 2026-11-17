@@ -139,7 +139,27 @@ h2:hover a.anchor, h3:hover a.anchor { opacity: 1; }
 
 .hero { padding: 1rem 0 0.5rem; }
 .hero h1 { font-size: 2.8rem; }
+.hero .subtitle { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; margin: 0 0 0.5rem; }
 .hero .tagline { font-family: var(--serif); font-size: 1.3rem; color: var(--fg-soft); margin-bottom: 1.5rem; }
+.hero .version {
+  display: inline-block; vertical-align: middle; margin-left: 0.6rem;
+  font-family: var(--mono); font-size: 0.85rem; font-weight: 500; letter-spacing: 0;
+  padding: 0.2rem 0.6rem; border-radius: 99px; text-decoration: none;
+  background: var(--accent-soft); color: var(--accent); border: 1px solid transparent;
+}
+.hero .version:hover { border-color: var(--accent); }
+
+/* Floating GitHub link: pinned to the viewport corner on every screen size. */
+a.gh-float {
+  position: fixed; z-index: 30;
+  right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom));
+  width: 3rem; height: 3rem; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.15);
+  transition: color 0.15s, border-color 0.15s, transform 0.15s;
+}
+a.gh-float:hover { color: var(--accent); border-color: var(--accent); transform: translateY(-2px); }
 .badges { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.25rem 0 0; }
 .badge {
   font-size: 0.8rem; padding: 0.2rem 0.6rem; border-radius: 99px;

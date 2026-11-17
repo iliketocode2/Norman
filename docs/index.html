@@ -14,12 +14,10 @@
   <div class="wrap">
     <a class="brand" href="./">µNorman</a>
     <nav>
-      <a href="#tour">Tour</a>
-      <a href="watch.html">Demo</a>
-      <a href="reference.html">Reference</a>
+      <a href="./">About</a>
+      <a href="demo.html">Demo</a>
+      <a href="docs.html">Docs</a>
       <a href="playground.html">Playground</a>
-      <a href="#guarantees">Guarantees</a>
-      <a href="https://github.com/iliketocode2/Norman">GitHub</a>
       <button class="theme" type="button" aria-label="Switch between light and dark">☾</button>
     </nav>
   </div>
@@ -28,22 +26,15 @@
 <main class="wrap">
 
   <section class="hero">
-    <h1>A small language for AI&nbsp;agents</h1>
+    <h1>µNorman <a class="version" href="https://github.com/iliketocode2/Norman/releases/tag/v0.2.0" title="Current release">v0.2.0</a></h1>
+    <p class="subtitle">A small language for AI&nbsp;agents</p>
     <p class="tagline">Typed model calls, budgets in money and time, tools, and concurrency.</p>
   </section>
 
-  <div class="note">
-    <span class="label">How this page works</span>
-    <p>
-      The interpreter on this page is the same Rust program as the command-line one, compiled to
-      WebAssembly. Every example below is repeatable and will run on your machine.
-    </p>
-  </div>
-
-  <h2 id="why">What a language can do that a library can&rsquo;t</h2>
+  <h2 id="why">Background</h2>
   <p>
-    Six papers inspired this design. I believe that each points at something that belongs in a language rather than
-    in a library.
+    Different studies and previous works inspired the idea for µNorman. They all identified
+    shortcomings and existing problems with current agentic work:
   </p>
   <table>
     <thead><tr><th>Problem</th><th>What µNorman does</th></tr></thead>
@@ -60,13 +51,14 @@
     Note that most of these are enforced when the program <em>runs</em>. See <a href="#status">Status</a>.
   </p>
 
-  <h2 id="tour">A tour via examples</h2>
+  <h2 id="tour">An overview of the main capabilities of µNorman:</h2>
 
   <h3>1. Ask</h3>
   <p>
-    <code>ask</code> takes a model, the <strong>type</strong> of answer you want, and the context the
-    model sees. The answer comes back as a real value of that type, or the <code>ask</code> fails.
-    Context is an ordinary list you build and pass: nothing accumulates behind your back.
+    You give <code>ask</code> a model and the context it should see. You also name the
+    <strong>type</strong> of answer you want. If the reply fits that type, you get a real value back.
+    If it doesn&rsquo;t, the <code>ask</code> fails. The context is just a list you build yourself.
+    Nothing gets added to it without you knowing.
   </p>
   <div class="example">
     <div class="head"><span class="title">typed-ask.nrm</span>
@@ -98,10 +90,11 @@
 
   <h3>2. Handling Failure</h3>
   <p>
-    If a reply doesn&rsquo;t fit the type, or the provider is down, or the money or time runs out,
-    <code>ask</code> produces a <strong>failure</strong>: one of <code>Invalid</code>,
-    <code>ToolError</code>, <code>Refused</code>, <code>OverBudget</code>, <code>PastDeadline</code>
-    or <code>Raised</code>. Agents fail often, so failure is part of the language rather than a crash.
+    Agents fail a lot. The reply might not fit the type. The provider might be down. You might run
+    out of money or time. In each case <code>ask</code> gives back a <strong>failure</strong> instead
+    of crashing. There are six kinds: <code>Invalid</code>, <code>ToolError</code>,
+    <code>Refused</code>, <code>OverBudget</code>, <code>PastDeadline</code> and <code>Raised</code>.
+    You can catch any of them and decide what to do next.
   </p>
   <div class="example">
     <div class="head"><span class="title">failure.nrm</span>
@@ -132,10 +125,10 @@
 
   <h3>3. The budget can never be overspent</h3>
   <p>
-    Before calling the model, <code>ask</code> <strong>reserves</strong> the worst case: everything it
-    is about to send, plus the largest answer the type allows. If the reservation doesn&rsquo;t fit,
-    the model is never called and nothing is charged. This is why types carry size bounds &mdash; and
-    why the same program with an unbounded answer type is refused.
+    Before it calls the model, <code>ask</code> <strong>reserves</strong> the worst case. That means
+    the full prompt plus the longest answer the type allows. If that doesn&rsquo;t fit in the budget,
+    the model is never called and you pay nothing. This is why types have size limits. Leave the
+    limit off and the same question gets turned away.
   </p>
   <div class="example">
     <div class="head"><span class="title">budget.nrm</span>
@@ -165,9 +158,10 @@
 
   <h3>4. Agent Loop</h3>
   <p>
-    This is the CP-Agent design: ask for the next step, run any code it writes, feed the result back,
-    stop when it says it is done. Because the answer is a <em>choice</em>, the loop is an ordinary
-    <code>case</code>. The enclosing <code>budget</code> guarantees it stops.
+    This is the CP-Agent design. The model picks the next step. If it writes code, we run it and
+    show it the output. When it says it&rsquo;s done, we stop. The answer is a <em>choice</em>, so
+    the loop is a plain <code>case</code>. The <code>budget</code> around it makes sure it always
+    ends.
   </p>
   <div class="example">
     <div class="head"><span class="title">react.nrm</span>
@@ -210,10 +204,10 @@
 
   <h3>5. Concurrency</h3>
   <p>
-    A <code>workflow</code> is a set of named steps, and <strong>the dependencies come from the names
-    each step mentions</strong>. Any step whose inputs are ready runs immediately. Below, the same
-    four model calls take 40 seconds as a dataflow graph and 60 seconds forced into
-    &ldquo;run two, wait, run two&rdquo; &mdash; at identical cost. Concurrency saves time, never money.
+    A <code>workflow</code> is a set of named steps. <strong>A step waits only on the steps it
+    mentions by name.</strong> As soon as its inputs are ready, it runs. In the example below, four
+    model calls take 40 seconds this way. Forcing them into &ldquo;run two, wait, run two&rdquo;
+    takes 60 seconds. Both cost the same. Running things at once saves time, not money.
   </p>
   <div class="example">
     <div class="head"><span class="title">workflow.nrm</span>
@@ -259,10 +253,10 @@
 
   <h3>6. Laws</h3>
   <p>
-    Every construct has algebraic laws, so you know which rewrites preserve meaning. Just as useful
-    are the <strong>non-laws</strong>. A compiler would happily merge two identical
-    <code>ask</code>s into one &mdash; and change the answer, because a model is a relation, not a
-    function. µNorman therefore never caches a model answer automatically.
+    Every construct comes with algebraic laws. They tell you which rewrites are safe. The
+    <strong>non-laws</strong> matter just as much. A compiler might merge two identical
+    <code>ask</code>s into one. That would change the result, since the same question can get a
+    different answer each time. So µNorman never caches a model&rsquo;s answer on its own.
   </p>
   <div class="example">
     <div class="head"><span class="title">laws.nrm</span>
@@ -316,7 +310,7 @@
     </div>
     <div class="card">
       <h3>It runs!</h3>
-      <p>CP-Agent solves problems against Claude Sonnet 5 with a Python kernel. <a href="watch.html">The traces are here</a>, including the budget refusing to start a run it couldn&rsquo;t afford.</p>
+      <p>CP-Agent solves problems against Claude Sonnet 5 with a Python kernel. <a href="demo.html">The traces are here</a>, including the budget refusing to start a run it couldn&rsquo;t afford.</p>
     </div>
     <div class="card">
       <h3>No static checking yet</h3>
@@ -328,7 +322,7 @@
     </div>
     <div class="card">
       <h3>Performance is a hypothesis</h3>
-      <p>µNorman makes an agent&rsquo;s behaviour knowable and bounded. It does <em>not</em> make the model better, and nothing here has been measured against a baseline. <a href="watch.html#doesnt">What the traces don&rsquo;t show</a>.</p>
+      <p>µNorman makes an agent&rsquo;s behaviour knowable and bounded. It does <em>not</em> make the model better, and nothing here has been measured against a baseline. <a href="demo.html#doesnt">What the traces don&rsquo;t show</a>.</p>
     </div>
   </div>
 
@@ -360,6 +354,8 @@
     <span>The interpreter on this page is WebAssembly, compiled from the project&rsquo;s Rust source.</span>
   </div>
 </footer>
+
+<a class="gh-float" href="https://github.com/iliketocode2/Norman" aria-label="µNorman on GitHub" title="µNorman on GitHub"><svg viewBox="0 0 16 16" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
 
 <script type="module">
   import { activateExamples, activateChrome } from './norman.js';
