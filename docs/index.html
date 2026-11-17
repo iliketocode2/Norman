@@ -39,12 +39,12 @@
   <table>
     <thead><tr><th>Problem</th><th>What µNorman does</th></tr></thead>
     <tbody>
-      <tr><td>Model answers have no reliable shape</td><td>every <code>ask</code> names the <strong>type</strong> of answer it expects</td></tr>
-      <tr><td>Agents decide between options</td><td>answers can be <strong>choices</strong>, and programs branch on them</td></tr>
-      <tr><td>Cost and deadlines are hard limits</td><td><strong>money and time</strong> are built in; the budget can never be overspent</td></tr>
-      <tr><td>Latency compounds</td><td>one <strong>shared clock</strong> per budget scope, with deadlines everywhere</td></tr>
-      <tr><td>A failed step shouldn&rsquo;t rerun everything</td><td>failures are <strong>values</strong>, and <code>retry</code> wraps one step</td></tr>
-      <tr><td>Agents shouldn&rsquo;t touch tools they weren&rsquo;t given</td><td>tools are <strong>capabilities</strong>; a model can never create one</td></tr>
+      <tr><td>Unreliable answers</td><td>every <code>ask</code> names the <strong>type</strong> of answer it wants</td></tr>
+      <tr><td>Decisions</td><td>answers can be <strong>choices</strong> that the program branches on</td></tr>
+      <tr><td>Cost and deadlines</td><td><strong>money and time</strong> are built in, and the budget is never overspent</td></tr>
+      <tr><td>Latency</td><td>each budget has one <strong>shared clock</strong> with deadlines</td></tr>
+      <tr><td>Failed steps</td><td>failures are <strong>values</strong>, and <code>retry</code> wraps a single step</td></tr>
+      <tr><td>Tool access</td><td>tools are <strong>capabilities</strong> that a model can never create</td></tr>
     </tbody>
   </table>
   <p class="small muted">
@@ -322,7 +322,7 @@
     </div>
     <div class="card">
       <h3>Performance is a hypothesis</h3>
-      <p>µNorman makes an agent&rsquo;s behaviour knowable and bounded. It does <em>not</em> make the model better, and nothing here has been measured against a baseline. <a href="demo.html#doesnt">What the traces don&rsquo;t show</a>.</p>
+      <p>µNorman makes an agent&rsquo;s behaviour knowable and bounded. It does <em>not</em> make the model better, and nothing here has been measured against a baseline.</p>
     </div>
   </div>
 

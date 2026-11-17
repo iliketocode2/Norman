@@ -377,3 +377,32 @@ dl.forms dt {
 dl.forms dd { margin: 0.15rem 0 0 0; color: var(--fg-soft); font-size: 0.93rem; }
 
 .sig { font-family: var(--mono); font-size: 0.82rem; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- demo */
+
+.loop {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.5rem;
+  margin: 1.5rem 0 0.5rem; font-size: 0.9rem;
+}
+.loop span:not(.arrow) {
+  padding: 0.3rem 0.7rem; border-radius: 99px;
+  background: var(--accent-soft); color: var(--accent);
+}
+.loop span.end { background: var(--ok-soft); color: var(--ok); }
+.loop .arrow { color: var(--fg-faint); }
+
+.table-scroll { overflow-x: auto; }
+.table-scroll table td { white-space: nowrap; }
+
+details.run {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0 1rem; margin: 0.75rem 0;
+}
+details.run > summary {
+  cursor: pointer; padding: 0.8rem 0; font-weight: 620; list-style: none;
+}
+details.run > summary::-webkit-details-marker { display: none; }
+details.run > summary::before { content: "▸ "; color: var(--fg-faint); }
+details.run[open] > summary::before { content: "▾ "; }
+details.run > :last-child { margin-bottom: 1rem; }
+details.run .trace { margin-top: 0; font-size: 0.8rem; }
