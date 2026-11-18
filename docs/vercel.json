@@ -1,0 +1,21 @@
+{
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "redirects": [
+    {
+      "source": "/about",
+      "destination": "/",
+      "permanent": true
+    },
+    {
+      "source": "/watch",
+      "destination": "/demo",
+      "permanent": true
+    },
+    {
+      "source": "/reference",
+      "destination": "/docs",
+      "permanent": true
+    }
+  ]
+}
