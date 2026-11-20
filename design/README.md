@@ -338,6 +338,7 @@ Ramsey's point exactly: proofs are most useful when they fail.
 | [`08-implementation-notes.md`](08-implementation-notes.md) | how to run it; rule-to-code map; every deliberate deviation; what the tests found | work on the interpreter |
 | [`09-live-oracle.md`](09-live-oracle.md) | connecting `ask` to a real model: request mapping, types to JSON Schema, reservations from `count_tokens`, refusals, the real clock. **The default model is Claude Sonnet 5, set in one place so it can change.** | connect µNorman to a model API |
 | [`10-saga.md`](10-saga.md) | what writing SAGA's bi-level loop in µNorman found: typed `call`, a form for consulting a human, derived capabilities | see what the language is missing, and why |
+| [`11-consult.md`](11-consult.md) | **draft, not built:** `consult`, a typed form for asking a person; granted humans, `Declined`, approval that binds to what runs | see how a person fits into a program |
 | [`../LIVE-SETUP.md`](../LIVE-SETUP.md) | the operator's companion to `09`: getting an API key, setting it, capping the spend, and the plan for the first real call | actually run against a real model |
 
 Where documents disagree, the later one wins. Each correction is also noted at

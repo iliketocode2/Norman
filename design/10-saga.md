@@ -100,6 +100,12 @@ trace gains the result type at each call site.
 
 ### 2.2 There is no way to consult a human
 
+> **Designed in [`11`](11-consult.md)** (a draft, not built). Two things
+> changed from the proposal below. The person is a **granted human** passed to
+> `consult`, the way a model is passed to `ask`, which settles Q-D. And an
+> optional **proposal** is pre-filled as the answer, so approving it unchanged
+> returns exactly what was shown.
+
 SAGA's three autonomy levels — co-pilot, semi-pilot, autopilot — differ *only*
 in which module's output a person approves. µNorman has no form for this at
 all, so the example is autopilot by necessity, not by choice.
@@ -221,6 +227,9 @@ know about regardless.
 ---
 
 ## 5. Open questions
+
+> Q-C and Q-D are settled in [`11`](11-consult.md) §0 (decisions H2 and H3).
+> Q-E is still open.
 
 - **Q-C: is a `consult` charged money?** Argued above as time-only. But a
   program that consults a person fifty times is expensive in a way the budget
