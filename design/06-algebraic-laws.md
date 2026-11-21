@@ -296,6 +296,7 @@ budget*.
                   (ii) no node evaluates (remaining)             [see Q-A below]
                   (iii) no limit binds: on neither side is a reservation refused
                         or a request cut at a deadline           [see §7, #7]
+                  (iv) no two nodes consult the same human       [see §7, #11]
 
 (W2) (par e₁ e₂)  ≡$  (swap (par e₂ e₁))     where swap p = (Pair [fst (. p snd)] [snd (. p fst)])
         except when both fail at the same virtual instant (then ≡v)
@@ -306,12 +307,12 @@ budget*.
                      when (a) the names of bs₂ are distinct from those of bs₁,
                           (b) no node of bs₁ mentions a name bound by bs₂ (no capture),
                           (c) ownership holds across bs₁ ++ bs₂ together, and
-                          (d) (ii) and (iii) of W1 hold
+                          (d) (ii), (iii) and (iv) of W1 hold
                      (in the nested form, bs₁ and bs₂ run in separate phases, so they may share a kernel;
                       flattened, they may not)
 
 (W5) parallelizing:  (let* ([x e₁] [y e₂]) e)  ⊒t  (workflow ([x e₁] [y e₂]) e)
-                     when x ∉ fv(e₂), and (i), (ii) and (iii) of W1 hold
+                     when x ∉ fv(e₂), and (i)–(iv) of W1 hold
 
 (W6) work:  spent   (workflow …) = Σ spent(eᵢ) + spent(e)         (on success)
      span:  elapsed (workflow …) = longest path (by elapsed) through the DAG + elapsed(e)
@@ -332,6 +333,13 @@ budget*.
   limit, the workflow returns at 30 s and the `let*` fails `PastDeadline`.
   W4 and W5 inherit the premise. Without it, these laws still hold for
   values: *if both sides succeed, they return the same value.*
+- **Premise (iv) came with `consult`** (§7, #11). A person remembers what
+  they were shown, so the order in which two nodes put questions to the
+  same person can change the answers. The sequentialization fixes one
+  order; the workflow shows both questions at once. Unlike (iii), there is
+  no "same value if both succeed" fallback here: both sides can succeed with
+  different answers. W5 needs it too: parallelizing two consults of one
+  person changes what the person sees first.
 - **W4 and W5 are code improvements** (Lesson 2: "rewriting code to improve its
   performance, without changing its semantics"). They're the language's
   **parallelization optimizations**. The Step 5 test "40 s vs. 60 s" is W4 in
@@ -403,6 +411,32 @@ knowing a tool was involved. An **undeclared** operation is not covered here at
 all, because it is a checked run-time error rather than a failure — the program
 is wrong, not the world.
 
+### `consult`
+
+From [`11`](11-consult.md) §7. Each is checked on 150 random cases in
+[`tests/properties.rs`](../tests/properties.rs), with proposals of a nested
+type whose text includes quotes, backslashes, control characters and
+multi-byte characters.
+
+```
+(K1) under a script answering (approve):
+       (consult h τ p [propose v] s)  ≡  v                for askable τ and v ⊨ τ   ; binding, from S1
+(K2) (retry n (lambda () (fail (Declined r))))    ≡  (fail (Declined r))           ; spec: never retried
+     (attempt (lambda () (fail (Declined r))) c)  ≡  (fail (Declined r))
+(K3) spend(consult h τ p …) ≤ price_h,  and = 0 when h's grant states no price     ; resources
+(K4) no consult outlasts its scope: elapsed(budget ([time t]) (consult …)) ≤ t       ; Theorem 3
+```
+
+- **K1 is why a proposal must conform by round trip** (§7, #10). It's what
+  makes approval bind to the operation: an unchanged approval returns the
+  proposal exactly, so a program that runs the answer runs what was approved.
+- **K2 has a stated exception.** `retry` *does* consult again after
+  `Invalid`, because it can't tell a person's malformed answer from a
+  model's. With a host that validates in its form, that's rare, and telling
+  the two apart would mean tagging `Invalid` with its source.
+- **K3 holds on every path,** including cuts and fail-fast cancellations,
+  which charge a consult nothing.
+
 ### Non-laws
 
 Lesson 2 teaches that some properties look true and aren't. These are the
@@ -414,6 +448,9 @@ mistakes an optimizer or a refactoring tool would make.
 | **Retry commutes with budget:** `(budget r (retry n f))` = `(retry n (lambda () (budget r (f))))` | The left side shares one budget across *all* attempts. The right side gives *each* attempt `r`, capped only by the parent. Both are useful; they're different. | BUDGET |
 | **Catch commutes with budget:** `(catch (budget r e) x h)` = `(budget r (catch e x h))` | On the left, the handler runs *outside* the scope with the parent's remaining money. That's the fallback idiom (`02` §C6). On the right, it runs *inside*, where an `OverBudget` scope has nothing left. | BUDGET, CATCHFAIL |
 | **A failing workflow's cost doesn't depend on scheduling** | Fail-fast cancels siblings at different points (`04` §8). | WORKFLOW (fail-fast) |
+| **Merge identical consults** | A person can answer differently the second time, and the merged side asks them half as often. The same as CSE for `ask`. | CONSULTOK |
+| **Two consults of one person can be reordered** | Not even `≡v`: the second answer may depend on what the person just saw. This is why W1 needs premise (iv). | CONSULTOK (the human oracle remembers) |
+| **A proposal approved is a proposal executed** | Only if the program runs the answer. Nothing in the semantics forces it; the type checker will warn when a consult's answer is unused. | — |
 | **Moving an `ask` to a different site changes nothing** | Scripts and traces are keyed by site, and MCPP-style profiles are per site. The value is `≡v`, but the trace is not `≡`. | ASKOK (trace entry) |
 
 The first row is the most important. **Caching model answers is never an
@@ -481,6 +518,13 @@ Testing the laws found three more, after the interpreter existed:
 | 8 | the nested-retry law is false for negative counts | the side condition was missing after fix #1 | `m ≥ 0` and `n ≥ 0` |
 | 9 | A1 priced an ask without its schema, so A3 was false | the first real API call (`09` §6a): the schema was 478 of 538 input tokens | `|ctx| + |schema(τ)|` in A1; A3 and A4 separate the two monotonicity claims |
 
+Designing and building `consult` ([`11`](11-consult.md)) found two more:
+
+| # | Problem | Found by | Fix |
+|---|---|---|---|
+| 10 | a proposal that *validates* as τ need not read back as itself: `'potency` shows as `"potency"`, which validates as a string, so approving it would return a string, breaking K1 | mutation testing: removing the equality half of the check left every test passing, because the error tests ran against an empty script, which fails anyway | conformance is the round trip `validate_Θ(show v, τ) = v` (`04` §6.2); the error tests now run under a script in which the person *would* answer |
+| 11 | Theorem 4 and W1 are false when two nodes consult the same person, who remembers what they saw | reviewing the design: an earlier draft claimed a person's memory could be folded into the oracle relation, which contradicted its own non-law about reordering consults | premise (iv) in W1, W4, W5 and `04` Theorem 4 |
+
 This is Impcore §1.7's point in practice: "Proofs … are interesting primarily
 when they are wrong. Like a bug in a program, a wrong proof tells you that you
 made a mistake (in your language design, not your code)." Problem #7 is the
@@ -497,16 +541,16 @@ These are Lesson 2's four uses for properties, applied here:
   [`examples/step6-laws.nrm`](../examples/step6-laws.nrm). Because the laws
   quantify over scripted worlds, a random script *is* a random test case:
   [`tests/properties.rs`](../tests/properties.rs) checks C3, B1, B4, B5, the
-  `retry` laws, W1, W2, W5, `best-of`, `window`, `drop` and `filter` on 150
-  random scripts, budgets and inputs each. It also checks that it *finds* a
+  `retry` laws, W1, W2, W5, `best-of`, `window`, `drop`, `filter` and the
+  `consult` laws K1–K4 on 150 random scripts, budgets and inputs each. It also checks that it *finds* a
   counterexample to each of the three false laws of §7 (#6–#8). That shows
   the generator reaches the cases that matter, so a passing law means
   something.
 - **Refactoring.** C3, W2, W3 and nested `retry`.
 - **Code improvement.** W4 and W5 (parallelization), and A3 (narrowing types to
   shrink reservations, with the stated trade-off).
-- **Specification.** B4, the `retry` budget properties and A1. These are the
-  contracts that future users rely on without reading `04`.
+- **Specification.** B4, the `retry` budget properties, A1, K2 and K3. These
+  are the contracts that future users rely on without reading `04`.
 
 ---
 

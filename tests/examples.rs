@@ -59,6 +59,13 @@ fn cp_agent_tests_all_pass() {
 }
 
 #[test]
+fn consult_tests_all_pass() {
+    let s = load("examples/consult.nrm");
+    assert!(s.total >= 52, "expected at least 52 tests, found {}", s.total);
+    assert!(s.all_passed(), "{} of {} consult tests passed", s.passed, s.total);
+}
+
+#[test]
 fn scripted_oracle_tests_all_pass() {
     let s = load("examples/oracle-scripted.nrm");
     assert!(s.total >= 10, "expected at least 10 tests, found {}", s.total);
@@ -70,6 +77,6 @@ fn deliberately_wrong_tests_all_fail() {
     let mut interp = Interp::new();
     interp.verbose = false;
     let s = interp.load_file(Path::new("tests/must-fail.nrm")).expect("file loads");
-    assert_eq!(s.total, 8);
+    assert_eq!(s.total, 11);
     assert_eq!(s.passed, 0, "a deliberately wrong test passed: the suite can't tell right from wrong");
 }

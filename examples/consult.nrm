@@ -1,0 +1,283 @@
+;;; consult.nrm: Step 5 for `consult`, the form for asking a person
+;;; (design/11-consult.md). Every rule of §2.2 has a test, and so do the laws
+;;; K1-K4 and the library examples of §6. No person is needed: in scripted
+;;; mode a script answers for them (§4.2).
+
+(grant reviewer (human))                    ; time only (H2)
+(grant paid     (human [price $2.00]))      ; a priced reviewer
+(grant claude   (model [think 0]))
+
+(datatype Kind
+  [Maximize (weight Num)]
+  [Filter])
+(record Objective (name Sym) (kind Kind))
+
+(val objs (list (Objective [name 'potency]  [kind (Maximize 3)])
+                (Objective [name 'toxicity] [kind Filter])))
+
+;; Money and time spent by a thunk, whether it succeeds or fails.
+(define spent (thunk)
+  (let* ([c0 (. (remaining) cost)]
+         [_  (catch (thunk) e e)]
+         [c1 (. (remaining) cost)])
+    (- c0 c1)))
+
+(define elapsed (thunk)
+  (let* ([t0 (. (remaining) time)]
+         [_  (catch (thunk) e e)]
+         [t1 (. (remaining) time)])
+    (- t0 t1)))
+
+(define review (h) (lambda ()
+  (consult h (List Objective 4) "Approve, edit or decline these objectives." (propose objs) 'review)))
+
+(define question (h) (lambda ()
+  (consult h (Text 40) "Which objective should I drop?" 'triage)))
+
+;;; ==================================================================
+;;; CONSULTOK: the answer is validated against τ and returned.
+
+(script answers
+  [triage (answer "\"toxicity\"") (latency 5min)]
+  [review (answer "[{\"name\":\"potency\",\"kind\":{\"tag\":\"Filter\"}}]") (latency 10min)])
+
+(under ([script answers] [cost $1.00] [time 1h])
+  (check-expect ((question reviewer)) "toxicity")
+  (check-expect (elapsed (question reviewer)) 5min)              ; the person's time is the clock's
+  (check-expect (spent (question reviewer)) $0)                  ; and costs no money (H2)
+  ;; An edited proposal comes back edited: the program runs the answer.
+  (check-expect ((review reviewer)) (list (Objective [name 'potency] [kind Filter]))))
+
+;;; ==================================================================
+;;; K1: an unchanged approval returns exactly the proposal (from S1).
+
+(script approves
+  [review (approve) (latency 2min)])
+
+(under ([script approves] [cost $1.00] [time 1h])
+  (check-expect ((review reviewer)) objs)
+  (check-equiv  ((review reviewer)) objs 'value))
+
+;;; A proposal of every shape round-trips, including Text with JSON's
+;;; awkward characters.
+
+(script approves-text [quote (approve) (latency 1s)])
+
+(under ([script approves-text] [cost $1.00] [time 1h])
+  (check-expect (consult reviewer (Text 100) "Post this?" (propose "Say \"hi\"\n\ttab") 'quote)
+                "Say \"hi\"\n\ttab"))
+
+;;; ==================================================================
+;;; CONSULTDECLINED: a refusal is a failure carrying its reason, and a
+;;; priced reviewer is charged, because their time was spent.
+
+(script declines
+  [review (decline "These ignore cost.") (latency 1min)])
+
+(under ([script declines] [cost $5.00] [time 1h])
+  (check-fail   ((review reviewer)) (Declined _))
+  (check-expect (catch ((review reviewer)) e e) (Declined "These ignore cost."))
+  (check-expect (spent (review paid)) $2.00))
+
+;;; ==================================================================
+;;; CONSULTINVALID: an answer that doesn't fit τ is Invalid, and charged.
+
+(script garbled
+  [triage (answer "\"this answer is far too long to fit in forty bytes\"") (latency 1min)])
+
+(under ([script garbled] [cost $5.00] [time 1h])
+  (check-fail   ((question reviewer)) (Invalid _))
+  (check-expect (spent (question paid)) $2.00))
+
+;;; ==================================================================
+;;; CONSULTEXPIRED and CONSULTUNAFFORDABLE: nobody is asked, nothing is
+;;; charged. The script is empty, so asking anyone would be a checked error:
+;;; these tests pass only because no person is consulted.
+
+(script silent)
+
+(under ([script silent] [cost $1.00] [time 1h])
+  (check-fail   (budget ([time 0s]) ((question reviewer))) PastDeadline)
+  (check-fail   ((question paid)) OverBudget)                    ; $2.00 > $1.00
+  (check-expect (spent (question paid)) $0)
+  (check-expect (elapsed (question paid)) 0s))
+
+;;; ==================================================================
+;;; CONSULTLATE: cut at the deadline, and NOT charged (§2.2), unlike ASKLATE.
+
+(script slow
+  [triage (answer "\"toxicity\"") (latency 2h)])
+
+(under ([script slow] [cost $5.00] [time 1h])
+  (check-fail   ((question paid)) PastDeadline)
+  (check-expect (elapsed (question paid)) 1h)                    ; cut at the deadline
+  (check-expect (spent (question paid)) $0))                     ; the reservation is released
+
+;;; ==================================================================
+;;; Checked run-time errors: mistakes in the program or the test, not
+;;; failures of the world, so no handler sees them.
+
+(script approve-nothing [triage (approve) (latency 1s)])
+(script wrong-entry     [triage (reply "\"x\"") (latency 1s)])
+
+;; Under this script, a person WOULD answer every one of these sites. So each
+;; test below can pass only through the error it names. (Run under an empty
+;; script, an exhausted script would raise a checked error too, and every one
+;; of them would pass whether or not the check it names exists. A mutation of
+;; the conformance check found exactly that.)
+(script would-answer
+  [review (approve) (latency 1s)]
+  [n      (approve) (latency 1s)]
+  [p      (approve) (latency 1s)]
+  [any    (answer "1") (latency 1s)]
+  [hi     (answer "\"x\"") (latency 1s)])
+
+(under ([script would-answer] [cost $1.00] [time 1h])
+  ;; A proposal that doesn't conform to τ (§2.2): caught before anyone is asked.
+  (check-error (consult reviewer (List Objective 1) "Approve?" (propose objs) 'review))   ; two > one
+  (check-error (consult reviewer Num "Approve?" (propose "seven") 'n))
+  ;; It validates as Text, but reads back as a string, not the symbol: an
+  ;; approval would return something other than what was proposed, so K1
+  ;; would fail. Conformance is the round trip, not validation alone.
+  (check-error (consult reviewer (Text 20) "Approve?" (propose 'potency) 'p))
+  (check-error (catch (consult reviewer Num "Approve?" (propose "seven") 'n) e 0))  ; not catchable
+  ;; Premise order: a malformed proposal is the program's mistake whatever the
+  ;; clock says, so it is an error even past the deadline, not PastDeadline.
+  (check-error (budget ([time 0s]) (consult reviewer Num "Approve?" (propose "seven") 'n)))
+  (check-error (consult reviewer Any "Anything?" 'any))           ; τ must be askable (§1.3)
+  (check-error (consult claude (Text 10) "Hi?" 'hi))              ; a model is not a person
+  (check-error (consult reviewer (Text 10) 'not-text 'hi))        ; the prompt is Text
+  (check-error (show reviewer)))                                  ; a human can't be shown
+
+;; Controls: the same sites, well-formed, do answer. Without these, the
+;; errors above could come from a broken script rather than from the checks.
+(under ([script would-answer] [cost $1.00] [time 1h])
+  (check-expect (consult reviewer (List Objective 2) "Approve?" (propose objs) 'review) objs)
+  (check-expect (consult reviewer Num "Approve?" (propose 7) 'n) 7)
+  (check-expect (consult reviewer Sym "Approve?" (propose 'potency) 'p) 'potency)
+  (check-expect (consult reviewer Num "Anything?" 'any) 1)
+  (check-expect (consult reviewer (Text 10) "Hi?" 'hi) "x"))
+
+(under ([script silent] [cost $1.00] [time 1h])
+  (check-error ((question reviewer))))                            ; exhausted script
+
+(under ([script approve-nothing] [cost $1.00] [time 1h])
+  (check-error ((question reviewer))))                            ; nothing was proposed
+
+(under ([script wrong-entry] [cost $1.00] [time 1h])
+  (check-error ((question reviewer))))                            ; a model's reply, not a person's
+
+;;; ==================================================================
+;;; K2: retry and attempt never recover Declined...
+
+(script declines-then-approves
+  [review (decline "No.") (latency 1min)
+          (approve)       (latency 1min)])
+
+(under ([script declines-then-approves] [cost $1.00] [time 1h])
+  (check-fail   (retry 3 (review reviewer)) (Declined _))
+  (check-expect (elapsed (lambda () (retry 3 (review reviewer)))) 1min)   ; asked once
+  (check-fail   (attempt (review reviewer) (lambda (x) #t)) (Declined _)))
+
+;;; ... but retry does consult again on Invalid, which K2 accepts (§2.2).
+
+(script garbled-then-approves
+  [review (answer "not json") (latency 1min)
+          (approve)           (latency 1min)])
+
+(under ([script garbled-then-approves] [cost $1.00] [time 1h])
+  (check-expect (retry 1 (review reviewer)) objs))
+
+;;; ==================================================================
+;;; Workflows (§2.4, §5). Humans aren't stateful, so two nodes may consult
+;;; the same person concurrently.
+
+(script two-at-once
+  [triage (answer "\"toxicity\"") (latency 5min)]
+  [review (approve)               (latency 10min)])
+
+(under ([script two-at-once] [cost $1.00] [time 1h])
+  (check-expect (workflow ([a ((question reviewer))] [b ((review reviewer))]) (list a b))
+                (list "toxicity" objs))
+  (check-expect (elapsed (lambda () (par ((question reviewer)) ((review reviewer))))) 10min))
+
+;;; Fail-fast: a decline cancels its sibling, and the cancelled consult of
+;;; a priced reviewer is NOT charged (M-NODE-FAIL's consult case). Only the
+;;; decline's $2.00 is spent, not $4.00.
+
+(script decline-and-wait
+  [triage (decline "Busy.")      (latency 1min)]
+  [review (approve)              (latency 30min)])
+
+(under ([script decline-and-wait] [cost $10.00] [time 1h])
+  (check-fail   (par ((question paid)) ((review paid))) (Declined _))
+  (check-expect (spent (lambda () (par ((question paid)) ((review paid))))) $2.00)
+  (check-expect (elapsed (lambda () (par ((question paid)) ((review paid))))) 1min))
+
+;;; ==================================================================
+;;; §6: autonomy levels as library code.
+
+(datatype Autonomy [CoPilot] [SemiPilot] [AutoPilot])
+
+(define reviews-planner? (level) (case level [AutoPilot #f] [_ #t]))
+
+(define reviewed-objectives (level h objs)
+  (if (reviews-planner? level)
+      (consult h (List Objective 4)
+               "Approve, edit or decline the objectives for the next round."
+               (propose objs)
+               'review-objectives)
+      objs))
+
+(script co-approves  [review-objectives (approve) (latency 2min)])
+(script co-declines  [review-objectives (decline "These ignore cost.") (latency 1min)])
+
+(under ([script silent] [cost $1.00] [time 1h])
+  (check-expect (reviewed-objectives AutoPilot reviewer objs) objs))   ; nobody is asked
+
+(under ([script co-approves] [cost $1.00] [time 1h])
+  (check-expect (reviewed-objectives CoPilot   reviewer objs) objs)
+  (check-expect (reviewed-objectives SemiPilot reviewer objs) objs))
+
+(under ([script co-declines] [cost $1.00] [time 1h])
+  (check-fail (reviewed-objectives CoPilot reviewer objs) (Declined _)))
+
+;;; Refusal, then revision: each round asks the model for a NEW plan with the
+;;; person's reason in its context. The model call gets its own one-minute
+;;; budget, because the scope around it is long enough for a person (H7).
+
+(record Plan (title (Text 60)) (steps Num))
+
+(define plan-ctx (goal) (list (Message [role User] [content goal])))
+
+(define plan-with-review (h m ctx n)
+  (let* ([proposal (budget ([time 1min]) (ask m Plan ctx 'planner))])
+    (catch (consult h Plan "Approve this plan?" (propose proposal) 'approve)
+           err
+           (case err
+             [(Declined why)
+                (if (<= n 0)
+                    (fail err)
+                    (plan-with-review h m
+                      (append ctx (list (Message [role User] [content why])))
+                      (- n 1)))]
+             [_ (fail err)]))))
+
+(script revise
+  [planner (reply "{\"title\":\"Run every assay\",\"steps\":12}") (out 15) (latency 20s)
+           (reply "{\"title\":\"Run the cheap assays first\",\"steps\":5}") (out 15) (latency 20s)]
+  [approve (decline "Too expensive.") (latency 10min)
+           (approve)                  (latency 5min)])
+
+(under ([script revise] [cost $1.00] [time 2h])
+  (check-expect (plan-with-review reviewer claude (plan-ctx "Plan the screen.") 1)
+                (Plan [title "Run the cheap assays first"] [steps 5]))
+  (check-fail   (plan-with-review reviewer claude (plan-ctx "Plan the screen.") 0) (Declined _)))
+
+;;; H7's cost, shown: a slow model can't use up the person's hours.
+
+(script slow-model
+  [planner (reply "{\"title\":\"x\",\"steps\":1}") (out 5) (latency 5min)])
+
+(under ([script slow-model] [cost $1.00] [time 2h])
+  (check-fail (plan-with-review reviewer claude (plan-ctx "Plan.") 1) PastDeadline))

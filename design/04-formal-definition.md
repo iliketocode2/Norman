@@ -87,6 +87,7 @@ xdef      ::= (use file-name)
 
 host-spec ::= (model {[id string] | [in n] | [out n] | [ceiling n] | [think n]})
             | ((kernel | filesystem | http) {[op-name ty]})   ; each operation's result type
+            | (human {[price money]})                        ; a person (11); price per consult
             | (script Script-name {site-script})
             | (under ({config}) {unit-test})
             | unit-test
@@ -111,6 +112,8 @@ exp       ::= literal
             | (case exp {[pattern exp]})
             | (ask exp ty exp [quoted-symbol])          ; model, type, context, optional site
             | (call exp op-name {exp})                  ; capability, operation, arguments
+            | (consult exp ty exp [propose exp] [quoted-symbol])
+                                                        ; human, type, prompt, proposal, site (11)
             | (fail exp)
             | (catch exp variable-name exp)
             | (budget ({[cost exp] | [time exp]}) exp)
@@ -132,11 +135,13 @@ literal   ::= numeral | string | money | duration | #t | #f | quoted-symbol | '(
 
 **Reserved words:** `val define datatype record use grant script under
 check-expect check-assert check-error check-fail check-within check-equiv if let* lambda
-case ask call fail catch budget workflow begin par and or _`.
+case ask call consult fail catch budget workflow begin par and or _`.
 
 `cost` and `time` are **not** reserved. They occur only in fixed bracket
 positions (`[cost e]` in `budget`, `under` and `check-within`), and they're the
-field names of the predefined `Resources` record. An earlier draft reserved
+field names of the predefined `Resources` record. `propose` and `price` aren't
+reserved either, for the same reason (`[propose e]` in `consult`, `[price $…]`
+in a `human` grant). An earlier draft reserved
 them, which made `(. (remaining) cost)` a syntax error. Running the Step 5
 tests caught this.
 
@@ -173,6 +178,7 @@ Exp*    = LITERAL  (Value)
         | CASEX    (Exp scrutinee, Branchlist branches)
         | ASK      (Site site, Exp model, Type ty, Exp context)
         | CALL     (Exp cap, Name op, Explist actuals)
+        | CONSULT  (Site site, Exp human, Type ty, Exp prompt, Exp? proposal)
         | FAIL     (Exp)
         | CATCH    (Exp body, Name name, Exp handler)
         | BUDGET   (Exp cost, Exp time, Exp body)       ; an omitted limit becomes LITERAL(∞)
@@ -184,10 +190,11 @@ Bound   = UNBOUNDED | AT_MOST (int)
 Site    = a quoted symbol, or the source location "file:line:col"
 ```
 
-There are **sixteen expression forms**: the ten inherited from µScheme/ML, plus
-the six agentic forms from `01`/`02` (ASK, CALL, FAIL, CATCH, BUDGET,
-WORKFLOW). `let*`, `begin`, `par`, `and` and `or` are *not* here. They're
-sugar (§7).
+There are **seventeen expression forms**: the ten inherited from µScheme/ML,
+plus the six agentic forms from `01`/`02` (ASK, CALL, FAIL, CATCH, BUDGET,
+WORKFLOW), plus CONSULT, added by [`11`](11-consult.md) because a person is
+the one outside party neither `ask` nor `call` reaches. `let*`, `begin`,
+`par`, `and` and `or` are *not* here. They're sugar (§7).
 
 ### 3.1 Well-formedness checked by the parser
 
@@ -200,10 +207,11 @@ from syntax alone.
 3. **The dependency graph of each `workflow` is acyclic.** For node `xᵢ = eᵢ`,
    `deps(xᵢ) = fv(eᵢ) ∩ {x₁…xₙ}`, using `fv` from Figure 1.
 4. Patterns are flat, and each variable appears at most once per pattern.
-5. `ty` in an `ask` is **askable**: built only from Text, Num, Bool, Sym, List,
-   and datatype/record names whose fields are askable. `Any` is **not**
-   askable. That's the side condition that keeps capabilities unforgeable
-   (`01` §1c).
+5. `ty` in an `ask` or a `consult` is **askable**: built only from Text, Num,
+   Bool, Sym, List, and datatype/record names whose fields are askable. `Any`
+   is **not** askable. That's the side condition that keeps capabilities
+   unforgeable (`01` §1c): whatever a model or a person submits is validated
+   against an askable type, so it can't contain authority.
 
 ```
 fv(LITERAL v)              = ∅
@@ -218,6 +226,7 @@ fv(APPLY(e, es))           = fv(e) ∪ ∪ fv(eᵢ)
 fv(CASEX(e, bs))           = fv(e) ∪ ∪ (fv(eᵢ) − vars(pᵢ))
 fv(ASK(s, e_m, τ, e_c))    = fv(e_m) ∪ fv(e_c)
 fv(CALL(e, op, es))        = fv(e) ∪ ∪ fv(eᵢ)
+fv(CONSULT(s, e_h, τ, e_p, e_v?)) = fv(e_h) ∪ fv(e_p) ∪ fv(e_v)   (the last only if present)
 fv(FAIL e)                 = fv(e)
 fv(CATCH(e₁, x, e₂))       = fv(e₁) ∪ (fv(e₂) − {x})
 fv(BUDGET(e_c, e_t, e))    = fv(e_c) ∪ fv(e_t) ∪ fv(e)
@@ -274,8 +283,8 @@ variables. µNorman has neither, so it needs **one** value environment `ρ` like
   constructors or fields, and each constructor to its datatype. Expressions
   never change `Θ`, just as Impcore expressions never change `φ`. It's needed
   by CON, CASE, and `validate` in ASK.
-- **`W`**: the **world**. It's everything outside the program that `ask` and
-  `call` read or change:
+- **`W`**: the **world**. It's everything outside the program that `ask`,
+  `call` and `consult` read or change:
 
 ```
 W = ⟨ pool, deadline, now, hosts, oracle, trace ⟩
@@ -283,9 +292,10 @@ W = ⟨ pool, deadline, now, hosts, oracle, trace ⟩
   pool      remaining money (µ$) in the current budget scope
   deadline  absolute instant; shared by every branch in the scope   (03, Q4)
   now       the clock: real, or virtual in scripted mode             (03, Q3)
-  hosts     the private state behind each capability κ
+  hosts     the private state behind each capability κ, and the people η it can consult
   oracle    the relation that models answer by; live or scripted
-  trace     append-only list of ⟨site, path, model-or-cap, in, out, cost, δ, outcome⟩
+  trace     append-only list of ⟨site, path, model-or-cap-or-human, in, out, cost, δ, outcome⟩;
+            a consult's entry also records the prompt, the proposal and what the person said (§6.5)
 ```
 
 Notation: `W.pool` projects a component, `W[pool := c]` updates one, and
@@ -296,10 +306,10 @@ W ⊕ ⟨c, δ, t⟩  =  W[pool := W.pool − c, now := W.now + δ, trace := W.t
 
 charges money `c` and time `δ` and logs trace entry `t`.
 
-**Capabilities and models come from the host, never from the program.** The
-initial basis `ρ₀` contains the primitives, the predefined functions, and one
-binding for each `grant`. No expression form creates a `CAP` or `MODEL` value.
-§8 makes that a theorem.
+**Capabilities, models and humans come from the host, never from the
+program.** The initial basis `ρ₀` contains the primitives, the predefined
+functions, and one binding for each `grant`. No expression form creates a
+`CAP`, `MODEL` or `HUMAN` value. §8 makes that a theorem.
 
 ---
 
@@ -341,14 +351,33 @@ price_μ(nᵢₙ, nₒᵤₜ) = inₘ·nᵢₙ + outₘ·nₒᵤₜ  money for a
 |ctx|_μ                                  input tokens of ctx under μ's tokenizer
 max_out(μ, τ) = min(ceiling(μ), bound(τ))                                 (03, Q1)
 cost_κ(op)                               the declared up-front cost of op (usually 0)
+H ⊢ ⟨η, s, p, τ, v̂⟩ ⇝ ⟨answer j, δ⟩    the person η, shown prompt p and proposal v̂, submits JSON text j
+H ⊢ ⟨η, s, p, τ, v̂⟩ ⇝ ⟨decline r, δ⟩   ... or declines, giving reason r
+price_η                                  the human grant's price per consult (0 if none)
+v ⊨ τ                                    v conforms to τ: validate_Θ(show v, τ) = v
 reach(v)                                 stateful capabilities reachable from v (defined below)
 ```
+
+**The human oracle is not history-independent.** A model's provider treats
+each request on its own, so the model oracle's answer depends only on what
+it's sent. A person remembers what they were shown earlier in the run. The
+semantics doesn't model that memory; it only refuses to promise anything that
+would need its absence (Theorem 4's premise about humans, §8; premise (iv) of
+law W1 in `06`).
+
+**Conformance is a round trip, not validation alone.** There is no typing
+judgment at run time yet, so "`v` is a `τ`" is defined by the property `show`
+already guarantees. Validation alone isn't enough: the symbol `'potency`
+shows as `"potency"`, which validates as the *string* `"potency"`, so a
+`Sym` proposed as `Text` passes validation but doesn't read back as itself.
+Mutation testing found this (`06` §7, #10).
 
 `reach` follows **only the free variables** of a closure's body, never the
 whole closure environment:
 
 ```
 reach(CAP(κ))              = {κ} if κ is stateful, else ∅
+reach(HUMAN(η))            = ∅                                       ; like a model: not owned (11, H5)
 reach(CLOSURE(xs, e, ρ_c)) = ∪ { reach(ρ_c(y)) : y ∈ fv(e) − xs }   ; least fixed point, for recursive closures
 reach(K(v₁…vₙ)), reach(R{…}), reach(cons v v′) = ∪ of the components
 reach(anything else)       = ∅
@@ -514,6 +543,65 @@ Wₙ₊₁.hosts ⊢ ⟨κ, op, v₁…vₙ⟩ ⇝ ⟨ok v, H′, δ⟩     Wₙ
 CALLERROR (the host reports `err m`, giving `fail (ToolError m)`),
 CALLEXPIRED, CALLUNAFFORDABLE and CALLLATE follow the ASK pattern.
 
+#### CONSULT
+
+**A person is the third door to the outside** ([`11`](11-consult.md)). A
+`human` grant binds `HUMAN(η)`, which is passed to `consult` the way a model is
+passed to `ask`. The person is shown a prompt and, optionally, a proposal,
+and answers with a value of an askable type, or declines.
+
+```scheme
+(grant reviewer (human))                       ; time only
+(grant paid     (human [price $2.00]))         ; and a price per consult
+(consult reviewer (List Objective 4) "Approve, edit or decline these." [propose objs] 'review)
+```
+
+The premises are evaluated in order: human, prompt, then proposal.
+
+```
+⟨e_h, Θ, ρ, W⟩ ⇓ ⟨HUMAN(η), W₁⟩
+⟨e_p, Θ, ρ, W₁⟩ ⇓ ⟨p, W₂⟩                    p is Text
+⟨e_v, Θ, ρ, W₂⟩ ⇓ ⟨v, W₃⟩    v ⊨ τ           (only if a proposal is given; else W₃ = W₂)
+W₃.now < W₃.deadline
+ĉ = price_η ≤ W₃.pool
+W₃.hosts ⊢ ⟨η, s, p, τ, show v⟩ ⇝ ⟨answer j, δ⟩
+W₃.now + δ ≤ W₃.deadline
+validate_Θ(j, τ) = a
+────────────────────────────────────────────────────────────── (CONSULTOK)
+⟨CONSULT(s, e_h, τ, e_p, e_v), Θ, ρ, W⟩ ⇓ ⟨a, W₃ ⊕ ⟨ĉ, δ, t⟩⟩
+```
+
+| Rule | Replaced premise | Result | World |
+|---|---|---|---|
+| CONSULTEXPIRED | `W₃.now ≥ W₃.deadline` | `fail PastDeadline` | `W₃`: **nobody is asked, no charge** |
+| CONSULTUNAFFORDABLE | `ĉ > W₃.pool` | `fail OverBudget` | `W₃`: nobody is asked, no charge |
+| CONSULTDECLINED | the person `⇝ ⟨decline r, δ⟩` | `fail (Declined r)` | `W₃ ⊕ ⟨ĉ, δ, t⟩`: their time was spent |
+| CONSULTLATE | `W₃.now + δ > W₃.deadline` | `fail PastDeadline` | `W₃[now := deadline]` plus a trace entry: **cut, and not charged** |
+| CONSULTINVALID | `validate_Θ(j, τ)` undefined | `fail (Invalid j)` | `W₃ ⊕ ⟨ĉ, δ, t⟩` |
+
+Two situations are **checked run-time errors**, not failures: a proposal that
+doesn't conform (`v ⊨ τ` fails), which is a mistake in the program; and a
+consult with no person attached to answer it, which is the operator's
+configuration. A missing person must never look like a person saying no, so it
+can't be `Declined` (`11`, H3).
+
+Read these the way ASK's rules are read:
+
+- **The person is asked once, and only after the reservation succeeds.**
+- **A cut consult isn't charged,** unlike ASKLATE. A model's provider bills
+  for the tokens it generated before the cut; a person who never answered
+  delivered nothing. The same holds when fail-fast cancels a consult (`07`,
+  M-NODE-FAIL). Charging less than the reservation is always safe for
+  Theorem 1.
+- **An unchanged approval returns exactly the proposal.** The host pre-fills
+  the answer with `show v`, so by §7.3's round trip and the premise `v ⊨ τ`,
+  approving it unchanged yields `v` itself. This is law K1 (`06` §5): what a
+  person approves is what the program gets back, and so what it runs if it
+  runs the answer.
+- **`retry` doesn't recover `Declined`,** for the reason it doesn't recover
+  `Refused` (`09`, decision B). A program that revises its proposal and
+  consults again is making a new request, which is ordinary code.
+
 #### FAIL and CATCH
 
 ```
@@ -677,7 +765,8 @@ already proved about the core, with no new cases.
 (datatype Role    [System] [User] [Assistant] [Tool])
 (record   Message (role Role) (content Text))
 (datatype Failure [Invalid (raw Text)] [ToolError (message Text)] [Refused (category Sym)]
-                  [OverBudget] [PastDeadline] [Raised (reason Sym)])     ; Refused: 09, decision B
+                  [Declined (reason Text)]                               ; Refused: 09, decision B
+                  [OverBudget] [PastDeadline] [Raised (reason Sym)])     ; Declined: 11, H4
 (datatype Option  [None] [Some (value Any)])
 (record   Pair    (fst Any) (snd Any))
 (record   Resources (cost Any) (time Any))
@@ -772,9 +861,9 @@ Three things the law does not cover, each deliberate:
   are written in µNorman's own literal syntax — `$0.50`, `40s`, `∞` — bare at
   the top level, where a prompt should read naturally, and as JSON strings when
   nested.
-- **Capabilities, models and functions cannot be shown at all.** A checked
-  run-time error, not a failure. Authority must never reach a prompt, and a
-  function has no written form.
+- **Capabilities, models, humans and functions cannot be shown at all.** A
+  checked run-time error, not a failure. Authority must never reach a prompt,
+  and a function has no written form.
 - **The key `tag` is reserved.** A constructor with a field of that name would
   overwrite its own discriminator, so `show` refuses rather than producing JSON
   that silently means something else. Writing `show` is what found this; the
@@ -805,6 +894,9 @@ entries.
   `n ≤ max_out(μ, τ)` and prices are non-negative, the charge is at most
   `ĉ ≤ W₂.pool`. So `W′.pool ≥ 0`. Our obligation is met.
 - *Case ASKUNAFFORDABLE.* The world is unchanged. Our obligation is met.
+- *Case CONSULTOK, CONSULTDECLINED and CONSULTINVALID.* The charge is
+  `ĉ = price_η ≤ W₃.pool`. The other CONSULT rules charge nothing. Our
+  obligation is met.
 - *Case BUDGET.* By the induction hypothesis on the body,
   `W₄.pool ≥ 0` and `W₃.pool − W₄.pool` is the body's spend. Since
   `W₃.pool ≤ W₂.pool`, the parent's new pool
@@ -820,20 +912,32 @@ Impcore's "evaluating an expression can't create a new variable."
 
 The ASK case is the interesting one. `validate_Θ(j, τ)` produces only values
 of askable types (§3.1, rule 5), and those never contain `CAP`. So a model
-cannot hand the program authority, whatever text it emits.
+cannot hand the program authority, whatever text it emits. CONSULTOK is the
+same case with a person in place of the model: the answer is validated against
+an askable type, so it contains no `CAP`, `MODEL` or `HUMAN` either.
 
-**Theorem 3 (deadline safety).** No trace entry produced by ASKOK or CALLOK
-finishes after the deadline of its scope. It follows directly from the premise
+**Theorem 3 (deadline safety).** No trace entry produced by ASKOK, CALLOK,
+CONSULTOK or CONSULTDECLINED finishes after the deadline of its scope. It follows directly from the premise
 `now + δ ≤ deadline`, together with the fact that BUDGET only ever *shrinks*
 the deadline.
 
 **Theorem 4 (workflow determinism of value).** If the WORKFLOW rule derives
 `⟨v, W′⟩`, then for *every* topological order `π′` of the nodes, the
 sequentialization `(let* (π′-ordered bindings) e)` derives the same `v`,
-**provided no node evaluates `(remaining)`** and **no limit binds** (on
-neither side is a reservation refused or a request cut at a deadline). The
-proof uses the ownership
-premise and the statelessness of models. The `(remaining)` premise was missing
+**provided no node evaluates `(remaining)`**, **no limit binds** (on
+neither side is a reservation refused or a request cut at a deadline), and
+**no two nodes consult the same human**. The proof uses the ownership
+premise and the statelessness of models.
+
+The last premise was added with `consult` ([`11`](11-consult.md) §2.4). The
+proof needs every oracle a node consults to answer independently of what it
+was asked before. That's literally true of a model's provider, and false of a
+person, who remembers what they were shown, so reordering the nodes can change
+what a person answers. Humans aren't brought under the ownership premise
+instead, because two *sequential* consults depend on memory just as much:
+ownership forbids only concurrency, which is not the problem. A workflow that
+breaks the premise is allowed; it just falls outside the theorem, as one that
+reads `(remaining)` does. The `(remaining)` premise was missing
 from the first draft. Stating the theorem as law W1 in `06` exposed that it's
 false without it: a node that reads `(remaining)` observes how much its
 siblings have spent, which depends on scheduling. See `06`, question Q-A. The
@@ -865,7 +969,7 @@ Compare Ramsey's Table 1.5. The interpreter will be written in Rust (`01`).
 | `⟨e,Θ,ρ,W⟩ ⇓ ⟨r,W′⟩` | expression evaluation | `eval(&Exp, &TypeEnv, &Env, &mut World) -> Result<Value, Failure>` |
 | `⟨d,Θ,ρ,W⟩ → ⟨Θ′,ρ′,W′⟩` | definition evaluation | `evaldef(&Def, &mut TypeEnv, &mut Env, &mut World)` |
 | `O ⊢ … ⇝ …` | oracle | `trait Oracle` (`Live`, `Scripted`) |
-| `H ⊢ … ⇝ …` | capability hosts | `trait Host` |
+| `H ⊢ … ⇝ …` | capability hosts, and people | `trait Host`; a consult goes through `Oracle::issue_consult` |
 | `validate_Θ(j, τ)` | schema validation | `validate(&Json, &Type, &TypeEnv)` |
 | `max_out(μ, τ)` | output bound | `bound(&Type) -> Bytes` |
 | `reach(v)` | ownership check | `stateful_caps(&Value) -> Set<CapId>` |

@@ -27,11 +27,13 @@ Current results:
 | Strings and `show` ([`../examples/strings.nrm`](../examples/strings.nrm)) | 45 of 45 pass |
 | Typed grants ([`../examples/typed-tools.nrm`](../examples/typed-tools.nrm)) | 18 of 18 pass |
 | CP-Agent, scripted ([`../examples/cp-agent.nrm`](../examples/cp-agent.nrm)) | 6 of 6 pass |
+| `consult`, scripted ([`../examples/consult.nrm`](../examples/consult.nrm)) | 52 of 52 pass |
+| `consult`'s trace record and live-mode refusal ([`../tests/consult.rs`](../tests/consult.rs)) | 5 of 5 pass |
 | Live client against a local stub server ([`../tests/live_stub.rs`](../tests/live_stub.rs)) | 9 of 9 pass |
 | Live `call` against real hosts, including Python ([`../tests/live_tools.rs`](../tests/live_tools.rs)) | 12 of 12 pass |
-| Random tests of 13 laws ([`../tests/properties.rs`](../tests/properties.rs)) | 150 cases each, all pass |
+| Random tests of 17 laws ([`../tests/properties.rs`](../tests/properties.rs)) | 150 cases each, all pass |
 | The same harness on 3 false laws | finds a counterexample to each, as it must |
-| Must-fail suite ([`../tests/must-fail.nrm`](../tests/must-fail.nrm)) | 8 of 8 fail, as they must |
+| Must-fail suite ([`../tests/must-fail.nrm`](../tests/must-fail.nrm)) | 11 of 11 fail, as they must |
 | Real API calls ([`../tests/live_real.rs`](../tests/live_real.rs), [`../tests/live_cp_agent.rs`](../tests/live_cp_agent.rs)) | 6 tests, `#[ignore]`d; they spend money, and `cargo test` skips them |
 
 Every scripted run also checks Theorem 1′ (the budget invariant) in every
@@ -65,10 +67,14 @@ the event-by-event semantics implementable exactly.
 | `available(σ)`, `deadline*(σ)` | `Machine::available`, `Machine::deadline_star` over `Machine::chain` |
 | M-ASK-EXPIRED, M-ASK-REFUSED, M-ASK-ISSUE | `issue_ask`, in that order |
 | M-CALL-… | `issue_call` (`fork` on a kernel is native) |
+| CONSULT's premises; M-CONSULT-EXPIRED, -REFUSED, -ISSUE | frames `ConsultHuman`, `ConsultPrompt`, `ConsultProposal`, then `issue_consult` (askability and `v ⊨ τ` first, then the deadline, then the price) |
+| the human oracle `H ⊢ ⟨η, …⟩ ⇝ …` | `Oracle::issue_consult`; the scripted oracle answers from `answer`, `approve` and `decline` entries |
+| an uncharged cut or cancelled consult | `Machine::abandon_charge`, used by `cut` and `cancel` |
+| a consult's audit record (`04` §5) | `TraceEntry::consult`, a `ConsultRecord` |
 | M-TIME | `advance_time`, then `complete` for each request, in issue order |
 | M-WF-SHARED, M-WF-START | `start_workflow` (the ownership check comes first) |
 | M-NODE-DONE, M-WF-DONE, M-NODE-FAIL | `finish` |
-| cancellation, charged the reservation (07 §5) | `cancel` |
+| cancellation, charged the reservation (07 §5), except for a consult | `cancel` |
 | scheduler policy (least path; run until blocked) | `run_main` |
 | `reach(v)` via free variables | `Machine::reach`, using each closure's precomputed `fv` |
 | `validate_Θ`, `bound`, `askable` | [`src/types.rs`](../src/types.rs) |
@@ -81,8 +87,8 @@ the event-by-event semantics implementable exactly.
 
 Each item is deliberate and listed here so it isn't mistaken for a bug.
 
-1. **Askability is checked when an `ask` is evaluated,** not at parse time as
-   `04` §3.1 rule 5 says. A function may `ask` for a datatype that's defined
+1. **Askability is checked when an `ask` or `consult` is evaluated,** not at
+   parse time as `04` §3.1 rule 5 says. A function may `ask` for a datatype that's defined
    later in the file, so the check needs the Θ in force at run time. Failing
    it is a checked run-time error. Once the type checker exists, it moves to
    compile time.
@@ -138,6 +144,17 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
    loading `step6-laws.nrm` also reports `step5-examples.nrm`.
 10. **Pure computation is bounded by a step limit** (20 million steps), which
     is a checked run-time error (`07` §7).
+11. **There is no live host for a person yet.** `consult` is built in scripted
+    mode only. In live mode every consult is a checked run-time error ("no
+    person is attached"), which is H3's rule that a missing person never
+    looks like a person saying no. It differs from H3 in *when* the error
+    comes: `11` §4.1 says a run with an unbound human grant refuses to
+    **start**, but today it stops at the first consult, so anything the
+    program did before then has already happened, and been paid for. The
+    `--human` flag and its start-up check come with the live host.
+12. **A human's price is a money literal,** `[price $2.00]`, not an
+    expression. Grants are read before anything is evaluated, as a model
+    grant's prices are.
 
 ---
 
@@ -195,6 +212,19 @@ run-time error, so every scripted test checks Theorem 1′ in every state it
 reaches. On a live oracle, the check stops after an `over-reservation`,
 because the theorem's one assumption has failed (`07` §6).
 
+**Building `consult` found two more** (`06` §7, #10 and #11), and one of them
+was in the tests rather than the code. Every new test passed on the first
+run, so the implementation was deliberately broken to see whether they would
+notice. Charging cancelled consults was caught at once. Removing the equality
+half of the proposal check was not: the tests for checked errors ran under an
+empty script, and an exhausted script is itself a checked error (`05`,
+convention 5), so they passed whether or not the check existed. Moved under a
+script in which the person *would* answer, with a control test beside each,
+they catch it, and the case the gap was hiding (a `Sym` proposed as `Text`,
+which validates but doesn't read back as itself) is now tested. The other,
+Theorem 4's premise about humans (premise (iv) of law W1), was found by reviewing the design before any code
+was written.
+
 This is the arc Ramsey's process promises. Laws and tests written *before* the
 code found five design mistakes (`06` §7) and one flawed ownership rule (`05`).
 Running them found one more. Once the code was written, it agreed with the
@@ -212,13 +242,16 @@ specification on every other test.
 - **More hosts.** A filesystem capability; a sandboxed Python kernel (today's
   runs with the user's permissions); and a kernel that can `fork`.
 - **A read-eval-print loop,** for interactive use.
-- **The type and effect system** (Lesson 5). It makes askability, ownership
-  and the `(remaining)` side condition of law W1 into compile-time checks.
+- **The type and effect system** (Lesson 5). It makes askability, ownership,
+  and law W1's side conditions about `(remaining)` and consulting the same
+  human into compile-time checks, and it can warn when a consult's answer is
+  never used (`11` §8).
 - **Tests of the inherited forms** (LITERAL, VAR, IF, LET, LAMBDA, APPLY,
   CON, RECORD, FIELD, CASE) on their own, which `05` promised for Step 9.
   They're still tested only indirectly.
 - **More examples.** P3 (the committee) and P5 (ProofFlow) from `01`/`02` as
   runnable programs.
-- **The `consult` effect SAGA argues for** ([`10`](10-saga.md)), for the
-  decisions a human should approve. The other two changes it asked for, typed
-  grants and `show`, are done.
+- **A live host for `consult`** ([`11`](11-consult.md) §4.1): the `tty` and
+  `unattended` bindings, the `--human` flag, the start-up check of deviation
+  11, and withdrawing a cut or cancelled question. Then SAGA's loop rewritten
+  with an autonomy level (`11` §9, step 7).

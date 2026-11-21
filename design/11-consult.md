@@ -1,8 +1,12 @@
 # `consult`: asking a person
 
-> **Status: a design draft, not built.** Nothing here is implemented yet.
-> When it is, the rules below move into `04` and `07`, and this document keeps
-> the argument, as `10` does for typed grants.
+> **Status: built in scripted mode (§9 steps 1–5); no live host yet.** In
+> live mode every consult is a checked run-time error, because no person is
+> attached (H3). The rules are now in `04` §6.5 and `07` §4, which are the
+> reference; this document keeps the argument, as `10` does for typed grants.
+> [`../examples/consult.nrm`](../examples/consult.nrm) tests every rule of
+> §2.2, and [`../tests/properties.rs`](../tests/properties.rs) checks K1–K4 on
+> random cases.
 
 [`10`](10-saga.md) §2.2 found the one real gap in the language: a program has
 exactly two doors to the outside, `ask` and `call`, and neither reaches a
@@ -42,7 +46,7 @@ checker afterwards (`10` §4).
 ### 1.1 Concrete
 
 ```
-host-spec ::= … | (human {[price exp]})
+host-spec ::= … | (human {[price money]})        ; a literal, like a model grant's prices
 
 exp       ::= … | (consult exp ty exp [propose exp] [quoted-symbol])
                   ; human, answer type, prompt, optional proposal, optional site
@@ -212,14 +216,16 @@ and that wait is part of its `δ`.
 sequentialization of its nodes, and its proof uses the fact that models are
 stateless. A person isn't: running the nodes in a different order changes
 what the person sees first, and so possibly what they answer. So Theorem 4
-gains a third premise, in the same form as the one for `(remaining)`:
+gains a premise, in the same form as the one for `(remaining)`. It is
+numbered (iv) because law W1 in `06` already lists three:
 
 ```
-(iii) no two nodes consult the same human
+(iv) no two nodes consult the same human
 ```
 
-A workflow that breaks (iii) is still allowed and still runs. It just falls
-outside the law, so a refactoring tool may not reorder it.
+A workflow that breaks (iv) is still allowed and still runs. It just falls
+outside the law, so a refactoring tool may not reorder it. W4 and W5, which
+inherit W1's premises, need it too, and so does `07`'s Theorem 5(b).
 
 > **Correction to two earlier drafts.** The first draft made humans stateful,
 > so that ownership would forbid two concurrent consults of one person, on the
@@ -493,28 +499,32 @@ K1 is the law that §3 is for. It's mutation-testable the way S1 is: break
 | Tempting "law" | Why it's false |
 |---|---|
 | **Merge identical consults:** two consults with the same prompt equal one | A person can answer differently the second time, and the right side asks them half as often. Same as `ask` (`06` §5). |
-| **Two consults of one person can be reordered** freely | Not even `≡v`: a person's answer may depend on what they saw just before. This is why Theorem 4 needs premise (iii) (§2.4). |
+| **Two consults of one person can be reordered** freely | Not even `≡v`: a person's answer may depend on what they saw just before. This is why Theorem 4 needs its premise about humans, W1's (iv) (§2.4). |
 | **A proposal approved is a proposal executed** | Only if the program runs the answer. The semantics can't force that; the checker can warn (§8). |
 
 ---
 
 ## 8. What changes elsewhere
 
-| Document | Change |
-|---|---|
-| `04` §2, §3, §3.1 | the `human` host-spec, CONSULT in the grammar and abstract syntax, `fv`, the askable rule for `consult` |
-| `04` §6.2, §6.5 | the human oracle and `price_η`; CONSULT's rules |
-| `04` §7.2 | `Declined` in `Failure`; `HUMAN(η)` unshowable |
-| `04` §8 | one new case in each of Theorems 1–3 (below); Theorem 4 gains premise (iii), no two nodes consult the same human (§2.4) |
-| `05` | a coverage row for every CONSULT rule; scripted entries `answer`, `approve`, `decline` |
-| `06` §4, §5 | premise (iii) on law W1; K1–K4 and the non-laws |
-| `07` §4 | the three M-CONSULT transitions, the M-TIME rows, and the consult case of M-NODE-FAIL |
-| `09` | the live human hosts and `--human`; refusing to start with an unbound grant; withdrawing cut and cancelled consults |
-| `10` §2.2, §4, §5 | point here; Q-C and Q-D settled |
+✅ marks a change that has been made. Where this document and those disagree,
+those win: they are the reference, and this document keeps the argument.
+
+| | Document | Change |
+|---|---|---|
+| ✅ | `04` §2, §3, §3.1 | the `human` host-spec, CONSULT in the grammar and abstract syntax, `fv`, the askable rule for `consult` |
+| ✅ | `04` §6.2, §6.5 | the human oracle, `price_η` and conformance; CONSULT's rules |
+| ✅ | `04` §7.2, §7.3 | `Declined` in `Failure`; `HUMAN(η)` unshowable |
+| ✅ | `04` §8 | one new case in each of Theorems 1–3 (below); Theorem 4 gains a premise, no two nodes consult the same human (W1's (iv) in `06`; §2.4) |
+| ✅ | `05` | convention 8 for consult sites; a coverage table for the CONSULT rules |
+| ✅ | `06` §4, §5, §7 | premise (iv) on W1, W4 and W5; K1–K4 and the non-laws; problems #10 and #11 |
+| ✅ | `07` §4, §6 | the three M-CONSULT transitions, the M-TIME rows, the consult case of M-NODE-FAIL; Theorems 1′ and 5(b) |
+| ✅ | `08` | the rule-to-code map; deviations 11 and 12 |
+| | `09` | the live human hosts and `--human`; refusing to start with an unbound grant; withdrawing cut and cancelled consults (only the gap is noted so far, in §7) |
+| ✅ | `10` §2.2, §4, §5 | point here; Q-C and Q-D settled |
 
 **The new proof cases are short:**
 
-- *Theorem 1, CONSULTOK and CONSULTDECLINED.* The charge is `ĉ = price_η ≤ W₃.pool`. Other cases charge nothing.
+- *Theorem 1, CONSULTOK, CONSULTDECLINED and CONSULTINVALID.* The charge is `ĉ = price_η ≤ W₃.pool`. Other cases charge nothing.
 - *Theorem 2, CONSULTOK.* `a = validate_Θ(j, τ)` with `τ` askable, so `a` contains no `CAP`, `MODEL` or `HUMAN`. A person, like a model, can't hand the program authority.
 - *Theorem 3, CONSULTOK and CONSULTDECLINED.* The premise `now + δ ≤ deadline`.
 
@@ -543,7 +553,7 @@ In the order the code depends on it:
 
 1. **Syntax.** `consult` in the lexer's reserved words; `Exp::Consult` in
    [`../src/ast.rs`](../src/ast.rs) with its free variables; parsing, including
-   `[propose e]`, in [`../src/parser.rs`](../src/parser.rs); `(human [price e])`
+   `[propose e]`, in [`../src/parser.rs`](../src/parser.rs); `(human [price $…])`
    grants.
 2. **Values.** `Value::Human`, not stateful for `reach`; refused by `show`
    ([`../src/value.rs`](../src/value.rs), [`../src/types.rs`](../src/types.rs)).

@@ -66,6 +66,19 @@ pub struct TraceEntry {
     pub start: i64,
     pub end: i64,
     pub outcome: String,
+    /// For a consult, the audit record of design/11 §2.3: what the program
+    /// showed the person, and what they said.
+    pub consult: Option<ConsultRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsultRecord {
+    pub prompt: String,
+    /// `show v` of the proposal, if there was one.
+    pub proposal: Option<String>,
+    /// The submitted JSON or the reason for declining; `None` when the person
+    /// never answered (cut or cancelled).
+    pub said: Option<String>,
 }
 
 impl TraceEntry {
@@ -78,6 +91,7 @@ impl TraceEntry {
             && self.start == other.start
             && self.end == other.end
             && self.outcome == other.outcome
+            && self.consult == other.consult
     }
 }
 
@@ -156,6 +170,21 @@ enum Frame {
         cap: Cap,
         done: Vec<Value>,
         env: Env,
+    },
+    /// CONSULT evaluates its human, then its prompt, then its proposal (design/11 §2.2).
+    ConsultHuman {
+        e: ExpRef,
+        env: Env,
+    },
+    ConsultPrompt {
+        e: ExpRef,
+        human: Rc<HumanSpec>,
+        env: Env,
+    },
+    ConsultProposal {
+        e: ExpRef,
+        human: Rc<HumanSpec>,
+        prompt: Rc<str>,
     },
     Fail,
     Catch {
@@ -249,6 +278,11 @@ enum ReqKind {
     /// when the grant said nothing, which is an open interface.
     Call {
         ty: Type,
+    },
+    /// A consult carries its audit record from issue to completion.
+    Consult {
+        ty: Type,
+        record: ConsultRecord,
     },
 }
 
@@ -586,6 +620,11 @@ impl<'a> Machine<'a> {
                 self.push(tid, Frame::CallCap { e: e.clone(), env: env.clone() });
                 self.set(tid, Ctl::Eval(cap.clone(), env));
             }
+            // CONSULT: human, then prompt, then proposal
+            Exp::Consult { human, .. } => {
+                self.push(tid, Frame::ConsultHuman { e: e.clone(), env: env.clone() });
+                self.set(tid, Ctl::Eval(human.clone(), env));
+            }
             // FAIL
             Exp::Fail(x) => {
                 self.push(tid, Frame::Fail);
@@ -732,6 +771,30 @@ impl<'a> Machine<'a> {
                     self.issue_call(tid, cap, op, done)?;
                 }
             }
+            Frame::ConsultHuman { e, env } => {
+                let Exp::Consult { prompt, .. } = &*e else { unreachable!() };
+                let Value::Human(human) = v else {
+                    return stuck(format!("consult needs a human, but got {}", v));
+                };
+                let prompt = prompt.clone();
+                self.push(tid, Frame::ConsultPrompt { e: e.clone(), human, env: env.clone() });
+                self.set(tid, Ctl::Eval(prompt, env));
+            }
+            Frame::ConsultPrompt { e, human, env } => {
+                let Exp::Consult { proposal, .. } = &*e else { unreachable!() };
+                let Value::Str(prompt) = v else {
+                    return stuck(format!("a consult's prompt must be Text, but got {}", v));
+                };
+                match proposal {
+                    Some(p) => {
+                        let p = p.clone();
+                        self.push(tid, Frame::ConsultProposal { e: e.clone(), human, prompt });
+                        self.set(tid, Ctl::Eval(p, env));
+                    }
+                    None => self.issue_consult(tid, &e, human, &prompt, None)?,
+                }
+            }
+            Frame::ConsultProposal { e, human, prompt } => self.issue_consult(tid, &e, human, &prompt, Some(&v))?,
             Frame::Fail => {
                 let is_failure =
                     matches!(&v, Value::Con(k, _) if self.theta.con_type(k).is_some_and(|t| &**t == "Failure"));
@@ -1087,6 +1150,65 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
+    /// The CONSULT rules (design/11 §2.2), M-CONSULT-EXPIRED, -REFUSED and
+    /// -ISSUE (§5). The order of the checks is the order of the premises:
+    /// a malformed consult is the program's mistake whatever the clock says,
+    /// so it is a checked error before the deadline or the budget is looked at.
+    fn issue_consult(
+        &mut self,
+        tid: usize,
+        e: &ExpRef,
+        human: Rc<HumanSpec>,
+        prompt: &str,
+        proposal: Option<&Value>,
+    ) -> Rt<()> {
+        let Exp::Consult { site, ty, .. } = &**e else { unreachable!() };
+        // §1.3: τ is askable, so whatever a person submits can't carry authority.
+        self.theta.askable(ty).map_err(RtErr)?;
+        // v ⊨ τ iff validate(show v, τ) = v (§2.1). The proposal is what the
+        // person sees and what an unchanged approval returns, so it must read
+        // back as itself: that is the premise law K1 rests on.
+        let shown = match proposal {
+            None => None,
+            Some(v) => {
+                let conforms = self.theta.show(v).ok().filter(|s| {
+                    serde_json::from_str::<serde_json::Value>(s)
+                        .ok()
+                        .and_then(|j| self.theta.validate(&j, ty))
+                        .is_some_and(|w| w.equal(v))
+                });
+                match conforms {
+                    Some(s) => Some(s),
+                    None => return stuck(format!("the proposal {} is not a {}", v, ty)),
+                }
+            }
+        };
+        self.sync_clock();
+        let s = self.current_scope(tid);
+        // CONSULTEXPIRED: nobody is asked, no charge.
+        if self.deadline_star(s).is_some_and(|d| self.now >= d) {
+            self.raise_con(tid, "PastDeadline", vec![]);
+            return Ok(());
+        }
+        // CONSULTUNAFFORDABLE: nobody is asked, no charge.
+        if human.price > self.available(s) {
+            self.raise_con(tid, "OverBudget", vec![]);
+            return Ok(());
+        }
+        let record = ConsultRecord { prompt: prompt.to_string(), proposal: shown.clone(), said: None };
+        let req = crate::host::ConsultReq {
+            site: site.to_string(),
+            human: human.clone(),
+            ty: ty.clone(),
+            prompt: prompt.to_string(),
+            proposal: shown,
+        };
+        let rid = self.next_rid;
+        self.oracle.issue_consult(rid, req, self.now).map_err(RtErr)?;
+        self.enqueue(tid, s, site.to_string(), human.price, ReqKind::Consult { ty: ty.clone(), record });
+        Ok(())
+    }
+
     /// Reserve on the scope chain, record the request, and block the thread.
     fn enqueue(&mut self, tid: usize, s: usize, site: String, reservation: i64, kind: ReqKind) {
         self.reserve(s, reservation);
@@ -1097,32 +1219,57 @@ impl<'a> Machine<'a> {
         self.threads[tid].status = Status::Blocked;
     }
 
-    /// ASKLATE / CALLLATE: the deadline arrived first. The request is
-    /// abandoned and charged its reservation.
+    /// What abandoning a request costs. An ask or call is charged its
+    /// reservation: the provider bills for work already done (ASKLATE). A
+    /// consult is not: a person who never answered delivered nothing
+    /// (design/11 §2.2, CONSULTLATE and the consult case of M-NODE-FAIL).
+    fn abandon_charge(r: &Request) -> i64 {
+        if matches!(r.kind, ReqKind::Consult { .. }) { 0 } else { r.reserve }
+    }
+
+    /// ASKLATE / CALLLATE / CONSULTLATE: the deadline arrived first, and the
+    /// request is abandoned.
     fn cut(&mut self, r: Request) {
         self.oracle.cancel(r.rid);
-        self.settle(r.scope, r.reserve, r.reserve);
-        self.log(&r, 0, 0, r.reserve, "past-deadline".into());
+        let charge = Self::abandon_charge(&r);
+        self.settle(r.scope, r.reserve, charge);
+        self.log(&r, 0, 0, charge, "past-deadline".into(), None);
         let t = &mut self.threads[r.tid];
         t.ctl = Ctl::Raise(failure("PastDeadline", vec![]));
         t.status = Status::Runnable;
     }
 
-    fn log(&mut self, r: &Request, in_tokens: i64, out_tokens: i64, cost: i64, mut outcome: String) {
+    /// `said` is what a person submitted or why they declined; it is recorded
+    /// only for a consult.
+    fn log(
+        &mut self,
+        r: &Request,
+        in_tokens: i64,
+        out_tokens: i64,
+        cost: i64,
+        mut outcome: String,
+        said: Option<String>,
+    ) {
         if cost > r.reserve {
             // The reservation's one assumption (09 §3) failed: say so where it happened.
             outcome.push_str(" over-reservation");
         }
+        let (kind, consult) = match &r.kind {
+            ReqKind::Ask { .. } => ("ask", None),
+            ReqKind::Call { .. } => ("call", None),
+            ReqKind::Consult { record, .. } => ("consult", Some(ConsultRecord { said, ..record.clone() })),
+        };
         self.trace.push(TraceEntry {
             site: r.site.clone(),
             path: self.threads[r.tid].path.clone(),
-            kind: if matches!(r.kind, ReqKind::Ask { .. }) { "ask" } else { "call" },
+            kind,
             in_tokens,
             out_tokens,
             cost,
             start: r.start,
             end: self.now,
             outcome,
+            consult,
         });
     }
 
@@ -1130,10 +1277,30 @@ impl<'a> Machine<'a> {
     fn complete(&mut self, r: Request, c: Completion) -> Rt<()> {
         let (price_in, price_out, ty) = match &r.kind {
             ReqKind::Ask { model, ty } => (model.in_price, model.out_price, Some(ty.clone())),
-            ReqKind::Call { ty } => (0, 0, Some(ty.clone())),
+            ReqKind::Call { ty } | ReqKind::Consult { ty, .. } => (0, 0, Some(ty.clone())),
         };
         let raise = |name: &str, fields: Vec<Value>| Ctl::Raise(failure(name, fields));
+        let mut said = None;
         let (in_tokens, out_tokens, ctl, outcome) = match c {
+            // CONSULTOK / CONSULTINVALID: a person's answer is validated
+            // exactly as a model's reply is.
+            Completion::HumanAnswer { json } => {
+                let ty = ty.as_ref().expect("a person's answer completes a consult");
+                let parsed =
+                    serde_json::from_str::<serde_json::Value>(&json).ok().and_then(|j| self.theta.validate(&j, ty));
+                let done = match parsed {
+                    Some(v) => (0, 0, Ctl::Ret(v), "ok".to_string()),
+                    None => (0, 0, raise("Invalid", vec![Value::str(&json)]), "invalid".to_string()),
+                };
+                said = Some(json);
+                done
+            }
+            // CONSULTDECLINED
+            Completion::Declined { reason } => {
+                let done = (0, 0, raise("Declined", vec![Value::str(&reason)]), format!("declined: {}", reason));
+                said = Some(reason);
+                done
+            }
             Completion::Answer { json, input_tokens, output_tokens, truncated } => {
                 let parsed = if truncated {
                     None // stopped at max_tokens, so the JSON is incomplete
@@ -1177,9 +1344,14 @@ impl<'a> Machine<'a> {
                 (0, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg))
             }
         };
-        let charge = in_tokens * price_in + out_tokens * price_out;
+        // A consult that reached the person is charged its price whatever
+        // they said: their time was spent (CONSULTOK, -DECLINED, -INVALID).
+        let charge = match r.kind {
+            ReqKind::Consult { .. } => r.reserve,
+            _ => in_tokens * price_in + out_tokens * price_out,
+        };
         self.settle(r.scope, r.reserve, charge);
-        self.log(&r, in_tokens, out_tokens, charge, outcome);
+        self.log(&r, in_tokens, out_tokens, charge, outcome, said);
         let t = &mut self.threads[r.tid];
         t.ctl = ctl;
         t.status = Status::Runnable;
@@ -1359,8 +1531,8 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
-    /// Cancel a thread and everything it's waiting for. An in-flight request is
-    /// charged its reservation (07 §5).
+    /// Cancel a thread and everything it's waiting for. An in-flight ask or
+    /// call is charged its reservation (07 §5); a consult is not (design/11 §5).
     fn cancel(&mut self, tid: usize) {
         let status = self.threads[tid].status;
         self.threads[tid].status = Status::Done;
@@ -1369,8 +1541,9 @@ impl<'a> Machine<'a> {
                 if let Some(pos) = self.pending.iter().position(|r| r.tid == tid) {
                     let r = self.pending.remove(pos);
                     self.oracle.cancel(r.rid);
-                    self.settle(r.scope, r.reserve, r.reserve);
-                    self.log(&r, 0, 0, r.reserve, "cancelled".into());
+                    let charge = Self::abandon_charge(&r);
+                    self.settle(r.scope, r.reserve, charge);
+                    self.log(&r, 0, 0, charge, "cancelled".into(), None);
                 }
             }
             Status::Waiting => {

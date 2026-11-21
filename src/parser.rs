@@ -36,6 +36,7 @@ const KEYWORDS: &[&str] = &[
     "case",
     "ask",
     "call",
+    "consult",
     "fail",
     "catch",
     "budget",
@@ -48,7 +49,8 @@ const KEYWORDS: &[&str] = &[
 ];
 // `cost` and `time` are not reserved: they occur only in fixed bracket positions
 // ([cost e] in budget, under and check-within), and they are the field names of
-// the predefined Resources record.
+// the predefined Resources record. `propose` and `price` aren't either, for the
+// same reason ([propose e] in consult, [price $…] in a human grant).
 
 static FRESH: AtomicU64 = AtomicU64::new(0);
 
@@ -327,7 +329,22 @@ impl<'a> Parser<'a> {
                     _ => HostSpec::Http(ops),
                 }
             }
-            _ => return perr(&args[1], "a host is (model …), (kernel), (filesystem) or (http)"),
+            "human" => {
+                // `(human)` or `(human [price $2.00])`: time by default, money
+                // only when stated (design/11, H2).
+                let mut price = None;
+                for item in &spec[1..] {
+                    match item.list() {
+                        Some([k, v]) if k.atom() == Some("price") && price.is_none() => match v.atom().map(classify) {
+                            Some(Ok(Atom::Money(m))) => price = Some(m),
+                            _ => return perr(v, "a human's price is an amount of money, such as $2.00"),
+                        },
+                        _ => return perr(item, "the only human option is [price $…], at most once"),
+                    }
+                }
+                HostSpec::Human { price: price.unwrap_or(0) }
+            }
+            _ => return perr(&args[1], "a host is (model …), (kernel), (filesystem), (http) or (human)"),
         };
         Ok(Top::Grant(x, spec))
     }
@@ -350,6 +367,14 @@ impl<'a> Parser<'a> {
             let mut entries: Vec<Entry> = vec![];
             for item in &items[1..] {
                 let parts = item.list().unwrap_or(&[]);
+                // `(approve)` is the one entry with no argument: the person
+                // submits the consult's proposal unchanged (design/11 §4.2).
+                if let [h] = parts
+                    && h.atom() == Some("approve")
+                {
+                    entries.push(Entry::Approve { latency: 0 });
+                    continue;
+                }
                 let (head, arg) = match parts {
                     [h, a] => (h.atom().unwrap_or(""), a),
                     _ => return perr(item, "expected (reply …), (out …), (latency …) and so on"),
@@ -364,6 +389,8 @@ impl<'a> Parser<'a> {
                     "provider-error" => entries.push(Entry::ProviderError { msg: text(arg)?, latency: 0 }),
                     "result" => entries.push(Entry::Result { text: text(arg)?, latency: 0 }),
                     "error" => entries.push(Entry::Error { msg: text(arg)?, latency: 0 }),
+                    "answer" => entries.push(Entry::Answer { json: text(arg)?, latency: 0 }),
+                    "decline" => entries.push(Entry::Decline { reason: text(arg)?, latency: 0 }),
                     "out" | "latency" => {
                         let last = entries
                             .last_mut()
@@ -373,13 +400,7 @@ impl<'a> Parser<'a> {
                                 Entry::Reply { out, .. } | Entry::Refusal { out, .. } => *out = n as u64,
                                 _ => return perr(item, "(out …) applies only to a reply or a refusal"),
                             },
-                            ("latency", Some(Ok(Atom::Dur(d)))) => match last {
-                                Entry::Reply { latency, .. }
-                                | Entry::Refusal { latency, .. }
-                                | Entry::ProviderError { latency, .. }
-                                | Entry::Result { latency, .. }
-                                | Entry::Error { latency, .. } => *latency = d,
-                            },
+                            ("latency", Some(Ok(Atom::Dur(d)))) => last.set_latency(d),
                             _ => return perr(arg, format!("bad value for ({} …)", head)),
                         }
                     }
@@ -614,6 +635,38 @@ impl<'a> Parser<'a> {
                     cap: self.exp(&args[0])?,
                     op: self.lower(&args[1], "an operation name")?,
                     args: self.exps(&args[2..])?,
+                }
+            }
+            "consult" => {
+                // (consult h τ prompt [propose v] 'site): the proposal and the
+                // site are both optional, in that order (design/11 §1.1).
+                if args.len() < 3 {
+                    return perr(
+                        sx,
+                        "consult expects a human, a type, a prompt, an optional [propose e] and an optional 'site",
+                    );
+                }
+                let (mut proposal, mut site) = (None, None);
+                for item in &args[3..] {
+                    if site.is_some() {
+                        return perr(item, "the site comes last in a consult");
+                    }
+                    match item {
+                        Sx::List(xs, _) if xs.len() == 2 && xs[0].atom() == Some("propose") && proposal.is_none() => {
+                            proposal = Some(self.exp(&xs[1])?);
+                        }
+                        _ => match item.atom().map(classify) {
+                            Some(Ok(Atom::Sym(s))) => site = Some(s),
+                            _ => return perr(item, "expected [propose e] or the consult's 'site"),
+                        },
+                    }
+                }
+                Exp::Consult {
+                    site: site.unwrap_or_else(|| Rc::from(sx.loc().to_string().as_str())),
+                    human: self.exp(&args[0])?,
+                    ty: self.ty(&args[1])?,
+                    prompt: self.exp(&args[2])?,
+                    proposal,
                 }
             }
             "fail" => {

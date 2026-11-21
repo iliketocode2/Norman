@@ -7,7 +7,7 @@
 //! live oracle answers from a real model API with a real clock.
 
 use crate::ast::{Entry, Script, Type};
-use crate::value::{ModelSpec, Value};
+use crate::value::{HumanSpec, ModelSpec, Value};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -20,6 +20,19 @@ pub struct AskReq {
     /// The context, as (role, content) pairs; roles are System/User/Assistant/Tool.
     pub messages: Messages,
     pub max_tokens: i64,
+}
+
+/// One `consult`, as the oracle sees it (design/11 §2.1): what the person is
+/// shown, and the shape their answer must take.
+#[derive(Debug, Clone)]
+pub struct ConsultReq {
+    pub site: String,
+    pub human: Rc<HumanSpec>,
+    pub ty: Type,
+    pub prompt: String,
+    /// `show v` of the proposal, if there is one. Approving it unchanged
+    /// submits exactly this text.
+    pub proposal: Option<String>,
 }
 
 /// An input-token count for an ask, before it's sent.
@@ -56,6 +69,14 @@ pub enum Completion {
     ToolError {
         msg: String,
     },
+    /// A person submitted JSON text, to be validated against the consult's type.
+    HumanAnswer {
+        json: String,
+    },
+    /// A person declined, with a reason.
+    Declined {
+        reason: String,
+    },
 }
 
 /// Why an ask couldn't be counted.
@@ -80,6 +101,12 @@ pub trait Oracle {
     fn issue_ask(&mut self, rid: u64, req: AskReq, now: i64) -> Result<(), String>;
     /// Send a call to capability site `key/op`.
     fn issue_call(&mut self, rid: u64, site: &str, args: &[Value], now: i64) -> Result<(), String>;
+    /// Put a question to a person. An oracle with no person attached refuses,
+    /// which is a checked run-time error: a missing person must never look
+    /// like a person saying no (design/11, H3 and §4.1).
+    fn issue_consult(&mut self, _rid: u64, req: ConsultReq, _now: i64) -> Result<(), String> {
+        Err(format!("no person is attached to answer consult site '{}' (human {})", req.site, req.human.name))
+    }
     /// May the kernel granted as `key` be forked? A scripted kernel has no
     /// state outside the script, so it forks for free. `Err` is a tool error:
     /// a host that can't copy its state must say so, because handing out a
@@ -193,12 +220,7 @@ impl Oracle for ScriptedOracle {
                 Completion::Refusal { category: category.clone(), input_tokens, output_tokens: out(*n) }
             }
             Entry::ProviderError { msg, .. } => Completion::ProviderError { msg: msg.clone(), input_tokens },
-            Entry::Result { .. } | Entry::Error { .. } => {
-                return Err(format!(
-                    "the script entry for ask site '{}' is a tool result, not a model reply",
-                    req.site
-                ));
-            }
+            _ => return Err(format!("the script entry for ask site '{}' is not a model reply", req.site)),
         };
         self.inflight.push((rid, now + entry.latency(), completion));
         Ok(())
@@ -212,7 +234,28 @@ impl Oracle for ScriptedOracle {
         let completion = match &entry {
             Entry::Result { text, .. } => Completion::ToolResult { text: text.clone() },
             Entry::Error { msg, .. } => Completion::ToolError { msg: msg.clone() },
-            _ => return Err(format!("the script entry for call site '{}' is a model reply, not a tool result", site)),
+            _ => return Err(format!("the script entry for call site '{}' is not a tool result", site)),
+        };
+        self.inflight.push((rid, now + entry.latency(), completion));
+        Ok(())
+    }
+
+    /// Exhaustion, a non-person entry, or `(approve)` with nothing to approve
+    /// are all mistakes in the test, so all are checked run-time errors.
+    fn issue_consult(&mut self, rid: u64, req: ConsultReq, now: i64) -> Result<(), String> {
+        let site = &req.site;
+        let entry = self
+            .state
+            .next(site)
+            .ok_or_else(|| format!("script exhausted: no answer left for consult site '{}'", site))?;
+        let completion = match &entry {
+            Entry::Answer { json, .. } => Completion::HumanAnswer { json: json.clone() },
+            Entry::Approve { .. } => match &req.proposal {
+                Some(shown) => Completion::HumanAnswer { json: shown.clone() },
+                None => return Err(format!("(approve) at consult site '{}', which proposed nothing", site)),
+            },
+            Entry::Decline { reason, .. } => Completion::Declined { reason: reason.clone() },
+            _ => return Err(format!("the script entry for consult site '{}' is not a person's answer", site)),
         };
         self.inflight.push((rid, now + entry.latency(), completion));
         Ok(())

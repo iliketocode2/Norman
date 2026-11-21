@@ -160,6 +160,7 @@ impl Interp {
                         HostSpec::Kernel(ops) => self.cap(&x, CapKind::Kernel, ops),
                         HostSpec::Filesystem(ops) => self.cap(&x, CapKind::Filesystem, ops),
                         HostSpec::Http(ops) => self.cap(&x, CapKind::Http, ops),
+                        HostSpec::Human { price } => Value::Human(Rc::new(HumanSpec { name: x.clone(), price })),
                     };
                     self.globals.insert(x, v);
                 }

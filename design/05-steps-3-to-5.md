@@ -107,6 +107,18 @@ one meaning.
 7. **`check-within e ([cost c] [time t])`** passes if evaluating `e` spends at
    most `c` and takes at most `t` of virtual time, *whatever its result*. That
    lets it measure failures as well as successes.
+8. **A consult site is scripted with what a person does** ([`11`](11-consult.md)
+   §4.2): `(answer j)` submits JSON text, `(approve)` submits the consult's
+   proposal unchanged, and `(decline r)` declines with a reason, each with a
+   `(latency d)`. `(approve)` at a consult that proposed nothing, or a model's
+   reply at a consult site, is a checked run-time error, as exhaustion is.
+
+**A lesson about convention 5, from `consult`.** Because an exhausted script
+is a checked error, a `check-error` test run under an *empty* script passes
+whenever the expression reaches the oracle at all, whether or not the check it
+names exists. Such a test must run under a script in which the call would
+succeed, with a control test showing that it does. Mutation testing found
+this (`06` §7, #10).
 
 ### Every rule gets an example
 
@@ -134,6 +146,22 @@ Ramsey's Step 2 says "every form of data needs an example," and Step 9 asks
 | predefined `retry` | 4, 5, 10 | `retry 0` fails; `retry 1` recovers; `retry 5` never retries `OverBudget` and spends $0 |
 | predefined `repair` | 4 | the failed reply goes into the context; the second attempt succeeds |
 | sugar `par` | 7 | `par` returns a `Pair`; the fork-join version is the 60 s one |
+
+`consult`'s rules are covered in [`examples/consult.nrm`](../examples/consult.nrm):
+
+| Rule | What the example shows |
+|---|---|
+| CONSULTOK | an answer validated against τ; an edited proposal comes back edited; 5 min of the clock and $0 |
+| K1 (approval) | an unchanged approval returns exactly the proposal, including text with quotes, escapes and tabs |
+| CONSULTDECLINED | `Declined` carries the reason; a priced reviewer is charged |
+| CONSULTINVALID | an over-long answer is `Invalid`, and charged |
+| CONSULTEXPIRED, CONSULTUNAFFORDABLE | under an empty script, so the tests pass only if nobody is asked: $0 and 0 s |
+| CONSULTLATE | cut at the deadline and **not** charged |
+| the checked errors | a non-conforming proposal (including a `Sym` proposed as `Text`), an unaskable type, a model in place of a person, a non-Text prompt; each under a script where the person would answer, with a control test |
+| premise order | a malformed proposal is an error even past the deadline, not `PastDeadline` |
+| K2 | `retry` and `attempt` don't recover `Declined`; `retry` does consult again after `Invalid` |
+| M-NODE-FAIL, consult case | a decline cancels a sibling's consult, which isn't charged: $2.00 spent, not $4.00 |
+| §6 of `11` | the three autonomy levels; revision after a refusal; a slow model can't use up a person's hours |
 
 Rules for the inherited forms (LITERAL, VAR, LET, IF, APPLY, CON, RECORD,
 FIELD) are exercised throughout. The predefined functions got their own

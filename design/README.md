@@ -16,7 +16,8 @@ for what.
 > interpreter runs the design's example programs and laws: 35 example tests,
 > 26 law tests, 39 tests of the predefined functions, 11 oracle tests, 7 tests
 > of SAGA's bi-level loop ([`10`](10-saga.md)), 45 string and `show` tests, 18
-> typed-tool tests and 6 CP-Agent tests all pass. Thirteen laws are also
+> typed-tool tests, 6 CP-Agent tests and 52 tests of `consult`
+> ([`11`](11-consult.md)) all pass. Seventeen laws are also
 > checked on 150 random scripts each, and the budget invariant is checked in
 > every state of every scripted run. A suite of deliberately wrong tests fails,
 > as it must. Live, `ask` goes to Claude Sonnet 5 ([`09`](09-live-oracle.md)
@@ -57,8 +58,8 @@ language can guarantee and a library can't:
 
 Today these guarantees are enforced **when the program runs**, and a careful
 library could make most of the same checks. Two things a library can't offer
-already hold. A program has no way to reach the outside world except `ask`
-and `call`, so every limit applies to every effect. And the guarantees are
+already hold. A program has no way to reach the outside world except `ask`,
+`call` and `consult`, so every limit applies to every effect. And the guarantees are
 stated as theorems, with laws that say which rewrites are safe. Checking
 programs **before they run** is the job of the planned type and effect system
 (see [What it doesn't do (yet)](#what-it-doesnt-do-yet)).
@@ -102,8 +103,9 @@ value, such as `(Sell "Margins are compressing.")`, or the `ask` fails.
 
 If the model's reply doesn't fit `Verdict`, or the provider is down, or the
 money or time runs out, `ask` produces a **failure**. A failure is one of
-`Invalid`, `ToolError`, `OverBudget`, `PastDeadline` or `Raised`, and `catch`
-handles it. Agents fail often, so failure is part of the language, not a crash.
+`Invalid`, `ToolError`, `Refused`, `Declined`, `OverBudget`, `PastDeadline`
+or `Raised`, and `catch` handles it. (`Refused` is a model declining to
+answer; `Declined` is a person saying no, in section 7.) Agents fail often, so failure is part of the language, not a crash.
 
 ### 3. Budgets: money and time
 
@@ -204,7 +206,39 @@ first. (A scripted kernel forks freely. A live Python kernel can't copy its
 state, so in live mode `fork` fails with `ToolError` rather than handing out a
 second handle to the same process.)
 
-### 7. The rest is library, with laws
+### 7. Asking a person
+
+```scheme
+(grant reviewer (human))
+
+(consult reviewer (List Objective 4)
+         "Approve, edit or decline the objectives for the next round."
+         [propose objectives]
+         'review)
+```
+
+Some decisions should be a person's. `consult` puts a question to someone the
+host has granted, and it works like `ask`: the answer has a **type** and is
+validated, it's subject to the deadline, and it's in the trace. A person's time
+costs nothing from the budget unless the grant gives a price,
+`(human [price $2.00])`.
+
+- **Approval returns exactly what was shown.** The proposal is pre-filled as
+  the answer. Approving it unchanged gives back that very value, editing it
+  gives back the edit, and refusing fails with `Declined` and the person's
+  reason. Run the *answer*, and what runs is what was approved.
+- **A refusal isn't retried.** `retry` leaves `Declined` alone. To try again,
+  revise the proposal (for instance, ask the model for a new plan with the
+  person's reason in its context) and consult again.
+- **Waiting for a person spends time.** A consult inside a one-minute budget
+  will almost always run out of time. Give the scope room for a person, and
+  give each model call its own short `budget` inside it.
+- **A missing person is never a "no".** Tests answer from scripts. Live, a
+  consult with nobody attached stops the run with an error rather than
+  pretending someone declined (for now, live mode has no way to attach a
+  person; see below).
+
+### 8. The rest is library, with laws
 
 `retry`, `repair`, `best-of` and context policies are ordinary µNorman
 functions, each defined by algebraic laws:
@@ -228,16 +262,18 @@ These are stated as theorems in [`04`](04-formal-definition.md) §8 and
    live model, it rests on one assumption: the provider never bills more than
    the reservation, which is based on a token count plus a safety margin. If
    that assumption fails, the trace records it.
-2. **A model can't hand your program a tool.** Authority comes only from the
-   host.
+2. **Neither a model nor a person can hand your program a tool.** Authority
+   comes only from the host.
 3. **No answer is accepted after the deadline.**
 4. **Concurrency doesn't change answers.** A workflow gives the same result as
    running its steps one at a time. (The fine print: this holds for steps that
-   don't read their own remaining budget, and when no limit binds. Running
-   steps one at a time takes longer, so it can miss a deadline the workflow
-   meets. If both versions succeed, they agree.)
-5. **Every model call and tool call is recorded** in a trace. That trace is what
-   makes testing, replay and cost profiling possible.
+   don't read their own remaining budget, when no limit binds, and when no two
+   steps ask the same person something, since a person remembers what they saw
+   first. Running steps one at a time takes longer, so it can miss a deadline
+   the workflow meets.)
+5. **Every model call, tool call and consult is recorded** in a trace. That
+   trace is what makes testing, replay and cost profiling possible. For a
+   consult, it records exactly what the person was shown and what they said.
 
 ## What it doesn't do (yet)
 
@@ -265,8 +301,11 @@ These are stated as theorems in [`04`](04-formal-definition.md) §8 and
   never merges two identical-looking `ask`s or caches answers automatically.
   Caching is an explicit tool.
 - **A loop that never calls a model or tool isn't stopped by the budget.** Pure
-  computation takes no time in the model. The interpreter will enforce a step
-  limit instead.
+  computation takes no time in the model. The interpreter stops it with a step
+  limit instead (20 million steps), as a run-time error.
+- **No live person yet.** `consult` is answered by scripts in tests. Live mode
+  has no way to attach a person, so a consult there stops the run with an
+  error. A terminal host is next ([`11`](11-consult.md) §4.1).
 
 ## How testing works
 
@@ -338,7 +377,7 @@ Ramsey's point exactly: proofs are most useful when they fail.
 | [`08-implementation-notes.md`](08-implementation-notes.md) | how to run it; rule-to-code map; every deliberate deviation; what the tests found | work on the interpreter |
 | [`09-live-oracle.md`](09-live-oracle.md) | connecting `ask` to a real model: request mapping, types to JSON Schema, reservations from `count_tokens`, refusals, the real clock. **The default model is Claude Sonnet 5, set in one place so it can change.** | connect µNorman to a model API |
 | [`10-saga.md`](10-saga.md) | what writing SAGA's bi-level loop in µNorman found: typed `call`, a form for consulting a human, derived capabilities | see what the language is missing, and why |
-| [`11-consult.md`](11-consult.md) | **draft, not built:** `consult`, a typed form for asking a person; granted humans, `Declined`, approval that binds to what runs | see how a person fits into a program |
+| [`11-consult.md`](11-consult.md) | `consult`, a typed form for asking a person: the argument behind granted humans, `Declined`, and approval that binds to what runs. Built in scripted mode; the rules are in `04` and `07`. | see how a person fits into a program, and why |
 | [`../LIVE-SETUP.md`](../LIVE-SETUP.md) | the operator's companion to `09`: getting an API key, setting it, capping the spend, and the plan for the first real call | actually run against a real model |
 
 Where documents disagree, the later one wins. Each correction is also noted at
@@ -353,18 +392,21 @@ the place it corrects.
 - **capability**: an unforgeable handle to a tool, granted by the host. It's
   *stateful* (a Python kernel, a filesystem) or *stateless* (an HTTP GET
   client).
+- **consult**: put a question to a granted person once, for an answer of a
+  given type, optionally with a proposal they can approve, edit or decline.
 - **context**: the list of messages a model sees. It's always explicit.
 - **reservation**: the worst-case cost of an `ask`, set aside before the call.
   Unused money is returned.
 - **budget scope**: a region of the program with its own money limit and
   deadline, both at most its parent's.
-- **site**: a name for a place in the program where an `ask` or `call` happens.
+- **site**: a name for a place in the program where an `ask`, `call` or
+  `consult` happens.
   Scripts and traces are organized by site.
 - **script**: canned replies and faults used in tests, with a simulated clock.
-- **trace**: the log of every `ask` and `call`: what was sent, what came back,
+- **trace**: the log of every `ask`, `call` and `consult`: what was sent, what came back,
   what it cost, how long it took.
 - **workflow**: named steps that run as soon as their inputs are ready.
 - **work / span**: total cost (the sum over all steps) versus total time (the
   longest chain of dependent steps).
-- **world**: everything outside the program that `ask` and `call` affect:
-  money, clock, tool state, trace.
+- **world**: everything outside the program that `ask`, `call` and `consult`
+  affect: money, clock, tool state, trace.

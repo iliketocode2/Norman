@@ -132,11 +132,14 @@ within a turn" for the same reason (Turn §9.5).
 | **M-ASK-REFUSED** | …, `ĉ > available(σ)` | `E[(fail OverBudget)]`: no request, no charge |
 | **M-ASK-ISSUE** | …, `ĉ ≤ available(σ)`, and the oracle chooses `⟨j, n, δ⟩` or `error(m)` | `reserved += ĉ` on the chain; add request `rid` with `due = min(now + δ, deadline*(σ))`; status becomes `blocked(rid)` |
 | **M-CALL-…** | `E[(call κ op v…)]` | the same three cases, with `ĉ = cost_κ(op)` and the host's reply |
+| **M-CONSULT-EXPIRED** | `E[(consult η τ p v̂ s)]`, `now ≥ deadline*(σ)` | `E[(fail PastDeadline)]`: nobody is asked, no charge |
+| **M-CONSULT-REFUSED** | …, `price_η > available(σ)` | `E[(fail OverBudget)]`: nobody is asked, no charge |
+| **M-CONSULT-ISSUE** | …, `price_η ≤ available(σ)`, and the person chooses an answer, a decline or nothing after `δ` | `reserved += price_η` on the chain; add request `rid` with `due = min(now + δ, deadline*(σ))`; status becomes `blocked(rid)` ([`11`](11-consult.md)) |
 | **M-WF-SHARED** | `E[(workflow bs e)]`, ownership violated | `E[(fail (Raised 'shared-stateful-capability))]` |
 | **M-WF-START** | `E[(workflow bs e)]`, ownership holds | create `w`; spawn a thread for each node with no deps, in binding order, at path `p.x`, base scope = current scope; parent becomes `E[WAIT(w)]` with status `waiting(w)` |
 | **M-NODE-DONE** | a node thread of `w` for `x` reaches a value `v` | mark `x` `done(v)`; spawn, in binding order, every pending node whose deps are now all done, substituting the dependency values into its expression |
 | **M-WF-DONE** | every node of `w` is done | parent becomes `E[e_body[x₁ ↦ v₁ … xₙ ↦ vₙ]]`, runnable |
-| **M-NODE-FAIL** | a node thread of `w` reaches `(fail φ)` | **cancel** every other running thread of `w`, and their descendants. Each cancelled in-flight request moves its `ĉ` from `reserved` to `spent` (charged the reservation, as in ASKLATE). Parent becomes `E[(fail φ)]`, runnable. |
+| **M-NODE-FAIL** | a node thread of `w` reaches `(fail φ)` | **cancel** every other running thread of `w`, and their descendants. Each cancelled in-flight `ask` or `call` moves its `ĉ` from `reserved` to `spent` (charged the reservation, as in ASKLATE). Each cancelled consult only releases its `ĉ` from `reserved`: a person who never answered delivered nothing, and the host withdraws the question (`11` §5). Parent becomes `E[(fail φ)]`, runnable. |
 | **M-SCOPE-EXIT** | `E[SCOPE(σ′, v)]` or `E[SCOPE(σ′, fail φ)]` | pure step (§3); `σ′` is closed, and its spending is already on its ancestors |
 
 ### 4.2 The timed transition (the clock jumps)
@@ -153,8 +156,13 @@ within a turn" for the same reason (Turn §9.5).
 | reply arrives in time; validation fails | same charge | `(fail (Invalid j))` |
 | `due` was cut to the deadline (`now + δ > deadline*`) | `reserved −= ĉ`, `spent += ĉ` | `(fail PastDeadline)` |
 | provider or host error | `reserved −= ĉ`, `spent += price(|ctx|, 0)` | `(fail (ToolError m))` |
+| a person's answer arrives in time and `validate(j, τ) = a` | `reserved −= ĉ`, `spent += ĉ` on the chain | `a` |
+| a person's answer arrives in time; validation fails | same charge | `(fail (Invalid j))` |
+| a person's decline arrives in time | same charge | `(fail (Declined r))` |
+| a consult's `due` was cut to the deadline | `reserved −= ĉ`, **not** spent | `(fail PastDeadline)` |
 
-Each completion also appends one trace entry.
+Each completion also appends one trace entry. A consult's entry also records
+what the person was shown and what they said, which is its audit record.
 
 **Final states.** The main thread is done with `v` or `fail φ`, and `T`, `P`
 are empty. If no thread is runnable, `P` is empty, and threads are still
@@ -209,11 +217,13 @@ state, for every scope `σ`: `spent(σ) + reserved(σ) ≤ limit(σ)`. Moreover
 *Proof sketch.* The proof is by induction on the length of the run, with one
 case per transition that touches money.
 
-- **M-ASK-ISSUE** adds `ĉ ≤ available(σ)` to `reserved` on the chain.
-  `available` is a minimum over the chain, so no scope on the chain exceeds its
-  limit.
-- **M-TIME** replaces `ĉ` in `reserved` by an amount `≤ ĉ` in `spent`.
-- **M-NODE-FAIL** replaces `ĉ` by exactly `ĉ`.
+- **M-ASK-ISSUE** (and M-CALL-ISSUE and M-CONSULT-ISSUE) adds
+  `ĉ ≤ available(σ)` to `reserved` on the chain. `available` is a minimum
+  over the chain, so no scope on the chain exceeds its limit.
+- **M-TIME** replaces `ĉ` in `reserved` by an amount `≤ ĉ` in `spent`: the
+  actual price, `ĉ` itself, or, for a cut consult, nothing.
+- **M-NODE-FAIL** replaces `ĉ` by exactly `ĉ` for an ask or a call, and by
+  nothing for a consult.
 - No other transition touches money.
 
 This is much shorter than the big-step argument, because interleaving is
@@ -237,9 +247,12 @@ wherever the big-step rules are exact:
 
 - (a) For programs without `workflow`, the machine's final result and world
   equal big-step `⇓`.
-- (b) For a workflow in which no reservation is refused and no node evaluates
-  `(remaining)`, the machine's value, total spend and finishing time equal the
-  big-step WORKFLOW rule's.
+- (b) For a workflow in which no reservation is refused, no node evaluates
+  `(remaining)`, and no two nodes consult the same human, the machine's
+  value, total spend and finishing time equal the big-step WORKFLOW rule's.
+  (The big-step rule puts one node's questions to a person before the
+  next's; the machine shows them concurrently, and a person's answers may
+  depend on what they saw first. See `04` §8, Theorem 4.)
 
 So `04` stays a correct and simpler specification in the common case, and this
 machine settles the rest.
@@ -258,9 +271,9 @@ applies (least-path policy), and M-TIME is deterministic (issue order).
   `02` §C1**. A budget bounds every loop *that performs effects*, since each
   `ask` costs at least some ε and each `call` takes at least some δ, but it
   doesn't bound pure divergence. That's the same as in every language Ramsey
-  presents. The interpreter will impose a step limit as a **checked run-time
-  error**. It lives outside the semantics, like Impcore's arithmetic-overflow
-  check.
+  presents. The interpreter imposes a step limit (20 million steps) as a
+  **checked run-time error** (`08`, deviation 10). It lives outside the
+  semantics, like Impcore's arithmetic-overflow check.
 - **MCPP runs on this machine.** MCPP's state `s = (S, b, h)` is a projection of
   `M`: `S` is the done nodes of `Ω`, `b = available(σ)` and
   `h = deadline*(σ) − now`. Its decision epochs are the M-TIME jumps. A future
@@ -286,3 +299,6 @@ applies (least-path policy), and M-TIME is deterministic (issue order).
 - `05`: the scripted-mode conventions 2–3 (per-site order; ties broken by
   binding order) are **Theorem 6's scheduler policy**, now stated
   formally.
+- *Added with `consult` ([`11`](11-consult.md)):* the M-CONSULT transitions,
+  their M-TIME rows, the consult case of M-NODE-FAIL, and Theorem 5(b)'s
+  premise about humans.

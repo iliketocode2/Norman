@@ -313,6 +313,7 @@ impl TypeEnv {
             // written form at all.
             Value::Cap(_) => return Err("cannot show a capability".into()),
             Value::Model(_) => return Err("cannot show a model".into()),
+            Value::Human(_) => return Err("cannot show a human".into()),
             Value::Closure(_) | Value::Prim(_) => return Err("cannot show a function".into()),
             Value::Money(_) | Value::Dur(_) | Value::Inf => unreachable!("handled by literal"),
         })

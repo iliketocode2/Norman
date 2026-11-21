@@ -455,3 +455,164 @@ fn non_law_nested_retry_with_negative_counts() {
         ("[cost $1.00] [time 10min]".into(), checks)
     });
 }
+
+// ---------------------------------------------------------------- consult
+//
+// The laws of design/11 §7. A consult's world is a script of what a person
+// does at each site, so these cases build their own: random proposals of a
+// nested type, and random sequences of answers, approvals and declines.
+
+const CONSULT_PREAMBLE: &str = r#"
+(grant h    (human))
+(grant paid (human [price $1.50]))
+(datatype Shape [Dot] [Box (w Num) (label (Text 30))])
+(record Item (name Sym) (on Bool) (shape Shape) (tags (List (Text 12) 3)))
+(define spent (thunk)
+  (let* ([c0 (. (remaining) cost)] [_ (catch (thunk) e e)] [c1 (. (remaining) cost)]) (- c0 c1)))
+(define elapsed (thunk)
+  (let* ([t0 (. (remaining) time)] [_ (catch (thunk) e e)] [t1 (. (remaining) time)]) (- t0 t1)))
+"#;
+
+/// Text that is hard to round-trip: quotes, backslashes, control characters
+/// and multi-byte characters. At most 6 characters of at most 2 bytes each,
+/// so it fits both `(Text 12)` and `(Text 30)`.
+fn awkward_text(r: &mut Rng) -> String {
+    const CHARS: [char; 12] = ['a', 'Z', ' ', '"', '\\', '\n', '\t', '\r', '\u{7}', 'é', '/', '{'];
+    (0..r.range(0, 6)).map(|_| CHARS[r.range(0, CHARS.len() as i64 - 1) as usize]).collect()
+}
+
+/// A random `(List Item 3)`, as µNorman source.
+fn items(r: &mut Rng) -> String {
+    use munorman::lexer::quote;
+    let mut out = String::from("(list");
+    for _ in 0..r.range(0, 3) {
+        let shape = if r.chance(30) {
+            "Dot".to_string()
+        } else {
+            format!("(Box {} {})", r.range(-1000, 1000), quote(&awkward_text(r)))
+        };
+        let tags: Vec<String> = (0..r.range(0, 3)).map(|_| quote(&awkward_text(r))).collect();
+        write!(
+            out,
+            " (Item [name 's{}] [on {}] [shape {}] [tags (list {})])",
+            r.range(0, 9),
+            if r.chance(50) { "#t" } else { "#f" },
+            shape,
+            tags.join(" ")
+        )
+        .unwrap();
+    }
+    out.push(')');
+    out
+}
+
+/// One thing a person might do at a site, with a latency of 0-90 minutes.
+fn person_entry(r: &mut Rng) -> String {
+    let what = match r.range(0, 3) {
+        0 => "(approve)".to_string(),
+        1 => "(decline \"No.\")".to_string(),
+        2 => "(answer \"[]\")".to_string(),       // a valid edit: the empty list
+        _ => "(answer \"not json\")".to_string(), // Invalid
+    };
+    format!("{} (latency {}min)", what, r.range(0, 90))
+}
+
+fn consult_case(law: &str, seed: u64, case: &impl Fn(&mut Rng) -> String) -> String {
+    let mut r = Rng::new(seed ^ fnv(law));
+    let entries: Vec<String> = (0..ENTRIES).map(|_| person_entry(&mut r)).collect();
+    format!("{}(script s [k {}])\n{}\n", CONSULT_PREAMBLE, entries.join("\n  "), case(&mut r))
+}
+
+fn consult_property(law: &str, case: impl Fn(&mut Rng) -> String) {
+    for seed in 0..CASES {
+        if let Err(msg) = run_case(law, seed, &consult_case(law, seed, &case), true) {
+            panic!("{}", msg);
+        }
+    }
+}
+
+fn consult_exp(human: &str, v: &str) -> String {
+    format!("(consult {} (List Item 3) \"Approve?\" (propose {}) 'k)", human, v)
+}
+
+#[test]
+fn law_k1_an_unchanged_approval_returns_exactly_the_proposal() {
+    // The script is overridden: every person approves.
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ fnv("K1"));
+        let v = items(&mut r);
+        let src = format!(
+            "{}(script s [k (approve) (latency 1min)])\n(under ([script s] [cost $1.00] [time 1h])\n  (check-expect {} {})\n  (check-equiv {} {} 'value))\n",
+            CONSULT_PREAMBLE,
+            consult_exp("h", &v),
+            v,
+            consult_exp("h", &v),
+            v
+        );
+        if let Err(msg) = run_case("K1", seed, &src, true) {
+            panic!("{}", msg);
+        }
+    }
+}
+
+#[test]
+fn law_k2_retry_and_attempt_never_recover_declined() {
+    // With the first entry forced to a decline, every retry count gives the
+    // same failure, after exactly one consult's latency.
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ fnv("K2"));
+        let lat = r.range(0, 50);
+        let rest: Vec<String> = (0..ENTRIES).map(|_| person_entry(&mut r)).collect();
+        let (n, v) = (r.range(0, 4), items(&mut r));
+        let f = format!("(lambda () {})", consult_exp("h", &v));
+        let src = format!(
+            "{}(script s [k (decline \"No.\") (latency {}min) {}])\n(under ([script s] [cost $1.00] [time 1h])\n  (check-fail (retry {} {}) (Declined _))\n  (check-fail (attempt {} (lambda (x) #t)) (Declined _))\n  (check-expect (elapsed (lambda () (retry {} {}))) {}min))\n",
+            CONSULT_PREAMBLE,
+            lat,
+            rest.join(" "),
+            n,
+            f,
+            f,
+            n,
+            f,
+            lat
+        );
+        if let Err(msg) = run_case("K2", seed, &src, true) {
+            panic!("{}", msg);
+        }
+    }
+}
+
+#[test]
+fn law_k3_a_consult_spends_at_most_its_price_and_nothing_unpriced() {
+    // Whatever the person does, and whether or not the deadline cuts them
+    // off, a consult spends at most the grant's price; an unpriced one
+    // spends nothing. Budgets range from below the price to plenty.
+    consult_property("K3", |r| {
+        let v = items(r);
+        let cost = money(r.range(1_000_000, 3_000_000));
+        let time = r.range(1, 120);
+        format!(
+            "(under ([script s] [cost {}] [time {}min])\n  (check-assert (<= (spent (lambda () {})) $1.50))\n  (check-expect (spent (lambda () {})) $0))",
+            cost,
+            time,
+            consult_exp("paid", &v),
+            consult_exp("h", &v)
+        )
+    });
+}
+
+#[test]
+fn law_k4_no_consult_outlasts_its_scope() {
+    // Theorem 3, extended: inside a nested time budget, a consult finishes
+    // (or is cut) by that budget's deadline.
+    consult_property("K4", |r| {
+        let (inner, v) = (r.range(0, 60), items(r));
+        format!(
+            "(under ([script s] [cost $5.00] [time 2h])\n  (check-assert (<= (elapsed (lambda () (budget ([time {}min]) {}))) {}min)))",
+            inner,
+            consult_exp("paid", &v),
+            inner
+        )
+    });
+}

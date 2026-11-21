@@ -69,7 +69,8 @@ impl Pattern {
 
 pub type ExpRef = Rc<Exp>;
 
-/// The sixteen expression forms of 04 §3.
+/// The expression forms of 04 §3, plus CONSULT (design/11 §1.2):
+/// `(consult h τ prompt [propose v] 'site)`.
 #[derive(Debug)]
 pub enum Exp {
     Literal(Value),
@@ -84,6 +85,7 @@ pub enum Exp {
     Case(ExpRef, Vec<(Pattern, ExpRef)>),
     Ask { site: Name, model: ExpRef, ty: Type, ctx: ExpRef },
     Call { cap: ExpRef, op: Name, args: Vec<ExpRef> },
+    Consult { site: Name, human: ExpRef, ty: Type, prompt: ExpRef, proposal: Option<ExpRef> },
     Fail(ExpRef),
     Catch(ExpRef, Name, ExpRef),
     Budget { cost: Option<ExpRef>, time: Option<ExpRef>, body: ExpRef },
@@ -173,6 +175,11 @@ pub fn free_vars(e: &Exp) -> BTreeSet<Name> {
             s = free_vars(cap);
             args.iter().for_each(|e| union(&mut s, free_vars(e)));
         }
+        Exp::Consult { human, prompt, proposal, .. } => {
+            s = free_vars(human);
+            union(&mut s, free_vars(prompt));
+            proposal.iter().for_each(|e| union(&mut s, free_vars(e)));
+        }
         Exp::Catch(e1, x, e2) => {
             s = free_vars(e1);
             union(&mut s, minus(free_vars(e2), std::slice::from_ref(x)));
@@ -230,9 +237,17 @@ pub enum HostSpec {
     Kernel(Ops),
     Filesystem(Ops),
     Http(Ops),
+    /// A person (design/11, H1). `price` is µ$ per consult, 0 when the grant
+    /// states none: a consult costs time, not money (H2).
+    Human {
+        price: i64,
+    },
 }
 
-/// One scripted reply (05, "Conventions for scripted mode").
+/// One scripted reply (05, "Conventions for scripted mode"). `Answer`,
+/// `Approve` and `Decline` are what a person does at a consult site
+/// (design/11 §4.2): submit JSON text, submit the proposal unchanged, or
+/// decline with a reason.
 #[derive(Debug, Clone)]
 pub enum Entry {
     Reply { json: String, out: u64, latency: i64 },
@@ -240,6 +255,9 @@ pub enum Entry {
     ProviderError { msg: String, latency: i64 },
     Result { text: String, latency: i64 },
     Error { msg: String, latency: i64 },
+    Answer { json: String, latency: i64 },
+    Approve { latency: i64 },
+    Decline { reason: String, latency: i64 },
 }
 
 impl Entry {
@@ -249,7 +267,23 @@ impl Entry {
             | Entry::Refusal { latency, .. }
             | Entry::ProviderError { latency, .. }
             | Entry::Result { latency, .. }
-            | Entry::Error { latency, .. } => *latency,
+            | Entry::Error { latency, .. }
+            | Entry::Answer { latency, .. }
+            | Entry::Approve { latency }
+            | Entry::Decline { latency, .. } => *latency,
+        }
+    }
+
+    pub fn set_latency(&mut self, d: i64) {
+        match self {
+            Entry::Reply { latency, .. }
+            | Entry::Refusal { latency, .. }
+            | Entry::ProviderError { latency, .. }
+            | Entry::Result { latency, .. }
+            | Entry::Error { latency, .. }
+            | Entry::Answer { latency, .. }
+            | Entry::Approve { latency }
+            | Entry::Decline { latency, .. } => *latency = d,
         }
     }
 }

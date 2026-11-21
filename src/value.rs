@@ -124,6 +124,16 @@ pub struct ModelSpec {
     pub ceiling: u64,
 }
 
+/// A granted person (design/11, H1). Like a model, a human is not a stateful
+/// capability: `reach` ignores it, so workflows may consult one concurrently
+/// (H5), at the price of falling outside Theorem 4 (§2.4).
+#[derive(Debug)]
+pub struct HumanSpec {
+    pub name: Name,
+    /// Micro-dollars per consult; 0 when the grant states no price (H2).
+    pub price: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapKind {
     Kernel,
@@ -175,6 +185,7 @@ pub enum Value {
     Prim(Prim),
     Model(Rc<ModelSpec>),
     Cap(Cap),
+    Human(Rc<HumanSpec>),
     /// Integer micro-dollars.
     Money(i64),
     /// Integer milliseconds.
@@ -233,6 +244,7 @@ impl Value {
             (Prim(a), Prim(b)) => a == b,
             (Model(a), Model(b)) => Rc::ptr_eq(a, b),
             (Cap(a), Cap(b)) => a.id == b.id,
+            (Human(a), Human(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -303,6 +315,7 @@ impl fmt::Display for Value {
             Value::Prim(p) => write!(f, "<primitive {}>", p.name()),
             Value::Model(m) => write!(f, "<model {}>", m.name),
             Value::Cap(c) => write!(f, "<capability {}#{}>", c.key, c.id),
+            Value::Human(h) => write!(f, "<human {}>", h.name),
             Value::Money(m) => write!(f, "{}", fmt_money(*m)),
             Value::Dur(d) => write!(f, "{}", fmt_dur(*d)),
             Value::Inf => write!(f, "∞"),
