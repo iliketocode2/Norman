@@ -259,16 +259,31 @@
 
     <h2 id="types">Types</h2>
     <pre class="syntax"><span class="meta">ty</span> ::= <span class="lit">Text</span> | (<span class="lit">Text</span> <span class="meta">numeral</span>)        <span class="meta">; optionally bounded, in bytes</span>
-     | <span class="lit">Num</span> | <span class="lit">Bool</span> | <span class="lit">Sym</span>
+     | <span class="lit">Num</span> | <span class="lit">Bool</span> | <span class="lit">Sym</span> | <span class="lit">Money</span> | <span class="lit">Dur</span>
      | (<span class="lit">List</span> <span class="meta">ty</span>) | (<span class="lit">List</span> <span class="meta">ty</span> <span class="meta">numeral</span>)
      | <span class="meta">Type</span> | <span class="meta">Record</span>              <span class="meta">; anything you defined</span>
+     | (<span class="meta">Type</span> <span class="meta">ty</span> …)                   <span class="meta">; one with type parameters, applied</span>
      | <span class="lit">Any</span>                          <span class="meta">; a placeholder; never askable</span></pre>
+    <p>
+      A datatype or record can take <strong>type parameters</strong>, and is then given that many
+      arguments wherever it&rsquo;s used:
+    </p>
+    <pre class="syntax">(<span class="lit">datatype</span> (Outcome e a) [Got (value a)] [Unsure (why e)])
+(<span class="lit">ask</span> m (Outcome (Text 40) Num) ctx)    <span class="meta">; a (Got 7), or an (Unsure "…")</span></pre>
+    <p>
+      A type variable may appear only inside the definition that declares it, and inside its own
+      definition a type is applied to exactly its own parameters: <code>(Tree a)</code>, never
+      <code>(Tree (List a))</code>.
+    </p>
 
     <h3 id="askable" data-short="Askability">Which types can be asked for</h3>
     <p>
       A type is <strong>askable</strong> when it is built only from <code>Text</code>,
       <code>Num</code>, <code>Bool</code>, <code>Sym</code>, <code>List</code>, and datatypes or
-      records whose fields are all askable. <code>Any</code> is not askable.
+      records whose fields are all askable, at the arguments given:
+      <code>(Option Num)</code> is askable and <code>(Option Any)</code> isn&rsquo;t.
+      <code>Any</code>, <code>Money</code> and <code>Dur</code> are not askable; JSON has no
+      amounts of money or time.
     </p>
     <p>
       That one rule is what keeps authority unforgeable: a capability is not an askable type, so no
@@ -318,6 +333,7 @@
         <tr><td><code>(Invalid raw)</code></td><td>the reply did not fit the type; <code>raw</code> is what came back</td></tr>
         <tr><td><code>(ToolError message)</code></td><td>a tool or the provider failed — a 503, a Python <code>NameError</code></td></tr>
         <tr><td><code>(Refused category)</code></td><td>the model declined</td></tr>
+        <tr><td><code>(Declined reason)</code></td><td>a person consulted with <code>consult</code> said no</td></tr>
         <tr><td><code>OverBudget</code></td><td>the reservation did not fit the remaining money</td></tr>
         <tr><td><code>PastDeadline</code></td><td>the scope's deadline passed</td></tr>
         <tr><td><code>(Raised reason)</code></td><td>the program's own <code>(fail 'reason)</code></td></tr>
@@ -335,11 +351,11 @@
     <pre class="syntax">(<span class="lit">datatype</span> Role    [System] [User] [Assistant] [Tool])
 (<span class="lit">record</span>   Message (role Role) (content Text))
 (<span class="lit">datatype</span> Failure [Invalid (raw Text)] [ToolError (message Text)]
-                  [Refused (category Sym)] [OverBudget] [PastDeadline]
-                  [Raised (reason Sym)])
-(<span class="lit">datatype</span> Option  [None] [Some (value Any)])
-(<span class="lit">record</span>   Pair    (fst Any) (snd Any))
-(<span class="lit">record</span>   Resources (cost Any) (time Any))</pre>
+                  [Refused (category Sym)] [Declined (reason Text)]
+                  [OverBudget] [PastDeadline] [Raised (reason Sym)])
+(<span class="lit">datatype</span> (Option a) [None] [Some (value a)])
+(<span class="lit">record</span>   (Pair a b) (fst a) (snd b))
+(<span class="lit">record</span>   Resources (cost Money) (time Dur))</pre>
 
     <h3 id="basis-prims" data-short="Primitives">Primitives</h3>
     <table>

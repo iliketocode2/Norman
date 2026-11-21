@@ -66,6 +66,13 @@ fn consult_tests_all_pass() {
 }
 
 #[test]
+fn type_parameter_tests_all_pass() {
+    let s = load("examples/type-parameters.nrm");
+    assert!(s.total >= 19, "expected at least 19 tests, found {}", s.total);
+    assert!(s.clean(), "{} of {} type-parameter tests passed, {} errors", s.passed, s.total, s.errors);
+}
+
+#[test]
 fn scripted_oracle_tests_all_pass() {
     let s = load("examples/oracle-scripted.nrm");
     assert!(s.total >= 10, "expected at least 10 tests, found {}", s.total);

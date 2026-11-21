@@ -193,7 +193,7 @@ fn the_schema_is_most_of_the_input() {
     let req = AskReq {
         site: "analyst".into(),
         model: Rc::clone(&model),
-        ty: Type::Named(Rc::from("Verdict")),
+        ty: Type::named("Verdict"),
         messages,
         max_tokens: 2436,
     };

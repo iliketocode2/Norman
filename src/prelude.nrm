@@ -6,9 +6,9 @@
 (datatype Failure [Invalid (raw Text)] [ToolError (message Text)] [Refused (category Sym)]
                   [Declined (reason Text)]                             ; a person said no (design/11)
                   [OverBudget] [PastDeadline] [Raised (reason Sym)])
-(datatype Option  [None] [Some (value Any)])
-(record   Pair    (fst Any) (snd Any))
-(record   Resources (cost Any) (time Any))
+(datatype (Option a) [None] [Some (value a)])           ; type parameters: design/12, T5
+(record   (Pair a b) (fst a) (snd b))
+(record   Resources (cost Money) (time Dur))
 
 (define not (b)     (if b #f #t))
 (define <= (x y)    (not (> x y)))

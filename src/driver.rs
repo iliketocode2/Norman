@@ -226,8 +226,8 @@ impl Interp {
             Def::Define(f, lambda) => {
                 self.globals.insert(f, Value::Closure(Rc::new(Closure { lambda, env: Env::default() })));
             }
-            Def::Datatype(t, cons) => self.theta.add_datatype(t, cons)?,
-            Def::Record(r, fields) => self.theta.add_record(r, fields)?,
+            Def::Datatype(t, params, cons) => self.theta.add_datatype(t, params, cons)?,
+            Def::Record(r, params, fields) => self.theta.add_record(r, params, fields)?,
         }
         Ok(())
     }

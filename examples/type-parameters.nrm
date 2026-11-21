@@ -1,0 +1,82 @@
+;;; type-parameters.nrm: datatypes and records with type parameters
+;;; (design/12, T5 and step 0).
+;;;
+;;; The basis's Option, Pair and Resources used to hold `Any`, which made them
+;;; unaskable and gave a future type checker nothing to work with. They now
+;;; take parameters, `(Option a)` and `(Pair a b)`, and a program can declare
+;;; its own. A type is applied to its arguments wherever it's used:
+;;; `(Option Num)`, `(List (Pair Sym Num))`.
+
+(grant claude   (model [think 0]))
+(grant reviewer (human))
+
+;;; A parameterized datatype of the program's own: an answer, or why not.
+;;; (Constructor names are global, and the basis's Failure owns `Refused`.)
+(datatype (Outcome e a)
+  [Got    (value a)]
+  [Unsure (why e)])
+
+(define ctx () (list (Message [role User] [content "How many?"])))
+
+;;; ==================================================================
+;;; The basis types are askable once applied to askable arguments.
+;;; (A script gives the answer itself; only the live client wraps a
+;;; non-object answer as {"value": …}, design/09 §2.)
+
+(script answers
+  [count  (reply "{\"tag\":\"Some\",\"value\":42}") (out 10) (latency 1s)]
+  [nobody (reply "{\"tag\":\"None\"}") (out 10) (latency 1s)]
+  [pairs  (reply "[{\"fst\":\"cats\",\"snd\":3},{\"fst\":\"dogs\",\"snd\":5}]") (out 20) (latency 1s)]
+  [maybe-maybe (reply "{\"tag\":\"Some\",\"value\":{\"tag\":\"None\"}}") (out 10) (latency 1s)]
+  [outcome (reply "{\"tag\":\"Unsure\",\"why\":\"too vague\"}") (out 10) (latency 1s)]
+  [wrong   (reply "{\"tag\":\"Some\",\"value\":\"forty-two\"}") (out 10) (latency 1s)])
+
+(under ([script answers] [cost $1.00] [time 1min])
+  (check-expect (ask claude (Option Num) (ctx) 'count) (Some 42))
+  (check-expect (ask claude (Option Num) (ctx) 'nobody) None)
+  (check-expect (ask claude (List (Pair (Text 10) Num) 4) (ctx) 'pairs)
+                (list (Pair [fst "cats"] [snd 3]) (Pair [fst "dogs"] [snd 5])))
+  ;; The same type nested is not recursion.
+  (check-expect (ask claude (Option (Option Num)) (ctx) 'maybe-maybe) (Some None))
+  (check-expect (ask claude (Outcome (Text 40) Num) (ctx) 'outcome) (Unsure "too vague"))
+  ;; Validation follows the argument: a string isn't a (Option Num).
+  (check-fail   (ask claude (Option Num) (ctx) 'wrong) (Invalid _)))
+
+;;; The arguments decide what an answer may cost: a bounded argument bounds
+;;; the reservation, an unbounded one reserves the model's whole output limit.
+(under ([script answers] [cost $0.01] [time 1min])
+  (check-expect (ask claude (Option Num) (ctx) 'count) (Some 42))
+  (check-fail   (ask claude (Option Text) (ctx) 'count) OverBudget))
+
+;;; ==================================================================
+;;; A type must get exactly its arguments, and they must be askable. Each of
+;;; these sites has an answer in `answers`, so the only way to fail is the
+;;; check the test names. The controls above show the sites do answer.
+
+(under ([script answers] [cost $1.00] [time 1min])
+  (check-error (ask claude Option (ctx) 'count))                  ; Option needs an argument
+  (check-error (ask claude (Option Num Num) (ctx) 'count))        ; and only one
+  (check-error (ask claude (Option Any) (ctx) 'count))            ; Any is never askable
+  (check-error (ask claude (Pair (Option Num) (Option Any)) (ctx) 'pairs))
+  (check-error (ask claude Resources (ctx) 'count)))              ; money and time aren't askable
+
+;;; ==================================================================
+;;; Approval returns exactly the proposal at a parameterized type too (K1).
+
+(script approves [review (approve) (latency 1min)])
+
+(under ([script approves] [cost $1.00] [time 1h])
+  (check-expect (consult reviewer (List (Option (Text 20)) 3) "Approve?"
+                         (propose (list (Some "a \"quoted\" item") None)) 'review)
+                (list (Some "a \"quoted\" item") None))
+  ;; A proposal that doesn't fit the arguments is the program's mistake.
+  (check-error  (consult reviewer (Option Num) "Approve?" (propose (Some "x")) 'review)))
+
+;;; ==================================================================
+;;; The values themselves are unchanged: constructors and records don't
+;;; carry their type arguments, so existing code keeps working.
+
+(check-expect (show (Some (Pair [fst 1] [snd 'two]))) "{\"tag\":\"Some\",\"value\":{\"fst\":1,\"snd\":\"two\"}}")
+(check-expect (. (Pair [fst 1] [snd "x"]) snd) "x")
+(check-expect (case (Got 3) [(Got v) v] [(Unsure _) 0]) 3)
+(check-assert (> (. (remaining) cost) $1.00))    ; Resources still holds money

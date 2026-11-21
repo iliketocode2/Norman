@@ -10,12 +10,39 @@ use std::rc::Rc;
 /// Bytes added by the root wrapper `{"value":` … `}`.
 pub const WRAP_OVERHEAD: u64 = 10;
 
+fn arity(n: &str, want: usize, got: usize) -> String {
+    match want {
+        0 => format!("{} takes no type arguments, but was given {}", n, got),
+        1 => format!("{} takes 1 type argument, but was given {}", n, got),
+        _ => format!("{} takes {} type arguments, but was given {}", n, want, got),
+    }
+}
+
 #[derive(Default)]
 pub struct TypeEnv {
     pub datatypes: HashMap<Name, Rc<Vec<ConDef>>>,
     /// Each constructor's datatype, and its index within it.
     pub con_owner: HashMap<Name, (Name, usize)>,
     pub records: HashMap<Name, Rc<Vec<(Name, Type)>>>,
+    /// The type parameters of each datatype and record; none for most.
+    pub params: HashMap<Name, Rc<Vec<Name>>>,
+}
+
+/// A datatype or record at particular type arguments: its constructors or
+/// fields with every parameter replaced.
+enum Instance {
+    Data(Vec<ConDef>),
+    Record(Vec<(Name, Type)>),
+}
+
+/// Replace type parameters by their arguments.
+fn subst(ty: &Type, sigma: &HashMap<Name, Type>) -> Type {
+    match ty {
+        Type::Var(v) => sigma.get(v).cloned().unwrap_or_else(|| ty.clone()),
+        Type::List(t, b) => Type::List(Box::new(subst(t, sigma)), *b),
+        Type::Named(n, args) => Type::Named(n.clone(), args.iter().map(|a| subst(a, sigma)).collect()),
+        _ => ty.clone(),
+    }
 }
 
 impl TypeEnv {
@@ -37,31 +64,103 @@ impl TypeEnv {
         self.con_owner.get(k).map(|(t, _)| t)
     }
 
-    fn check_type(&self, ty: &Type, defining: &str) -> Result<(), String> {
+    /// The type parameters of `n`, if `n` is a datatype or record.
+    fn params_of(&self, n: &str) -> &[Name] {
+        self.params.get(n).map(|p| &p[..]).unwrap_or(&[])
+    }
+
+    /// `n` at type arguments `args`, with the parameters substituted.
+    fn instance(&self, n: &Name, args: &[Type]) -> Result<Instance, String> {
+        let params = self.params_of(n);
+        if !self.is_type_name(n) {
+            return Err(format!("unknown type {}", n));
+        }
+        if params.len() != args.len() {
+            return Err(arity(n, params.len(), args.len()));
+        }
+        let sigma: HashMap<Name, Type> = params.iter().cloned().zip(args.iter().cloned()).collect();
+        if let Some(cons) = self.datatypes.get(n) {
+            Ok(Instance::Data(
+                cons.iter()
+                    .map(|c| ConDef {
+                        name: c.name.clone(),
+                        fields: c.fields.iter().map(|(f, t)| (f.clone(), subst(t, &sigma))).collect(),
+                    })
+                    .collect(),
+            ))
+        } else {
+            let fs = &self.records[n];
+            Ok(Instance::Record(fs.iter().map(|(f, t)| (f.clone(), subst(t, &sigma))).collect()))
+        }
+    }
+
+    /// A field's type is well formed: every name known and applied to the
+    /// right number of arguments, and every type variable one of `params`.
+    /// Inside its own definition a parameterized type must be applied to
+    /// exactly its own parameters, in order: `(Tree a)`, never
+    /// `(Tree (List a))`. Such *regular* recursion keeps every type-directed
+    /// function finite, because unfolding a type never makes it bigger.
+    fn check_type(&self, ty: &Type, defining: &str, params: &[Name]) -> Result<(), String> {
         match ty {
-            Type::Named(n) if &**n == defining || self.is_type_name(n) => Ok(()),
-            Type::Named(n) => Err(format!("unknown type {}", n)),
-            Type::List(t, _) => self.check_type(t, defining),
+            Type::Named(n, args) if &**n == defining => {
+                let own = args.len() == params.len()
+                    && args.iter().zip(params).all(|(a, p)| matches!(a, Type::Var(v) if v == p));
+                if own {
+                    Ok(())
+                } else if args.len() != params.len() {
+                    Err(arity(n, params.len(), args.len()))
+                } else {
+                    let ps: Vec<&str> = params.iter().map(|p| &**p).collect();
+                    Err(format!(
+                        "inside its own definition, {} must be applied to its own parameters, ({} {})",
+                        n,
+                        n,
+                        ps.join(" ")
+                    ))
+                }
+            }
+            Type::Named(n, args) if self.is_type_name(n) => {
+                let want = self.params_of(n).len();
+                if args.len() != want {
+                    return Err(arity(n, want, args.len()));
+                }
+                args.iter().try_for_each(|a| self.check_type(a, defining, params))
+            }
+            Type::Named(n, _) => Err(format!("unknown type {}", n)),
+            Type::Var(v) if params.contains(v) => Ok(()),
+            Type::Var(v) => Err(format!("unknown type variable {}", v)),
+            Type::List(t, _) => self.check_type(t, defining, params),
             _ => Ok(()),
         }
     }
 
-    fn check_fields(&self, fields: &[(Name, Type)], defining: &str, what: &str) -> Result<(), String> {
+    fn check_fields(&self, fields: &[(Name, Type)], defining: &str, params: &[Name], what: &str) -> Result<(), String> {
         let mut seen = HashSet::new();
         for (f, t) in fields {
             if !seen.insert(f.clone()) {
                 return Err(format!("field {} appears twice in {}", f, what));
             }
-            self.check_type(t, defining)?;
+            self.check_type(t, defining, params)?;
+        }
+        Ok(())
+    }
+
+    fn check_params(name: &Name, params: &[Name]) -> Result<(), String> {
+        let mut seen = HashSet::new();
+        for p in params {
+            if !seen.insert(p.clone()) {
+                return Err(format!("type parameter {} appears twice in {}", p, name));
+            }
         }
         Ok(())
     }
 
     /// DEFINEDATATYPE: constructor names fresh, field types well formed.
-    pub fn add_datatype(&mut self, name: Name, cons: Vec<ConDef>) -> Result<(), String> {
+    pub fn add_datatype(&mut self, name: Name, params: Vec<Name>, cons: Vec<ConDef>) -> Result<(), String> {
         if self.records.contains_key(&name) {
             return Err(format!("{} is already a record", name));
         }
+        Self::check_params(&name, &params)?;
         let mut seen = HashSet::new();
         for c in &cons {
             if !seen.insert(c.name.clone()) {
@@ -72,7 +171,7 @@ impl TypeEnv {
             {
                 return Err(format!("constructor {} already belongs to {}", c.name, owner));
             }
-            self.check_fields(&c.fields, &name, &c.name)?;
+            self.check_fields(&c.fields, &name, &params, &c.name)?;
         }
         if let Some(old) = self.datatypes.get(&name) {
             for c in old.iter() {
@@ -82,15 +181,18 @@ impl TypeEnv {
         for (i, c) in cons.iter().enumerate() {
             self.con_owner.insert(c.name.clone(), (name.clone(), i));
         }
+        self.params.insert(name.clone(), Rc::new(params));
         self.datatypes.insert(name, Rc::new(cons));
         Ok(())
     }
 
-    pub fn add_record(&mut self, name: Name, fields: Vec<(Name, Type)>) -> Result<(), String> {
+    pub fn add_record(&mut self, name: Name, params: Vec<Name>, fields: Vec<(Name, Type)>) -> Result<(), String> {
         if self.datatypes.contains_key(&name) {
             return Err(format!("{} is already a datatype", name));
         }
-        self.check_fields(&fields, &name, &name)?;
+        Self::check_params(&name, &params)?;
+        self.check_fields(&fields, &name, &params, &name)?;
+        self.params.insert(name.clone(), Rc::new(params));
         self.records.insert(name, Rc::new(fields));
         Ok(())
     }
@@ -101,32 +203,41 @@ impl TypeEnv {
         self.askable_in(ty, &mut HashSet::new())
     }
 
-    fn askable_in(&self, ty: &Type, visiting: &mut HashSet<Name>) -> Result<(), String> {
+    // The three walks below guard against recursive types with a set of the
+    // applied types being visited, keyed by the *whole* type, `(Option Num)`,
+    // not the name `Option`. By name, `(Option (Option Num))` would look
+    // recursive, and in `(Pair (Option Num) (Option Any))` the second Option
+    // would be skipped as already seen. Regular recursion (`check_type`)
+    // means a recursive type always recurs at the same key, so they end.
+
+    fn askable_in(&self, ty: &Type, visiting: &mut HashSet<String>) -> Result<(), String> {
         match ty {
             Type::Text(_) | Type::Num | Type::Bool | Type::Sym => Ok(()),
             Type::List(t, _) => self.askable_in(t, visiting),
             Type::Any => Err("type Any is not askable".into()),
-            Type::Named(n) => {
-                if !visiting.insert(n.clone()) {
+            Type::Money | Type::Dur => Err(format!("{} is not askable: JSON has no amounts of money or time", ty)),
+            Type::Var(v) => Err(format!("the type variable {} is not askable", v)),
+            Type::Named(n, args) => {
+                if !visiting.insert(ty.to_string()) {
                     return Ok(());
                 }
-                if let Some(cons) = self.datatypes.get(n).cloned() {
-                    for c in cons.iter() {
-                        for (_, t) in &c.fields {
-                            self.askable_in(t, visiting)
-                                .map_err(|e| format!("{} is not askable: {} (in constructor {})", n, e, c.name))?;
+                match self.instance(n, args)? {
+                    Instance::Data(cons) => {
+                        for c in &cons {
+                            for (_, t) in &c.fields {
+                                self.askable_in(t, visiting)
+                                    .map_err(|e| format!("{} is not askable: {} (in constructor {})", ty, e, c.name))?;
+                            }
                         }
                     }
-                    Ok(())
-                } else if let Some(fs) = self.records.get(n).cloned() {
-                    for (f, t) in fs.iter() {
-                        self.askable_in(t, visiting)
-                            .map_err(|e| format!("{} is not askable: {} (in field {})", n, e, f))?;
+                    Instance::Record(fs) => {
+                        for (f, t) in &fs {
+                            self.askable_in(t, visiting)
+                                .map_err(|e| format!("{} is not askable: {} (in field {})", ty, e, f))?;
+                        }
                     }
-                    Ok(())
-                } else {
-                    Err(format!("unknown type {}", n))
                 }
+                Ok(())
             }
         }
     }
@@ -138,39 +249,41 @@ impl TypeEnv {
         self.bound_in(ty, &mut HashSet::new())
     }
 
-    fn bound_in(&self, ty: &Type, visiting: &mut HashSet<Name>) -> Option<u64> {
+    fn bound_in(&self, ty: &Type, visiting: &mut HashSet<String>) -> Option<u64> {
         match ty {
             Type::Text(Some(n)) => Some(n + 2),
-            Type::Text(None) | Type::Sym | Type::Any => None,
+            Type::Text(None) | Type::Sym | Type::Any | Type::Money | Type::Dur | Type::Var(_) => None,
             Type::Num => Some(20),
             Type::Bool => Some(5),
             Type::List(t, Some(n)) => Some(2 + n * (self.bound_in(t, visiting)? + 1)),
             Type::List(_, None) => None,
-            Type::Named(n) => {
-                if !visiting.insert(n.clone()) {
+            Type::Named(n, args) => {
+                let key = ty.to_string();
+                if !visiting.insert(key.clone()) {
                     return None; // recursive types are unbounded
                 }
-                let result = if let Some(cons) = self.datatypes.get(n).cloned() {
-                    let mut best = 0;
-                    for c in cons.iter() {
-                        // {"tag":"K","f":…}
-                        let mut size = 1 + 5 + 1 + (c.name.len() as u64 + 2);
-                        for (f, t) in &c.fields {
-                            size += 1 + (f.len() as u64 + 2) + 1 + self.bound_in(t, visiting)?;
+                let result = match self.instance(n, args).ok()? {
+                    Instance::Data(cons) => {
+                        let mut best = 0;
+                        for c in &cons {
+                            // {"tag":"K","f":…}
+                            let mut size = 1 + 5 + 1 + (c.name.len() as u64 + 2);
+                            for (f, t) in &c.fields {
+                                size += 1 + (f.len() as u64 + 2) + 1 + self.bound_in(t, visiting)?;
+                            }
+                            best = best.max(size + 1);
                         }
-                        best = best.max(size + 1);
+                        Some(best)
                     }
-                    Some(best)
-                } else if let Some(fs) = self.records.get(n).cloned() {
-                    let mut size = 2;
-                    for (f, t) in fs.iter() {
-                        size += (f.len() as u64 + 2) + 1 + self.bound_in(t, visiting)? + 1;
+                    Instance::Record(fs) => {
+                        let mut size = 2;
+                        for (f, t) in &fs {
+                            size += (f.len() as u64 + 2) + 1 + self.bound_in(t, visiting)? + 1;
+                        }
+                        Some(size)
                     }
-                    Some(size)
-                } else {
-                    None
                 };
-                visiting.remove(n);
+                visiting.remove(&key);
                 result
             }
         }
@@ -183,7 +296,7 @@ impl TypeEnv {
         self.schema_in(ty, &mut HashSet::new())
     }
 
-    fn schema_in(&self, ty: &Type, visiting: &mut HashSet<Name>) -> Result<serde_json::Value, String> {
+    fn schema_in(&self, ty: &Type, visiting: &mut HashSet<String>) -> Result<serde_json::Value, String> {
         use serde_json::json;
         let object = |props: Vec<(String, serde_json::Value)>| {
             let required: Vec<&String> = props.iter().map(|(k, _)| k).collect();
@@ -200,30 +313,37 @@ impl TypeEnv {
             Type::Bool => json!({"type": "boolean"}),
             Type::List(t, _) => json!({"type": "array", "items": self.schema_in(t, visiting)?}),
             Type::Any => return Err("type Any is not askable".into()),
-            Type::Named(n) => {
-                if !visiting.insert(n.clone()) {
-                    return Err(format!("{} is recursive, and a live model can't be asked for a recursive type", n));
+            Type::Money | Type::Dur | Type::Var(_) => return Err(format!("{} is not askable", ty)),
+            Type::Named(n, args) => {
+                let key = ty.to_string();
+                if !visiting.insert(key.clone()) {
+                    return Err(format!("{} is recursive, and a live model can't be asked for a recursive type", ty));
                 }
-                let schema = if let Some(cons) = self.datatypes.get(n).cloned() {
-                    let mut alternatives = vec![];
-                    for c in cons.iter() {
-                        let mut props = vec![("tag".to_string(), json!({"const": &*c.name}))];
-                        for (f, t) in &c.fields {
+                let schema = match self.instance(n, args)? {
+                    Instance::Data(cons) => {
+                        let mut alternatives = vec![];
+                        for c in &cons {
+                            let mut props = vec![("tag".to_string(), json!({"const": &*c.name}))];
+                            for (f, t) in &c.fields {
+                                props.push((f.to_string(), self.schema_in(t, visiting)?));
+                            }
+                            alternatives.push(object(props));
+                        }
+                        if alternatives.len() == 1 {
+                            alternatives.pop().unwrap()
+                        } else {
+                            json!({"anyOf": alternatives})
+                        }
+                    }
+                    Instance::Record(fs) => {
+                        let mut props = vec![];
+                        for (f, t) in &fs {
                             props.push((f.to_string(), self.schema_in(t, visiting)?));
                         }
-                        alternatives.push(object(props));
+                        object(props)
                     }
-                    if alternatives.len() == 1 { alternatives.pop().unwrap() } else { json!({"anyOf": alternatives}) }
-                } else if let Some(fs) = self.records.get(n).cloned() {
-                    let mut props = vec![];
-                    for (f, t) in fs.iter() {
-                        props.push((f.to_string(), self.schema_in(t, visiting)?));
-                    }
-                    object(props)
-                } else {
-                    return Err(format!("unknown type {}", n));
                 };
-                visiting.remove(n);
+                visiting.remove(&key);
                 schema
             }
         })
@@ -234,7 +354,9 @@ impl TypeEnv {
     /// This is decided by shape alone, so it also works for recursive types.
     pub fn root_is_object(&self, ty: &Type) -> bool {
         match ty {
-            Type::Named(n) => self.records.contains_key(n) || self.datatypes.get(n).is_some_and(|cons| cons.len() == 1),
+            Type::Named(n, _) => {
+                self.records.contains_key(n) || self.datatypes.get(n).is_some_and(|cons| cons.len() == 1)
+            }
             _ => false,
         }
     }
@@ -350,29 +472,33 @@ impl TypeEnv {
                 let vals = items.iter().map(|x| self.validate(x, t)).collect::<Option<Vec<_>>>()?;
                 Some(Value::list(vals))
             }
-            Type::Any => None,
-            Type::Named(n) => {
+            Type::Any | Type::Money | Type::Dur | Type::Var(_) => None,
+            Type::Named(n, args) => {
                 let obj = j.as_object()?;
-                if let Some(cons) = self.datatypes.get(n) {
-                    let tag = obj.get("tag")?.as_str()?;
-                    let c = cons.iter().find(|c| &*c.name == tag)?;
-                    if obj.len() != c.fields.len() + 1 {
-                        return None;
+                match self.instance(n, args).ok()? {
+                    Instance::Data(cons) => {
+                        let tag = obj.get("tag")?.as_str()?;
+                        let c = cons.iter().find(|c| &*c.name == tag)?;
+                        if obj.len() != c.fields.len() + 1 {
+                            return None;
+                        }
+                        let vals = c
+                            .fields
+                            .iter()
+                            .map(|(f, t)| self.validate(obj.get(&**f)?, t))
+                            .collect::<Option<Vec<_>>>()?;
+                        Some(Value::Con(c.name.clone(), Rc::new(vals)))
                     }
-                    let vals =
-                        c.fields.iter().map(|(f, t)| self.validate(obj.get(&**f)?, t)).collect::<Option<Vec<_>>>()?;
-                    Some(Value::Con(c.name.clone(), Rc::new(vals)))
-                } else if let Some(fs) = self.records.get(n) {
-                    if obj.len() != fs.len() {
-                        return None;
+                    Instance::Record(fs) => {
+                        if obj.len() != fs.len() {
+                            return None;
+                        }
+                        let vals = fs
+                            .iter()
+                            .map(|(f, t)| Some((f.clone(), self.validate(obj.get(&**f)?, t)?)))
+                            .collect::<Option<Vec<_>>>()?;
+                        Some(Value::Record(n.clone(), Rc::new(vals)))
                     }
-                    let vals = fs
-                        .iter()
-                        .map(|(f, t)| Some((f.clone(), self.validate(obj.get(&**f)?, t)?)))
-                        .collect::<Option<Vec<_>>>()?;
-                    Some(Value::Record(n.clone(), Rc::new(vals)))
-                } else {
-                    None
                 }
             }
         }
@@ -391,13 +517,14 @@ mod tests {
         let text = Type::Text(Some(400));
         t.add_datatype(
             Rc::from("Verdict"),
+            vec![],
             vec![
                 ConDef { name: Rc::from("Buy"), fields: vec![(Rc::from("reason"), text.clone())] },
                 ConDef { name: Rc::from("Hold"), fields: vec![] },
             ],
         )
         .unwrap();
-        t.add_record(Rc::from("Point"), vec![(Rc::from("x"), Type::Num), (Rc::from("y"), Type::Num)]).unwrap();
+        t.add_record(Rc::from("Point"), vec![], vec![(Rc::from("x"), Type::Num), (Rc::from("y"), Type::Num)]).unwrap();
         t
     }
 
@@ -413,8 +540,8 @@ mod tests {
     #[test]
     fn show_round_trips_through_validate() {
         let t = theta();
-        let verdict = Type::Named(Rc::from("Verdict"));
-        let point = Type::Named(Rc::from("Point"));
+        let verdict = Type::named("Verdict");
+        let point = Type::named("Point");
 
         let cases: Vec<(Value, Type)> = vec![
             (Value::Num(42), Type::Num),
@@ -507,10 +634,169 @@ mod tests {
         let mut t = TypeEnv::default();
         t.add_datatype(
             Rc::from("Bad"),
+            vec![],
             vec![ConDef { name: Rc::from("Oops"), fields: vec![(Rc::from("tag"), Type::Text(None))] }],
         )
         .unwrap();
         let err = t.show(&Value::con("Oops", vec![Value::str("x")])).unwrap_err();
         assert!(err.contains("reserves"), "{err}");
+    }
+}
+
+/// Type parameters (design/12, T5 and step 0).
+#[cfg(test)]
+mod parameter_tests {
+    use super::*;
+
+    fn var(v: &str) -> Type {
+        Type::Var(Rc::from(v))
+    }
+    fn app(n: &str, args: Vec<Type>) -> Type {
+        Type::Named(Rc::from(n), args)
+    }
+    fn con(name: &str, fields: Vec<(&str, Type)>) -> ConDef {
+        ConDef { name: Rc::from(name), fields: fields.into_iter().map(|(f, t)| (Rc::from(f), t)).collect() }
+    }
+    fn names(xs: &[&str]) -> Vec<Name> {
+        xs.iter().map(|x| Rc::from(*x)).collect()
+    }
+
+    /// The basis's parameterized types, as the prelude declares them.
+    fn theta() -> TypeEnv {
+        let mut t = TypeEnv::default();
+        t.add_datatype(
+            Rc::from("Option"),
+            names(&["a"]),
+            vec![con("None", vec![]), con("Some", vec![("value", var("a"))])],
+        )
+        .unwrap();
+        t.add_record(
+            Rc::from("Pair"),
+            names(&["a", "b"]),
+            vec![(Rc::from("fst"), var("a")), (Rc::from("snd"), var("b"))],
+        )
+        .unwrap();
+        t.add_record(
+            Rc::from("Resources"),
+            vec![],
+            vec![(Rc::from("cost"), Type::Money), (Rc::from("time"), Type::Dur)],
+        )
+        .unwrap();
+        // A regular recursive type.
+        t.add_datatype(
+            Rc::from("Tree"),
+            names(&["a"]),
+            vec![con("Leaf", vec![]), con("Node", vec![("left", app("Tree", vec![var("a")])), ("item", var("a"))])],
+        )
+        .unwrap();
+        t
+    }
+
+    fn some(v: Value) -> Value {
+        Value::con("Some", vec![v])
+    }
+    fn none() -> Value {
+        Value::con("None", vec![])
+    }
+    fn pair(a: Value, b: Value) -> Value {
+        Value::Record(Rc::from("Pair"), Rc::new(vec![(Rc::from("fst"), a), (Rc::from("snd"), b)]))
+    }
+
+    /// The round-trip law S1 holds at parameterized types, including nested
+    /// applications of the same type to different arguments.
+    #[test]
+    fn show_round_trips_at_parameterized_types() {
+        let t = theta();
+        let opt = |a| app("Option", vec![a]);
+        let cases: Vec<(Value, Type)> = vec![
+            (some(Value::Num(3)), opt(Type::Num)),
+            (none(), opt(Type::Num)),
+            (some(some(Value::Num(3))), opt(opt(Type::Num))),
+            (some(none()), opt(opt(Type::Num))),
+            (pair(Value::str("q\"uote"), Value::Num(-1)), app("Pair", vec![Type::Text(Some(10)), Type::Num])),
+            (Value::list(vec![some(Value::str("a")), none()]), Type::List(Box::new(opt(Type::Text(Some(5)))), Some(2))),
+            (pair(some(Value::Sym(Rc::from("s"))), none()), app("Pair", vec![opt(Type::Sym), opt(Type::Bool)])),
+        ];
+        for (v, ty) in cases {
+            let shown = t.show(&v).unwrap();
+            let back = t.validate(&serde_json::from_str(&shown).unwrap(), &ty);
+            assert!(back.as_ref().is_some_and(|b| b.equal(&v)), "{v} at {ty} came back as {back:?} via {shown}");
+        }
+    }
+
+    /// Validation substitutes the arguments: the same JSON is a value of one
+    /// instance and not another.
+    #[test]
+    fn validation_follows_the_type_arguments() {
+        let t = theta();
+        let j: serde_json::Value = serde_json::from_str(r#"{"tag":"Some","value":"x"}"#).unwrap();
+        assert!(t.validate(&j, &app("Option", vec![Type::Text(None)])).is_some());
+        assert!(t.validate(&j, &app("Option", vec![Type::Num])).is_none());
+        assert!(t.validate(&j, &app("Option", vec![Type::Text(Some(0))])).is_none(), "the argument's bound applies");
+    }
+
+    #[test]
+    fn askability_follows_the_type_arguments() {
+        let t = theta();
+        let opt = |a| app("Option", vec![a]);
+        assert!(t.askable(&opt(Type::Num)).is_ok(), "(Option Num) is askable now that Option has a parameter");
+        assert!(t.askable(&opt(Type::Any)).is_err());
+        assert!(t.askable(&opt(Type::Money)).is_err());
+        assert!(t.askable(&Type::named("Resources")).is_err(), "money and durations are not askable");
+        // The visited set is keyed by the whole type. Keyed by name, the second
+        // Option would be skipped as already seen, and this would be askable.
+        assert!(t.askable(&app("Pair", vec![opt(Type::Num), opt(Type::Any)])).is_err());
+        assert!(t.askable(&app("Tree", vec![Type::Num])).is_ok(), "regular recursion terminates");
+    }
+
+    #[test]
+    fn a_type_must_get_exactly_its_arguments() {
+        let t = theta();
+        let err = t.askable(&Type::named("Option")).unwrap_err();
+        assert!(err.contains("takes 1 type argument, but was given 0"), "{err}");
+        let err = t.askable(&app("Option", vec![Type::Num, Type::Num])).unwrap_err();
+        assert!(err.contains("given 2"), "{err}");
+        assert!(t.askable(&app("Resources", vec![Type::Num])).unwrap_err().contains("takes no type arguments"));
+        assert!(t.validate(&serde_json::json!({"tag": "None"}), &Type::named("Option")).is_none());
+    }
+
+    /// Bounds and schemas substitute too, and nesting the same type is not
+    /// recursion.
+    #[test]
+    fn bound_and_schema_follow_the_type_arguments() {
+        let mut t = theta();
+        // The same shape with no parameter: its bound must be identical.
+        t.add_datatype(
+            Rc::from("OptNum"),
+            vec![],
+            vec![con("NoNum", vec![]), con("SomeNum", vec![("value", Type::Num)])],
+        )
+        .unwrap();
+        let opt_num = app("Option", vec![Type::Num]);
+        let shape = |b: Option<u64>| b.map(|n| n as i64);
+        // Constructor names differ in length (None/NoNum, Some/SomeNum), by 3 bytes at most.
+        assert_eq!(shape(t.bound(&opt_num)).unwrap() + 3, shape(t.bound(&Type::named("OptNum"))).unwrap());
+        assert_eq!(t.bound(&app("Option", vec![Type::Text(None)])), None, "an unbounded argument is unbounded");
+        assert_eq!(t.bound(&app("Tree", vec![Type::Num])), None, "recursive types are unbounded");
+
+        let s = t.json_schema(&opt_num).unwrap().to_string();
+        assert!(s.contains(r#""value":{"type":"integer"}"#), "{s}");
+        assert!(t.json_schema(&app("Option", vec![opt_num.clone()])).is_ok(), "nesting is not recursion");
+        assert!(t.json_schema(&app("Tree", vec![Type::Num])).unwrap_err().contains("recursive"));
+    }
+
+    #[test]
+    fn definitions_are_checked() {
+        let mut t = theta();
+        let err = t.add_datatype(Rc::from("Bad"), names(&["a"]), vec![con("B", vec![("x", var("b"))])]).unwrap_err();
+        assert!(err.contains("unknown type variable b"), "{err}");
+        let err = t.add_record(Rc::from("Twice"), names(&["a", "a"]), vec![]).unwrap_err();
+        assert!(err.contains("appears twice"), "{err}");
+        // Non-regular recursion would make the type-directed walks endless.
+        let nested = con("N", vec![("x", app("Nest", vec![Type::List(Box::new(var("a")), None)]))]);
+        let err = t.add_datatype(Rc::from("Nest"), names(&["a"]), vec![nested]).unwrap_err();
+        assert!(err.contains("its own parameters"), "{err}");
+        let err = t.add_record(Rc::from("R"), vec![], vec![(Rc::from("o"), Type::named("Option"))]).unwrap_err();
+        assert!(err.contains("takes 1 type argument"), "{err}");
     }
 }

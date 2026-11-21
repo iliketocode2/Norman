@@ -35,6 +35,7 @@ Current results:
 | Typed grants ([`../examples/typed-tools.nrm`](../examples/typed-tools.nrm)) | 18 of 18 pass |
 | CP-Agent, scripted ([`../examples/cp-agent.nrm`](../examples/cp-agent.nrm)) | 6 of 6 pass |
 | `consult`, scripted ([`../examples/consult.nrm`](../examples/consult.nrm)) | 52 of 52 pass |
+| Type parameters ([`../examples/type-parameters.nrm`](../examples/type-parameters.nrm)) | 19 of 19 pass |
 | `consult`'s trace record, the terminal host driven by a simulated person, and the start-up check ([`../tests/consult.rs`](../tests/consult.rs)) | 18 of 18 pass |
 | Live client against a local stub server ([`../tests/live_stub.rs`](../tests/live_stub.rs)) | 9 of 9 pass |
 | Live `call` against real hosts, including Python ([`../tests/live_tools.rs`](../tests/live_tools.rs)) | 12 of 12 pass |
@@ -86,7 +87,7 @@ the event-by-event semantics implementable exactly.
 | cancellation, charged the reservation (07 §5), except for a consult | `cancel` |
 | scheduler policy (least path; run until blocked) | `run_main` |
 | `reach(v)` via free variables | `Machine::reach`, using each closure's precomputed `fv` |
-| `validate_Θ`, `bound`, `askable` | [`src/types.rs`](../src/types.rs) |
+| `validate_Θ`, `bound`, `askable` | [`src/types.rs`](../src/types.rs); a parameterized type goes through `TypeEnv::instance`, which checks the arity and substitutes the arguments |
 | sugar of 04 §7.1 | [`src/parser.rs`](../src/parser.rs): `let*`, `begin`, `par`, `and`, `or`, `(fail 'sym)`, the default `ask` site |
 | initial basis of 04 §7.2 | [`src/prelude.nrm`](../src/prelude.nrm), written in µNorman |
 

@@ -479,7 +479,10 @@ Open questions:
 
 In dependency order, and each testable on its own:
 
-0. **Type parameters, before any checker** (T5). The grammar gains
+0. ✅ **Done.** Built and tested in
+   [`../examples/type-parameters.nrm`](../examples/type-parameters.nrm) and
+   the `parameter_tests` in `src/types.rs`, with the schema tested in
+   `src/anthropic.rs`. **Type parameters, before any checker** (T5). The grammar gains
    parameterized `datatype` and `record` declarations and type application
    in `ty`; [`../src/types.rs`](../src/types.rs) substitutes type arguments
    in `validate`, `show`, `bound` and `askable`; and the schema of `09` §2
