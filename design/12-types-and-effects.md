@@ -452,23 +452,26 @@ The difficult parts, in order of risk:
    where the mistake is. A first version should at least name both sides'
    origins.
 
-Open questions:
+Questions, **decided** with the user before implementation began:
 
-- **Q-1: should a checked program skip `WORKFLOWSHARED`** (§5.3)? Recommended,
-  because what it would still reject can't interfere. The cost is that the
-  dynamic semantics then depends on whether the checker ran, which `04` and
-  `07` would have to say.
-- **Q-2: redefinition** (`08`, deviation 2). With whole-file checking, a
-  name defined twice could be an error, or allowed when both definitions have
-  the same scheme. The second keeps Ramsey's REPL habit; the first is simpler
-  and catches accidents.
-- **Q-3: should non-exhaustive `case` on a model's answer be an error?** It
-  is the most common way an agent program gets stuck: the model's type gains
-  a constructor and one `case` isn't updated. T2 makes it a warning; there's
-  a case for promoting this one.
-- **Q-4: a `consult` whose answer is unused** (`11` §8) is a syntactic
-  warning in this design (a consult in a `begin`, or bound to an unused name).
-  It doesn't follow the answer through data structures.
+- **Q-1, decided: a checked program skips `WORKFLOWSHARED`** (§5.3). What
+  it would still reject can't interfere. The cost, which `04` and `07` must
+  state, is that the dynamic rule then depends on whether the checker ran.
+- **Q-2, decided: defining a top-level name twice is an error** (`08`,
+  deviation 2). With whole-file checking, "which definition does this use?"
+  has no good answer, and a second definition is usually an accident. µNorman
+  has no interactive REPL, which is where Ramsey's redefinition habit earns
+  its keep.
+- **Q-3, decided: a non-exhaustive `case` is an error when its scrutinee is
+  an answer from `ask` or `consult`, and a warning otherwise.** A missed
+  constructor in an answer type is the commonest way an agent program gets
+  stuck. Telling the two apart means following where the scrutinee came
+  from, at least through `let`-bound names, which the checker records.
+- **Q-4, decided: the unused-consult warning stays syntactic** (a consult in
+  a `begin`, or bound to a name that is never used). Following the answer
+  through data structures can come later.
+- **`Any`, decided: it is removed once the checker is in use.** It has no
+  static meaning, and nothing uses it now that the basis doesn't.
 - **Q-E (from `10`)** remains open, and this design doesn't address it.
   Revoking a derived capability is about how long a name may be used, which
   is a question for a type system with lifetimes, not this one.
@@ -490,11 +493,27 @@ In dependency order, and each testable on its own:
    and `Resources` move off `Any`. This changes the running language, not
    just its checking, so it gets its own tests and its own commit: the
    `show` round trip on parameterized values, and the schema sent for one.
-1. **Types and unification,** with name and effect variables, in a new
-   `src/check.rs`. Tests: unification and occurs-check unit tests.
-2. **Inference for the inherited forms,** with binding groups (T7) and the
-   value restriction. Test: the prelude checks, and its inferred schemes are
-   asserted.
+1. ✅ **Types and unification,** with effect variables, in
+   [`../src/check.rs`](../src/check.rs). Name variables come with step 3,
+   because nothing has a name-indexed type before grants do.
+2. ✅ **Inference for the inherited forms,** with binding groups (T7),
+   generalization (type variables freely, §4.1), the constraints of §3 with
+   defaulting per group, the load-order rule (§4.4) and Q-2. `fail`,
+   `catch`, `budget`, `(remaining)` and `workflow` are typed too, the last
+   without ownership (step 4). The prelude checks, and every inferred type is
+   asserted in [`../tests/check.rs`](../tests/check.rs); they are the types
+   this document predicts, such as `retry : (Num (-> a ! e1) -> a ! e1)`.
+
+   **Building it found two bugs, both now tested and mutation-checked.**
+   Generalization copied each effect variable's *direct* lower bound, so an
+   effect reaching a type only through a variable not in it was lost:
+   `best-of` and anything calling `attempt` came out with no effect at all,
+   which would have made Theorem 8 false. Bounds are now flattened when
+   generalizing (`generalize` in `check.rs`). And resolving a field to its
+   record dropped the field's constraint, which unlinked the field's type
+   from the record's, so `swap` came out as `((Pair a b) -> (Pair c a))`.
+   A field several records share now gives a qualified type,
+   `Has a x b => (a -> b)`, resolved where the function is used.
 3. **The agentic forms and constraints** of §3 and §4.2, and
    `check-type-error`. Tests: every example file checks; the checked-error
    tests that are about types (a non-person consulted, an unaskable type, a
@@ -508,7 +527,9 @@ In dependency order, and each testable on its own:
    `(val k (call py fork))` used in two nodes, which must be rejected (§4.1).
 5. **Warnings** (T2) and **wiring**: the driver checks a file tree before
    loading it; `norman --no-check` keeps today's behavior; the playground
-   reports type errors.
+   reports type errors. Two collisions with Q-2 must be fixed first: both
+   `step5-examples.nrm` and `consult.nrm` define `spent` and `elapsed`, and
+   both grant `claude`, and `tests/must-fail.nrm` uses both files.
 6. **The properties.** Random well-typed programs must never hit a check
    Theorem 7 rules out, which is Theorem 7 tested the way `06`'s laws are.
 

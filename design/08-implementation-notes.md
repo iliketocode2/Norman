@@ -36,6 +36,7 @@ Current results:
 | CP-Agent, scripted ([`../examples/cp-agent.nrm`](../examples/cp-agent.nrm)) | 6 of 6 pass |
 | `consult`, scripted ([`../examples/consult.nrm`](../examples/consult.nrm)) | 52 of 52 pass |
 | Type parameters ([`../examples/type-parameters.nrm`](../examples/type-parameters.nrm)) | 19 of 19 pass |
+| The type checker, steps 1–2 of `12` ([`../tests/check.rs`](../tests/check.rs)): the prelude's inferred types, effects, rejections, load order, polymorphism, overloading | 16 of 16 pass; not yet run on programs (`12` §9, step 5) |
 | `consult`'s trace record, the terminal host driven by a simulated person, and the start-up check ([`../tests/consult.rs`](../tests/consult.rs)) | 18 of 18 pass |
 | Live client against a local stub server ([`../tests/live_stub.rs`](../tests/live_stub.rs)) | 9 of 9 pass |
 | Live `call` against real hosts, including Python ([`../tests/live_tools.rs`](../tests/live_tools.rs)) | 12 of 12 pass |
