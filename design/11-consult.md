@@ -27,12 +27,12 @@ checker afterwards (`10` §4).
 | # | Question | Decision |
 |---|---|---|
 | H1 | Who is consulted? | **A granted human**, `(grant reviewer (human))`, passed to `consult` the way a model is passed to `ask`. Humans come from the host, never from the program, as models and capabilities do. |
-| H2 | Q-C: is a consult charged money? | **Time by default. Money only if the grant states a price,** `(human [price $2.00])`. The price is reserved before the person is asked, like any other charge, so Theorem 1 is unchanged. |
-| H3 | Q-D: what if no human is attached? | **The program doesn't start.** In live mode, the operator must bind every human grant on the command line: to a terminal, or to an explicit policy that declines everything. There is no policy that approves everything. In scripted mode, the script answers. |
+| H2 | Q-C: is a consult charged money? | **Time by default. Money only if the grant states a price,** `(human [price $2.00])`. The price is reserved before the person is asked, like any other charge, so Theorem 1 is unchanged. A flat price per consult can't express hourly pay, so Q-C is settled for now, not for good (§10, Q-I). |
+| H3 | Q-D: what if no human is attached? | **The program doesn't start.** In live mode, the operator must bind every human grant on the command line: to a terminal, or to `unattended`, under which any consult is a **checked run-time error**. There is no policy that approves everything, and none that pretends to be a person saying no. In scripted mode, the script answers. |
 | H4 | Is a refusal retryable? | **No.** A refusal is a new failure, `Declined (reason Text)`. `retry`, `repair` and `attempt` don't recover it, by the same argument as `Refused` (`09`, decision B). A program that *revises* its proposal and consults again is making a new request, which is fine. |
-| H5 | Is a human stateful? | **No, in the same sense a model isn't.** A person's answers are a relation, so what they half-remember from an earlier consult is one more source of variation, not state the semantics must protect. Concurrent consults of one person are allowed, and every consult must be **self-contained** (§2.5). |
+| H5 | Is a human stateful? | **Not for ownership, but not stateless either.** Concurrent consults of one person are allowed. But a person's answer can depend on what they were shown before, so a workflow in which two nodes consult the same person falls outside Theorem 4, as one that reads `(remaining)` does (§2.4). Every consult should be **self-contained** (§2.5). |
 | H6 | How does approval bind to the operation? | **An optional proposal, `[propose v]`, is shown and pre-filled as the answer.** Approving it unchanged returns exactly `v`, by the `show` round-trip law S1. The program runs the answer, not its own copy (§3). |
-| H7 | Does waiting for a person count against the deadline? | **Yes.** The clock is the clock. A consult inside a one-minute scope will almost always be cut, and that's correct: the scope promised to finish in a minute. |
+| H7 | Does waiting for a person count against the deadline? | **Yes.** The clock is the clock. A consult inside a one-minute scope will almost always be cut, and that's correct: the scope promised to finish in a minute. **This has a cost:** since `budget` only shrinks deadlines, a scope containing a consult needs a deadline of hours, and a model call inside it keeps a tight time limit only if it has its own inner `budget` (§6). Q-G is the real answer. |
 | H8 | Is the autonomy level a form? | **No** (as `10` §2.2 already argued). It's ordinary data, and `case` on it is library code (§6). |
 
 ---
@@ -116,6 +116,21 @@ price_η          the grant's stated price per consult (0 if none)
 nothing. What the person is shown is fixed by the host (§4), but it must
 include `p`, `v̂` and the shape of `τ`.
 
+Unlike the model oracle, this relation is **not** history-independent: what a
+person answers may depend on what they were shown earlier in the run. The
+semantics doesn't model that dependence; it only declines to promise anything
+that would need its absence (§2.4).
+
+**Conformance.** µNorman has no typing judgment at run time yet, so "`v` is a
+`τ`" is defined by the round trip `show` already guarantees:
+
+```
+v ⊨ τ   iff   validate_Θ(show v, τ) = v
+```
+
+It's undefined (so false) when `v` can't be shown, for instance because it
+contains a capability.
+
 ### 2.2 Rules
 
 The premises are evaluated in order: human, prompt, then proposal.
@@ -123,7 +138,7 @@ The premises are evaluated in order: human, prompt, then proposal.
 ```
 ⟨e_h, Θ, ρ, W⟩ ⇓ ⟨HUMAN(η), W₁⟩
 ⟨e_p, Θ, ρ, W₁⟩ ⇓ ⟨p, W₂⟩                    p is Text
-⟨e_v, Θ, ρ, W₂⟩ ⇓ ⟨v, W₃⟩    v : τ           (only if a proposal is given; else W₃ = W₂)
+⟨e_v, Θ, ρ, W₂⟩ ⇓ ⟨v, W₃⟩    v ⊨ τ           (only if a proposal is given; else W₃ = W₂)
 W₃.now < W₃.deadline
 ĉ = price_η ≤ W₃.pool
 W₃.hosts ⊢ ⟨η, s, p, τ, show v⟩ ⇝ ⟨answer j, δ⟩
@@ -143,54 +158,79 @@ The failing variants share the first three premises:
 | CONSULTLATE | `W₃.now + δ > W₃.deadline` | `fail PastDeadline` | `W₃[now := deadline]` plus a trace entry: **cut, and not charged** (see below) |
 | CONSULTINVALID | `validate_Θ(j, τ)` undefined | `fail (Invalid j)` | `W₃ ⊕ ⟨ĉ, δ, t⟩` |
 
-And one checked run-time error, not a failure:
+And two checked run-time errors, not failures:
 
-- **A proposal that isn't a `τ`** (`v : τ` fails). The program proposed
-  something it then declared the wrong type for. That's a bug in the program,
-  not something the person or the world did. The checker will catch it
-  statically; until then it's caught here, before anyone is asked.
+- **A proposal that doesn't conform to `τ`** (`v ⊨ τ` fails). The program
+  proposed something it then declared the wrong type for. That's a bug in the
+  program, not something the person or the world did. The checker will catch
+  it statically; until then it's caught here, before anyone is asked.
+- **A consult of a human bound to `unattended`** (§4.1). That's the operator's
+  configuration saying no person is available, which the program can't
+  recover from and shouldn't try to.
 
 Read these the way `04` reads ASK:
 
 - **The person is asked only after the reservation succeeds,** and only once.
   No rule re-invokes the human oracle.
-- **A cut consult isn't charged,** unlike ASKLATE, which charges its
-  reservation. A model's provider bills for the tokens it generated before
-  the cut; a reviewer who never answered delivered nothing. Charging less than
+- **A consult that is cut or cancelled isn't charged,** unlike ASKLATE, which
+  charges its reservation. A model's provider bills for the tokens it
+  generated before the cut; a reviewer who never answered delivered nothing.
+  That holds however the consult ends early: at its own deadline here, or
+  because a sibling workflow node failed (§5, M-NODE-FAIL). Charging less than
   the reservation is always safe for Theorem 1.
 - **CONSULTINVALID should be rare in live mode,** because the host validates
   the answer in its own form before the person can submit it (§4). The rule
-  stays for scripts and for hosts that can't validate.
+  stays for scripts and for hosts that can't validate. When it does happen,
+  `retry` will consult the person again, since `retry` recovers `Invalid`
+  without knowing where it came from. That's accepted (K2): telling the two
+  apart would mean tagging `Invalid` with its source, which costs more than
+  this rare case is worth.
 
 ### 2.3 The trace
 
 Each consult appends one entry:
 
 ```
-⟨site, path, human η, prompt p, proposal show v, answer j | decline r | cut, charge, δ, outcome⟩
+⟨site, path, human η, prompt p, proposal show v, answer j | decline r | cut | cancelled, charge, δ, outcome⟩
 ```
 
-That entry is the **audit record**: exactly what the person was shown, and
-exactly what they said. The trace is part of the world (`04`, decision F4), so
+That entry is the **audit record**: exactly what the program showed the
+person, and exactly what they said. If a person answers a consult that was
+already cut or cancelled, the host discards the answer and appends a second
+entry marked `discarded`, so the record shows that someone answered and that
+the answer was not used. The trace is part of the world (`04`, decision F4), so
 the record is part of the semantics, not a log someone might forget to write.
 
 ### 2.4 Workflows
 
-No change to WORKFLOW is needed. Because `reach(HUMAN(η)) = ∅`, two nodes may
-consult the same person concurrently, exactly as two nodes may ask the same
+The WORKFLOW rule itself doesn't change. Because `reach(HUMAN(η)) = ∅`, two
+nodes may consult the same person concurrently, as two nodes may ask the same
 model. If the person can only attend to one prompt at a time, the second waits,
-and that wait is part of its `δ`. That's latency, which the clock already
-models, not interference, which ownership exists to prevent.
+and that wait is part of its `δ`.
 
-> **Correction to an earlier draft.** H5 first made humans stateful, so that
-> ownership would forbid two concurrent consults of one person, on the grounds
-> that a person remembers what they were shown. That argument proves too much.
-> Ownership forbids only *concurrent* use, and two *sequential* consults depend
-> on the person's memory just as much. What ownership actually protects
-> against is a result that depends on the interleaving of operations on exact
-> state, as a kernel's does. A person's memory is neither exact nor lasting.
-> Its influence belongs in the oracle relation, as a model's variability does,
-> so Theorem 4 holds for humans for the same reason it holds for models.
+**Theorem 4 does change.** It says a workflow's value is the value of every
+sequentialization of its nodes, and its proof uses the fact that models are
+stateless. A person isn't: running the nodes in a different order changes
+what the person sees first, and so possibly what they answer. So Theorem 4
+gains a third premise, in the same form as the one for `(remaining)`:
+
+```
+(iii) no two nodes consult the same human
+```
+
+A workflow that breaks (iii) is still allowed and still runs. It just falls
+outside the law, so a refactoring tool may not reorder it.
+
+> **Correction to two earlier drafts.** The first draft made humans stateful,
+> so that ownership would forbid two concurrent consults of one person, on the
+> grounds that a person remembers. That proves too much: ownership forbids
+> only *concurrent* use, and two *sequential* consults depend on memory just
+> as much. The second draft concluded that a person's memory could simply be
+> folded into the oracle relation, "so Theorem 4 holds for humans for the same
+> reason it holds for models." That was wrong too. For a model, statelessness
+> is literally true, since each request is independent. For a person it's
+> false, and the §7 non-law about reordering consults contradicted it. The fix
+> is the premise above: no ownership, and no promise about reordering either.
 
 ### 2.5 Every consult is self-contained
 
@@ -202,7 +242,9 @@ So the host shows **only** the prompt and the proposal, and a program should
 put everything the person needs into them. That's decision D1, explicit
 context, applied to people: a model sees exactly the context it's given, and
 so should a person. It also makes the trace entry (§2.3) a complete record of
-what each answer was based on.
+everything the *program* gave the person to go on. It can't be a record of
+everything the answer was based on, since the person brings their own memory
+and judgment, and nothing can record those.
 
 The semantics can't enforce this, since it can't see what a prompt *refers*
 to. It is a design rule for programs, and the library examples in §6 follow
@@ -228,10 +270,11 @@ The host pre-fills the answer with `show plan₀`. A person who approves it
 unchanged submits that text, and by S1 (`06` §5):
 
 ```
-validate (show v) τ  =  v          for askable τ and v : τ
+validate (show v) τ  =  v          for askable τ and v ⊨ τ
 ```
 
-so the consult returns **exactly** `plan₀`. A person who edits the plan returns
+so the consult returns **exactly** `plan₀`. (The premise `v ⊨ τ` was already
+checked before the person was asked, §2.2, so the law always applies.) A person who edits the plan returns
 the edited plan, validated against the same type, and the program runs that.
 A person who refuses gets `Declined`, and nothing runs. Approving,
 editing and refusing are three outcomes of one form, and the first needs no
@@ -240,7 +283,12 @@ special case in the semantics.
 What this does and doesn't guarantee:
 
 - **It does guarantee** that the value returned by an unchanged approval is
-  the value that was shown, bit for bit, and that the trace records both.
+  the proposal that was shown, bit for bit, and that the trace records both.
+- **It doesn't cover the prompt.** The prompt is free text, and it can
+  contradict the proposal: "Approve deleting the three stale branches" above
+  a list of four. The person sees both, so a careful reader catches it, but
+  the binding is to the proposal only. A program should keep its prompt
+  generic ("Approve this plan?") and let the proposal carry the specifics.
 - **It doesn't guarantee** that the program uses the answer. That's what the
   checker can help with later: a consult whose result is never used is almost
   always a mistake, and an effect system can warn about it (§8).
@@ -255,8 +303,8 @@ Every `human` grant must be bound on the command line, or the run refuses to
 start (H3). It's a checked error before anything runs, so no money is spent:
 
 ```
-cargo run -- --live --human reviewer=tty    examples/saga-loop.nrm
-cargo run -- --live --human reviewer=decline examples/saga-loop.nrm
+cargo run -- --live --human reviewer=tty        examples/saga-loop.nrm
+cargo run -- --live --human reviewer=unattended examples/saga-loop.nrm
 ```
 
 - **`tty`** shows the site, the prompt, the proposal and the expected shape of
@@ -264,14 +312,31 @@ cargo run -- --live --human reviewer=decline examples/saga-loop.nrm
   against `τ` before accepting it, and asks the person again if it doesn't
   fit; that's UI, not a second consult. The person can approve the proposal
   as is, edit it, or decline with a reason.
-- **`decline`** declines every consult at once, with the reason
-  `"no human attached"`. That's the explicit headless policy: an unattended
-  run fails loudly at the first point it needed a person.
+- **`unattended`** makes any consult a **checked run-time error**: the run
+  stops at the first point it needed a person, and no handler can intercept
+  it. That's what makes a headless run fail loudly.
+
+> **Correction to an earlier draft.** The headless policy was first called
+> `decline`, and answered every consult with `Declined "no human attached"`.
+> But `Declined` can be caught, and §6's own `plan-with-review` catches it on
+> purpose: under that policy it would feed "no human attached" to the model
+> as feedback and re-plan *n* times, spending real money arguing with a
+> configuration setting. A missing person is not a person saying no, so it
+> mustn't produce the same failure.
+
+Every human grant must be bound even when the run never consults anyone, as
+an autopilot run doesn't. Bind it to `unattended`: if the program does reach a
+consult after all, the run stops rather than guessing.
 
 There is deliberately **no `approve` policy**. Silence never means approval.
 A run that should behave as if everything were approved is the autopilot
 level, and that's a choice the program makes in its own code (§6), where it's
 visible and testable.
+
+**Withdrawing a consult.** When a consult is cut at its deadline or cancelled
+by a failing sibling, the host must withdraw the prompt from the person, so
+nobody keeps working on a question the program has stopped waiting for. An
+answer that arrives anyway is discarded and recorded (§2.3).
 
 Other hosts (a web form, a chat message) fit the same interface later. The
 semantics doesn't care how the question reaches the person.
@@ -323,6 +388,15 @@ and three rows in M-TIME's table:
 An answer that arrives in time but doesn't validate is charged and resumes
 with `(fail (Invalid j))`, as for `ask`.
 
+**M-NODE-FAIL changes too.** It currently charges every cancelled in-flight
+request its reservation, which is right for `ask` (the provider bills for
+tokens already generated) and wrong for a consult (§2.2). It gains a case:
+
+| Cancelled request | Money |
+|---|---|
+| an `ask` or `call` | `reserved −= ĉ`, `spent += ĉ` (unchanged) |
+| a `consult` | `reserved −= ĉ`, **not** spent; the host withdraws the prompt (§4.1) |
+
 In live mode, a consult is one more kind of in-flight request. M-TIME already
 blocks until the next completion or the earliest deadline, so a person who
 takes an hour simply makes the next completion an hour away.
@@ -336,9 +410,9 @@ SAGA's three levels, written as data and `case`:
 ```scheme
 (datatype Autonomy [CoPilot] [SemiPilot] [AutoPilot])
 
-;; Co-pilot reviews the planner and the analyzer; semi-pilot only the planner.
-(define reviews-planner?  (level) (case level [AutoPilot #f] [_ #t]))
-(define reviews-analyzer? (level) (case level [CoPilot #t]   [_ #f]))
+;; Co-pilot and semi-pilot both review the planner. Co-pilot also reviews the
+;; analyzer's report, which is written the same way with its own predicate.
+(define reviews-planner? (level) (case level [AutoPilot #f] [_ #t]))
 
 (define reviewed-objectives (level h objs)
   (if (reviews-planner? level)
@@ -370,11 +444,14 @@ its script rewound (`05`, convention 1), so each outcome gets its own script:
 The first test passes only because nobody is asked: under `silent`, any
 consult would exhaust the script, which is a checked error.
 
-And refusal-then-revision is ordinary code, not a retry:
+And refusal-then-revision is ordinary code, not a retry. The scope around
+this function needs a deadline long enough for a person (H7), so the model
+call gets its own one-minute `budget`. Without it, a slow model would have
+the person's hours to use up:
 
 ```scheme
 (define plan-with-review (h m ctx n)
-  (let* ([proposal (ask m Plan ctx 'planner)])
+  (let* ([proposal (budget ([time 1min]) (ask m Plan ctx 'planner))])
     (catch (consult h Plan "Approve this plan?" [propose proposal] 'approve)
            err
            (case err
@@ -400,9 +477,10 @@ Following `06`. `≡` is exact equivalence and `≡v` equivalence of value only
 
 ```
 (K1) under a script answering (approve):
-       (consult h τ p [propose v] s)  ≡  v                       for askable τ, v : τ   ; binding, from S1
+       (consult h τ p [propose v] s)  ≡  v                       for askable τ, v ⊨ τ   ; binding, from S1
 (K2) (retry n (lambda () (fail (Declined r))))   ≡  (fail (Declined r))                  ; spec: never retried
      (attempt (lambda () (fail (Declined r))) c) ≡  (fail (Declined r))
+     but (retry n (lambda () (consult …))) does re-consult on Invalid                    ; accepted (§2.2)
 (K3) spend(consult h τ p …) ≤ price_h, and = 0 when h's grant has no price                ; resources
 (K4) no CONSULTOK or CONSULTDECLINED trace entry finishes after its scope's deadline      ; Theorem 3, extended
 ```
@@ -415,7 +493,7 @@ K1 is the law that §3 is for. It's mutation-testable the way S1 is: break
 | Tempting "law" | Why it's false |
 |---|---|
 | **Merge identical consults:** two consults with the same prompt equal one | A person can answer differently the second time, and the right side asks them half as often. Same as `ask` (`06` §5). |
-| **Two consults of one person can be reordered** freely | Only `≡v` at best, and not even that in practice: a person's answer may depend on what they saw just before. Like moving an `ask` between sites, reordering changes the trace, so it isn't `≡`. |
+| **Two consults of one person can be reordered** freely | Not even `≡v`: a person's answer may depend on what they saw just before. This is why Theorem 4 needs premise (iii) (§2.4). |
 | **A proposal approved is a proposal executed** | Only if the program runs the answer. The semantics can't force that; the checker can warn (§8). |
 
 ---
@@ -427,11 +505,11 @@ K1 is the law that §3 is for. It's mutation-testable the way S1 is: break
 | `04` §2, §3, §3.1 | the `human` host-spec, CONSULT in the grammar and abstract syntax, `fv`, the askable rule for `consult` |
 | `04` §6.2, §6.5 | the human oracle and `price_η`; CONSULT's rules |
 | `04` §7.2 | `Declined` in `Failure`; `HUMAN(η)` unshowable |
-| `04` §8 | one new case in each of Theorems 1–3 (below); Theorem 4 is unchanged: humans enter it the way models do, through the oracle relation |
+| `04` §8 | one new case in each of Theorems 1–3 (below); Theorem 4 gains premise (iii), no two nodes consult the same human (§2.4) |
 | `05` | a coverage row for every CONSULT rule; scripted entries `answer`, `approve`, `decline` |
-| `06` §5 | K1–K4 and the non-laws |
-| `07` §4 | the three M-CONSULT transitions and the M-TIME rows |
-| `09` | the live human host and `--human`; refusing to start with an unbound grant |
+| `06` §4, §5 | premise (iii) on law W1; K1–K4 and the non-laws |
+| `07` §4 | the three M-CONSULT transitions, the M-TIME rows, and the consult case of M-NODE-FAIL |
+| `09` | the live human hosts and `--human`; refusing to start with an unbound grant; withdrawing cut and cancelled consults |
 | `10` §2.2, §4, §5 | point here; Q-C and Q-D settled |
 
 **The new proof cases are short:**
@@ -448,7 +526,10 @@ later.
 2. The human expression has type `Human`, and a proposal has type `τ`.
 3. A consult contributes an effect, *consults η*, to the expression's effect
    set. It isn't an ownership effect (H5), but it lets a policy say which
-   parts of a program may involve a person at all.
+   parts of a program may involve a person at all, and it lets the checker
+   **flag a workflow whose nodes consult the same human**, which falls
+   outside Theorem 4. That's the same treatment as a node that reads
+   `(remaining)`: allowed, but reported.
 4. **A warning when a consult's answer is unused**, since an approval that is
    then discarded is almost always the §3 mistake.
 5. A program that consults a human it was never granted doesn't typecheck.
@@ -467,15 +548,16 @@ In the order the code depends on it:
 2. **Values.** `Value::Human`, not stateful for `reach`; refused by `show`
    ([`../src/value.rs`](../src/value.rs), [`../src/types.rs`](../src/types.rs)).
    `Declined` in [`../src/prelude.nrm`](../src/prelude.nrm).
-3. **Machine.** The M-CONSULT transitions and the completion rows in
-   [`../src/machine.rs`](../src/machine.rs), sharing the request machinery
-   `ask` and `call` already use.
+3. **Machine.** The M-CONSULT transitions, the completion rows and the
+   uncharged cancellation in [`../src/machine.rs`](../src/machine.rs), sharing
+   the request machinery `ask` and `call` already use.
 4. **Scripts.** `answer`, `approve` and `decline` entries in the scripted host.
 5. **Tests.** `examples/consult.nrm` with a test for every rule in §2.2, the
    three autonomy levels, and K1–K4 in [`../tests/properties.rs`](../tests/properties.rs).
    A deliberately wrong version in [`../tests/must-fail.nrm`](../tests/must-fail.nrm)
    (for instance, a `retry` that retries `Declined`).
-6. **Live.** The `tty` and `decline` hosts and the `--human` flag in
+6. **Live.** The `tty` and `unattended` hosts, withdrawal of cut and
+   cancelled prompts, and the `--human` flag in
    [`../src/main.rs`](../src/main.rs) and [`../src/live.rs`](../src/live.rs).
    Last, because everything before it is testable without a person.
 7. **SAGA.** Rewrite [`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)
@@ -492,10 +574,19 @@ In the order the code depends on it:
   so this draft doesn't bound it either. But the reason often goes straight
   into a model's context (§6), where its size is money. A bound on the grant,
   `[reason 500]`, would make that cost predictable.
-- **Q-G: should a person be able to answer "ask me later"?** Long-running
-  agents may want a consult to park while the person is away rather than wait
-  against the deadline. That's a different resource model (the run suspends
-  and resumes), and nothing else in µNorman needs it yet.
+- **Q-G: should a consult be able to park?** This is more pressing than it
+  first looked. Under H7, a person's wait spends the same deadline the
+  program's model calls run against, so every program with a consult needs a
+  long outer scope and careful inner ones (§6). A consult that suspends the
+  run until the person returns, with the clock for model work stopped
+  meanwhile, would separate the two. It's a different resource model (the run
+  suspends and resumes, and its state has to survive that), and it's the
+  biggest open question in this document.
+- **Q-I: how is paid review priced?** H2's flat `[price …]` per consult can't
+  express hourly pay. A price per unit of `δ` would, but then the charge is
+  known only afterwards, and the reservation needs an upper bound: the time
+  left until the deadline, times the rate. That works, and it's worth doing
+  only if someone needs it.
 - **Q-H: quorum and delegation.** "Two of these three reviewers must approve"
   looks like library code over several human grants and `workflow`, since
   different humans can be consulted concurrently. Worth writing as an example
