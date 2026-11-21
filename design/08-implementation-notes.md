@@ -15,6 +15,13 @@ cargo test                                    # Steps 5, 6, 9, the laws, and the
 cargo run -- --live --python python3 FILE.nrm # a real model and a real (unsandboxed) Python
 ```
 
+`norman` exits 0 only if every unit test passed **and** nothing else went
+wrong: a syntax error, a top-level form that failed or got stuck (such as a
+live consult with nobody there), or a file that couldn't be used. Problems in
+a `use`d file count against the file that uses it. (Until this was fixed, a
+top-level error was printed but the command still exited 0.) The playground
+reports the same verdict.
+
 Current results:
 
 | Suite | Result |

@@ -75,11 +75,22 @@ impl Interp {
 pub struct Summary {
     pub passed: usize,
     pub total: usize,
+    /// Problems outside the unit tests: syntax errors, top-level forms that
+    /// failed or got stuck, and files that couldn't be used. A `use`d file's
+    /// errors and failed tests count here too, so nothing that went wrong
+    /// anywhere in the load is lost.
+    pub errors: usize,
 }
 
 impl Summary {
     pub fn all_passed(&self) -> bool {
         self.passed == self.total
+    }
+
+    /// Every test passed and nothing else went wrong: what a successful run
+    /// means, and what the command's exit code reports.
+    pub fn clean(&self) -> bool {
+        self.all_passed() && self.errors == 0
     }
 }
 
@@ -116,7 +127,12 @@ impl Interp {
             i.globals.insert(Rc::from(p.name()), Value::Prim(p));
         }
         let summary = i.load_str(include_str!("prelude.nrm"), "prelude.nrm", Path::new("."));
-        assert!(summary.is_ok(), "the prelude failed to load: {:?}", summary.err());
+        assert!(
+            summary.as_ref().is_ok_and(Summary::clean),
+            "the prelude failed to load: {:?} ({})",
+            summary,
+            i.transcript()
+        );
         i
     }
 
@@ -131,12 +147,14 @@ impl Interp {
     pub fn load_str(&mut self, src: &str, file: &str, dir: &Path) -> Result<Summary, String> {
         let forms = read_all(src, file)?;
         let mut tests: Vec<PendingTest> = vec![];
+        let mut errors = 0;
         for sx in &forms {
             let top = Parser::new(&self.theta).top(sx);
             let top = match top {
                 Ok(t) => t,
                 Err(msg) => {
                     self.complain(format!("syntax error: {}", msg));
+                    errors += 1;
                     continue;
                 }
             };
@@ -144,11 +162,17 @@ impl Interp {
                 Top::Def(d) => {
                     if let Err(msg) = self.evaldef(d) {
                         self.complain(format!("{}: {}", sx.loc(), msg));
+                        errors += 1;
                     }
                 }
                 Top::Use(f) => match self.load_file(&dir.join(&f)) {
-                    Ok(_) => {}
-                    Err(msg) => self.complain(format!("{}: {}", sx.loc(), msg)),
+                    // The used file has reported its own tests; what went
+                    // wrong there still counts against this load.
+                    Ok(used) => errors += used.errors + (used.total - used.passed),
+                    Err(msg) => {
+                        self.complain(format!("{}: {}", sx.loc(), msg));
+                        errors += 1;
+                    }
                 },
                 Top::Grant(x, spec) => {
                     let v = match spec {
@@ -176,7 +200,8 @@ impl Interp {
                 Top::Test(test) => tests.push(PendingTest { test, cfg: Config::default() }),
             }
         }
-        Ok(self.run_tests(file, tests))
+        let summary = self.run_tests(file, tests);
+        Ok(Summary { errors, ..summary })
     }
 
     fn cap(&mut self, key: &Name, kind: CapKind, ops: crate::ast::Ops) -> Value {
@@ -332,7 +357,7 @@ impl Interp {
     }
 
     fn run_tests(&self, file: &str, tests: Vec<PendingTest>) -> Summary {
-        let mut s = Summary { passed: 0, total: tests.len() };
+        let mut s = Summary { passed: 0, total: tests.len(), errors: 0 };
         for t in &tests {
             match self.run_test(&t.test, &t.cfg) {
                 Ok(()) => s.passed += 1,

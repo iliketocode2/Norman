@@ -386,6 +386,7 @@ Ramsey's point exactly: proofs are most useful when they fail.
 | [`09-live-oracle.md`](09-live-oracle.md) | connecting `ask` to a real model: request mapping, types to JSON Schema, reservations from `count_tokens`, refusals, the real clock. **The default model is Claude Sonnet 5, set in one place so it can change.** | connect µNorman to a model API |
 | [`10-saga.md`](10-saga.md) | what writing SAGA's bi-level loop in µNorman found: typed `call`, a form for consulting a human, derived capabilities | see what the language is missing, and why |
 | [`11-consult.md`](11-consult.md) | `consult`, a typed form for asking a person: the argument behind granted humans, `Declined`, and approval that binds to what runs. The rules are in `04` and `07`; a live person answers at the terminal. | see how a person fits into a program, and why |
+| [`12-types-and-effects.md`](12-types-and-effects.md) | **draft, not built:** the type and effect checker: inference as in µML, effects that name each grant, qualified types for overloading and ownership, and what it guarantees | see what will be checked before a program runs, and what stays dynamic |
 | [`../LIVE-SETUP.md`](../LIVE-SETUP.md) | the operator's companion to `09`: getting an API key, setting it, capping the spend, and the plan for the first real call | actually run against a real model |
 
 Where documents disagree, the later one wins. Each correction is also noted at
