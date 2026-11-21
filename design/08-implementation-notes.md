@@ -28,7 +28,7 @@ Current results:
 |---|---|
 | Step 5 example results | 35 of 35 pass |
 | Step 6 law instances and non-law counterexamples | 26 of 26 pass |
-| Step 9 tests of the initial basis ([`../examples/step9-revisit.nrm`](../examples/step9-revisit.nrm)) | 39 of 39 pass |
+| Step 9 tests of the initial basis ([`../examples/step9-revisit.nrm`](../examples/step9-revisit.nrm)) | 50 of 50 pass |
 | Scripted-oracle tests ([`../examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm)) | 11 of 11 pass |
 | SAGA's bi-level loop, at all three autonomy levels ([`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)) | 15 of 15 pass |
 | Strings and `show` ([`../examples/strings.nrm`](../examples/strings.nrm)) | 45 of 45 pass |
@@ -253,6 +253,14 @@ they catch it, and the case the gap was hiding (a `Sym` proposed as `Text`,
 which validates but doesn't read back as itself) is now tested. The other,
 Theorem 4's premise about humans (premise (iv) of law W1), was found by reviewing the design before any code
 was written.
+
+**Reviewing the type design found a bug in the interpreter.** Comparing
+against an unlimited budget, `(> (. (remaining) cost) $0.10)`, was a
+run-time error ("can't compare ∞"), so `02`'s own budget-aware idiom crashed
+whenever no limit was set, which is the case for every top-level form. ∞ now
+compares above every amount of money or time and equal only to itself;
+arithmetic on it is still an error. The tests are in
+[`step9-revisit.nrm`](../examples/step9-revisit.nrm).
 
 This is the arc Ramsey's process promises. Laws and tests written *before* the
 code found five design mistakes (`06` §7) and one flawed ownership rule (`05`).

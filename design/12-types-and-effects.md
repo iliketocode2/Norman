@@ -1,6 +1,8 @@
 # Types and effects: checking a program before it runs
 
-> **Status: a design draft, not built.** Nothing here is implemented. It
+> **Status: a design draft, not built, revised once after a critical
+> review.** The review's corrections are marked where they were made. Nothing
+> here is implemented. It
 > answers the second of Ramsey's three questions (`04`): *what checking does
 > a program undergo before it runs?* Today the answer is "parse-time
 > well-formedness, and nothing else", and every type mistake is found while
@@ -26,10 +28,17 @@ rest follow from them and are open for review.
 | T2 | What happens to a program the checker finds wrong? | **Type errors reject the program before anything runs.** Programs that are legal but fall outside a law (a workflow node reading `(remaining)`, two nodes consulting one person, a consult answer that is never used, a non-exhaustive `case`) get **warnings**. |
 | T3 | How fine-grained are effects? | **Per grant.** An effect says *which* model is asked, *which* capability is called and *which* person is consulted. That is what lets the checker prove `01` P3's claim (the analyst can't touch `fs`) and check ownership statically. |
 | T4 | Generic code that uses overloaded or restricted operations | **Qualified types** (Jones, *Qualified Types*, 1994): a type scheme carries constraints, such as "α is a numeric type" or "this function's effect calls no stateful capability", that are checked when the scheme is instantiated. One mechanism covers overloaded arithmetic, `show`, capability interfaces, ownership and the law warnings (§3). |
-| T5 | `Any` in the basis | **Replaced by type parameters.** `Option`, `Pair` and `Resources` become `(Option α)`, `(Pair α β)` and a record of `Money` and `Dur`. User datatypes and records may take parameters too. |
+| T5 | `Any` in the basis | **Replaced by type parameters.** `Option`, `Pair` and `Resources` become `(Option α)`, `(Pair α β)` and a record of `Money` and `Dur`. User datatypes and records may take parameters too: `(datatype (Option a) [None] [Some (value a)])`, and `(Option Num)` in a type. This is more than a checker change: the grammar, `validate`, `show`, `bound` and the JSON schema of `09` §2 all have to substitute type arguments (§9, step 0). |
 | T6 | Size bounds, `(Text n)` and `(List τ n)` | **Erased by the checker.** Bounds describe what a model or person may *send*; they are part of a type's schema, checked by validation, and stay dynamic. Statically `(Text 400)` is `Text`. |
-| T7 | Forward references | **A file is checked as a whole, before any of it runs,** in dependency order: mutually recursive definitions form a group and are generalized together, as in Haskell. Late binding (`08`, deviation 2) keeps working, and the program is rejected before its first form runs. |
-| T8 | Unit tests whose expression is ill-typed | **Each test's expressions are checked in isolation, so an ill-typed one doesn't reject the file. A `check-error` then passes,** because a static error is an earlier form of the run-time error it asserts; every other kind of test fails, reporting the type error. Tests about types (`consult.nrm`, `typed-tools.nrm`) keep their meaning. Three Step 5 tests that *catch* the sharing failure don't, and are rewritten (§5.1). |
+| T7 | Forward references | **A file is checked as a whole, before any of it runs,** in dependency order: mutually recursive definitions form a group and are generalized together, as in Haskell. Late binding (`08`, deviation 2) keeps working for functions. **A form that runs at load time** (a `val`, or a top-level expression) **may depend only on definitions above it,** including through the bodies of the functions it calls (§4.4); otherwise it would type-check and then find a name unbound. |
+| T8 | Unit tests whose expression is ill-typed | **Each test's expressions are checked in isolation, so an ill-typed one doesn't reject the file, and the test fails, reporting the type error,** whatever kind of test it is. A new form, **`(check-type-error e)`**, passes only when `e` is ill-typed. The checked-error tests that are about types (`consult.nrm`, `typed-tools.nrm`) become `check-type-error`s; those about run-time conditions (an exhausted script) stay `check-error`s. Three Step 5 tests that *catch* the sharing failure are rewritten too (§5.1). |
+
+> **T8, corrected in review.** An earlier draft let `check-error` pass on any
+> static error. That repeats the mistake building `consult` found (`06` §7,
+> #10): a test that passes whatever happens proves nothing. A `check-error`
+> meant to catch an exhausted script would have passed on a typo instead.
+> Hence a separate form: a type error satisfies only a test that asks for
+> one.
 
 ---
 
@@ -38,7 +47,8 @@ rest follow from them and are open for review.
 ```
 τ ::= α                             type variable
     | Text | Num | Bool | Sym       base types (bounds erased, T6)
-    | Money | Dur                   ∞ is a value of both (it comes only from (remaining))
+    | Money | Dur                   ∞ is a value of both (it comes only from (remaining));
+                                    it compares above every amount, but arithmetic on it is an error
     | (List τ)
     | (T τ …)                       a datatype or record, possibly with parameters
     | (τ … -> τ ! ε)                a function with latent effect ε
@@ -61,6 +71,14 @@ that takes a capability is generic in its name, through a name variable:
 The kind is part of the type because it decides statefulness: a kernel or a
 filesystem is stateful, an HTTP client isn't (`04` §6.2).
 
+**Names have kinds.** Every name, constant or variable, has a kind: `Model`,
+`Human`, `Kernel`, `Filesystem` or `Http`. A grant's name gets its kind from
+the grant, and a name variable gets its kind when it is created (from the
+type it first appears in) and keeps it through unification, which fails on a
+kind mismatch. Effect atoms carry only a name, so the kind is what tells the
+footprint of §5 whether `call ν` touches something stateful, even when ν
+reaches a function only through a latent effect.
+
 **Askable types** (`04` §3.1, rule 5) are the ground types built from Text,
 Num, Bool, Sym, List and datatypes and records whose fields, at the given
 parameters, are askable. `(Option Num)` is now askable; it wasn't when
@@ -81,8 +99,24 @@ a ::= ask μ | call κ | consult η | observe
 
 `observe` is reading `(remaining)`. A function's arrow carries its latent
 effect; an expression's judgment carries the effect of evaluating it.
-Effects are inferred by unifying open sets, as in Koka (Leijen, 2014), so
-higher-order functions such as `retry` are polymorphic in the effect of the
+
+**Effects are inferred with inclusion constraints, not by unification.**
+Every arrow's effect is a variable φ, and the rules generate constraints
+`ε ⊆ φ` ("evaluating this may do at least ε"), as in Talpin and Jouvelot's
+*The Type and Effect Discipline* (1992). That system was built for exactly
+this case: effect atoms indexed by variables, which for them are regions
+and here are grant names. Solving takes the least solution, and
+generalization quantifies over φ together with the inclusions it is
+subject to.
+
+> **Corrected in review.** An earlier draft inferred effects by unifying
+> open sets, "as in Koka". Koka's rows are labeled by constants. Here a label
+> can contain a name variable, and unifying `{call ν} ∪ φ` with
+> `{call py} ∪ φ′` has two incomparable solutions (ν = py, or `call py` goes
+> into φ). With no principal unifier there are no principal types, and which
+> programs are accepted would depend on the solver's order.
+
+Higher-order functions such as `retry` are polymorphic in the effect of the
 thunk they are given:
 
 ```
@@ -114,10 +148,15 @@ Haskell's classes they compile to nothing.
 | `Offers(κ, op, τ)` | capability κ's grant offers op, answering τ | the grants' declarations; an undeclared grant offers every op, answering Text | `call` |
 | `F₁ # F₂` | two footprints share no stateful capability | §5 | `workflow` |
 | `Stateless(ε)` | an effect calls no stateful capability | — | `workflow`, when a node's effect is a variable |
+| `ε ⊆ φ` | an effect variable includes at least ε | the least solution | every rule with an effect (§2) |
 
-**Defaulting.** Constraints still unresolved at the top of the whole program
-default as SML's do: `Arith`, `Ord`, `Mul` and `Div` choose Num. Any other
-unresolved constraint is an error, such as a field `f` that two records have
+**Defaulting.** When a binding group is generalized, an `Arith`, `Ord`,
+`Mul` or `Div` constraint on a type variable that the group's type doesn't
+mention is defaulted to Num, as SML does; one the type does mention stays in
+the scheme, which is what keeps the prelude's `<=` generic. Defaulting per
+group, not once for the whole program, keeps each definition's type
+independent of what comes after it. Any other constraint that can't be
+resolved or deferred is an error, such as a field `f` that two records have
 and nothing determines.
 
 `Offers` is what gives typed grants (`10` §2.1) a static check: calling an
@@ -152,10 +191,23 @@ Only what differs is spelled out:
 - **CASE** requires each pattern to match the scrutinee's type, and gives
   every branch the same type. A `case` that doesn't cover every constructor
   is a **warning** (T2). It stays a checked run-time error, which §6 lists.
-- **LET** and top-level `val` and `define` generalize, with the value
-  restriction: only a syntactic value (a lambda, literal or constructor of
-  values) is generalized. That matters here more than in µML, because so
-  many expressions have effects.
+- **LET** and top-level `val` and `define` generalize **type and effect
+  variables freely, and name variables only for syntactic values.** ML's
+  value restriction exists because of mutable references, and µNorman has
+  none (`04`, decision F1), so ordinary type variables need no restriction.
+  Name variables do, because of `fork`. If `(val k (call py fork))` were
+  generalized, every use of `k` would get a fresh name, and two workflow
+  nodes using the same `k`, which share one kernel, would pass the
+  ownership check of §5. So a name variable is generalized only when the
+  bound expression is a syntactic value (a lambda, literal, variable, or
+  constructor or record of values). A `fork` inside a function body is
+  fine: each *call* of the function forks anew, so a fresh name per call is
+  exactly right.
+
+  > **Corrected in review.** An earlier draft applied ML's value restriction
+  > to everything, "because so many expressions have effects". That was the
+  > wrong reason, it restricted more than needed, and it hid the one place
+  > where generalizing really is unsound.
 
 ### 4.2 The agentic forms
 
@@ -181,6 +233,12 @@ Four things in this table replace run-time checks:
   before the run.
 - **A closed grant's undeclared operation fails `Offers`.**
 
+One check is **new, and changes behavior:** a `call`'s arguments must be
+`Showable`. A live host receives non-text arguments as `show` writes them,
+so passing a function already fails there, but a script ignores arguments,
+so a scripted program that passes a function to `call` runs today and will
+be rejected.
+
 ### 4.3 The primitives, in brief
 
 ```
@@ -192,6 +250,29 @@ println : ∀α. (α -> α)                    string-append : n-ary Text
 
 `=` stays total: on functions, models, people and capabilities it compares
 identity, as it does now (`04` §7.2).
+
+### 4.4 The top level, and load order
+
+Checking the whole file at once (T7) lets a function call one defined below
+it, because top-level functions are late-bound and only look the name up
+when they run. A form that runs *while the file loads* has no such grace:
+
+```scheme
+(val x (f 1))          ; runs now, and f is not yet defined
+(define f (n) (+ n 1))
+```
+
+Both forms type-check together, and the first then fails with an unbound
+name. So the checker adds one rule: a `val` or top-level expression may
+depend only on definitions that come before it, where "depends on" follows
+the bodies of the functions it calls, transitively. The dependency graph
+is already built for binding groups, so this costs one more pass. A unit
+test is exempt: as in Ramsey's interpreters, a file's tests run after the
+whole file has loaded.
+
+> **Corrected in review.** An earlier draft claimed Theorem 7 ruled out
+> every unbound name while accepting forward references everywhere, and so
+> it didn't.
 
 ---
 
@@ -213,7 +294,7 @@ For every pair of nodes, the WORKFLOW rule adds `Fᵢ # Fⱼ`.
   a *failure*, `(Raised 'shared-stateful-capability)`, which a program can
   catch, and three Step 5 tests do catch it to inspect it
   (`step5-examples.nrm`, group 8). Under the checker the program is rejected,
-  so there is nothing to catch, and those tests become `check-error`s. No
+  so there is nothing to catch, and those tests become `check-type-error`s. No
   program should rely on catching that failure: it reports a mistake in the
   program, not a condition of the world.
 - **Footprints with variables** stay as constraints. `best-of*`, which runs
@@ -227,7 +308,10 @@ For every pair of nodes, the WORKFLOW rule adds `Fᵢ # Fⱼ`.
 The same machinery gives T2's **warnings**: a node whose effect contains
 `observe` falls outside W1's premise (ii), and two nodes whose effects both
 contain `consult η` fall outside premise (iv). A warning constraint that
-mentions variables is likewise reported where its scheme is instantiated.
+mentions variables is likewise reported where its scheme is instantiated,
+**once per call site and kind of warning**, naming the generic function it
+came from. A helper used in twenty places would otherwise repeat the same
+warning twenty times, and warnings that repeat get ignored.
 
 ### 5.2 Forks are new names
 
@@ -239,24 +323,40 @@ kernel first").
 
 This is sound because a fresh name is introduced only where a new capability
 is created, and no rule makes two existing capabilities share a name they
-didn't already have. It is **incomplete** in the usual way: two forks made by
+didn't already have. It relies on §4.1's rule that a name variable is never
+generalized for an expression that isn't a value: without it, binding one
+fork to a name and using it twice would give the same kernel two names. It is **incomplete** in the usual way: two forks made by
 the same expression share its static name, so a program that puts several
 forks in a list and runs two of them concurrently is rejected, though at run
 time they differ. The run-time check would have accepted that program.
 
-### 5.3 Static and dynamic ownership differ, in one direction
+### 5.3 Static and dynamic ownership differ, in both directions
 
-Today's `reach` (`04` §6.2) counts every capability a node's closures
-*capture*, even ones they can never use. The static footprint counts only
-what the node can use. So a node that captures `py` in a closure it never
-calls passes the checker but is rejected by `WORKFLOWSHARED` at run time.
-That is a gap in the dynamic check, not in this one: such a capture can't
-cause interference.
+Neither check contains the other:
 
-**Recommendation:** once the checker exists, a checked program skips the run-time ownership
-check, because the static one is the more precise of the two. The machine
-keeps it for programs that aren't checked, such as the playground with the
-checker turned off. (Open question Q-1.)
+- **The checker accepts some programs the run-time check rejects.** Today's
+  `reach` (`04` §6.2) counts every capability a node's closures *capture*,
+  even ones they can never use. The static footprint counts only what the
+  node can use. So a node that captures `py` in a closure it never calls
+  passes the checker and is rejected by `WORKFLOWSHARED`.
+- **The run-time check accepts some programs the checker rejects.** Two
+  forks made by the same expression share a static name (§5.2), so running
+  two of them concurrently is a type error, although at run time they are
+  different capabilities. Under T2 such a program, which runs today, would
+  be rejected. The fix is to restructure it, for example by forking inside
+  each node.
+
+**Recommendation:** a checked program skips the run-time ownership check.
+That is safe, not because the static check is more precise (it isn't), but
+because every program the run-time check would reject *and the checker
+accepts* differs only in captures it can never use, and those can't
+interfere. Theorem 4 needs non-interference, not non-capture. The machine
+keeps the run-time check for programs that aren't checked, such as the
+playground with the checker turned off. (Open question Q-1.)
+
+> **Corrected in review.** An earlier draft called the static check "the
+> more precise of the two" and said the checks differed in one direction.
+> Both claims were wrong; the recommendation stands, on the argument above.
 
 ---
 
@@ -278,7 +378,9 @@ it reaches any of these checked run-time errors:
 
 **What remains dynamic,** stated so that it isn't mistaken for a gap:
 division by zero and arithmetic overflow; `substring` out of range;
-arithmetic on ∞; a non-exhaustive `case` (a warning, T2); a size bound
+arithmetic on ∞ (`∞ − $1`; *comparing* ∞ is defined, and was fixed in the
+interpreter when reviewing this document); a non-exhaustive `case` (a
+warning, T2); a size bound
 exceeded by a proposal (T6); an exhausted script; an unbound person in live
 mode; and the step limit.
 
@@ -295,7 +397,11 @@ a model can't *give* them a capability; Theorem 8 says they don't *use* one.
 
 Both theorems are proved in the usual way, by preservation and progress over
 `07`'s machine. The proof cases for the agentic forms are where the
-interest lies; the inherited forms follow µML's.
+interest lies; the inherited forms follow µML's. Preservation must cover the
+machine's cancelling steps as well as its ordinary ones: M-NODE-FAIL and
+M-TIME's cuts replace a thread's expression with a `fail` and append
+`cancelled` or `past-deadline` trace entries, and Theorem 8 needs those
+entries covered by the cancelled request's own effect atom, which it is.
 
 ---
 
@@ -337,9 +443,11 @@ The difficult parts, in order of risk:
    Simplification and entailment need care to keep error messages
    intelligible: Jones's framework says *what* to do, but not how to phrase
    "this thunk calls `py`" at the right place.
-2. **Effect inference with open sets** is standard (Koka), but combining it
-   with the value restriction and binding groups (T7) has to be checked on
-   the prelude and examples, not assumed.
+2. **Effect inference with inclusion constraints** (Talpin–Jouvelot) is
+   standard, but combining it with qualified types, the fork restriction of
+   §4.1 and binding groups (T7) has to be checked on the prelude and
+   examples, not assumed. The inclusions are one more kind of constraint in
+   §3's mechanism, which keeps the solver to one design.
 3. **Error messages.** Hindley-Milner reports where unification failed, not
    where the mistake is. A first version should at least name both sides'
    origins.
@@ -347,7 +455,9 @@ The difficult parts, in order of risk:
 Open questions:
 
 - **Q-1: should a checked program skip `WORKFLOWSHARED`** (§5.3)? Recommended,
-  but it makes the dynamic semantics depend on whether the checker ran.
+  because what it would still reject can't interfere. The cost is that the
+  dynamic semantics then depends on whether the checker ran, which `04` and
+  `07` would have to say.
 - **Q-2: redefinition** (`08`, deviation 2). With whole-file checking, a
   name defined twice could be an error, or allowed when both definitions have
   the same scheme. The second keeps Ramsey's REPL habit; the first is simpler
@@ -369,18 +479,30 @@ Open questions:
 
 In dependency order, and each testable on its own:
 
+0. **Type parameters, before any checker** (T5). The grammar gains
+   parameterized `datatype` and `record` declarations and type application
+   in `ty`; [`../src/types.rs`](../src/types.rs) substitutes type arguments
+   in `validate`, `show`, `bound` and `askable`; and the schema of `09` §2
+   does the same, so `(ask m (Option Num) …)` works live. `Option`, `Pair`
+   and `Resources` move off `Any`. This changes the running language, not
+   just its checking, so it gets its own tests and its own commit: the
+   `show` round trip on parameterized values, and the schema sent for one.
 1. **Types and unification,** with name and effect variables, in a new
    `src/check.rs`. Tests: unification and occurs-check unit tests.
 2. **Inference for the inherited forms,** with binding groups (T7) and the
    value restriction. Test: the prelude checks, and its inferred schemes are
    asserted.
-3. **The agentic forms and constraints** of §3 and §4.2. Tests: every
-   example file checks; the checked-error tests that are about types (a
-   non-person consulted, an unaskable type, a malformed proposal, an
-   undeclared operation) are now static errors, and those about scripts (an
-   exhausted script, `(approve)` with nothing proposed) stay dynamic (T8).
+3. **The agentic forms and constraints** of §3 and §4.2, and
+   `check-type-error`. Tests: every example file checks; the checked-error
+   tests that are about types (a non-person consulted, an unaskable type, a
+   malformed proposal, an undeclared operation) become `check-type-error`s,
+   and those about scripts (an exhausted script, `(approve)` with nothing
+   proposed) stay `check-error`s (T8). A deliberately wrong version in
+   `must-fail.nrm`: a `check-error` on an ill-typed expression, which must
+   now fail.
 4. **Ownership** (§5). Tests: the Step 5 group 8 programs, rewritten as
-   `check-error`s (§5.1); `best-of` over a kernel; and the fork idiom.
+   `check-type-error`s (§5.1); `best-of` over a kernel; the fork idiom; and
+   `(val k (call py fork))` used in two nodes, which must be rejected (§4.1).
 5. **Warnings** (T2) and **wiring**: the driver checks a file tree before
    loading it; `norman --no-check` keeps today's behavior; the playground
    reports type errors.
@@ -394,10 +516,12 @@ In dependency order, and each testable on its own:
 | Document | Change |
 |---|---|
 | `04` §0, §1 | Ramsey's second question gets its answer; the type language |
+| `04` §2 | parameterized `datatype` and `record`; type application in `ty`; `check-type-error`, a new reserved word |
+| `09` §2 | the JSON schema `S(τ)` of a parameterized type substitutes its arguments |
 | `04` §3.1 | rule 5 (askability) moves from parse time to the checker |
 | `04` §7.2 | `Option`, `Pair` and `Resources` get parameters (T5) |
 | `04` §8 | Theorems 7 and 8 |
-| `05` | convention: `check-error` passes on a static error (T8); group 8's three tests that catch the sharing failure become `check-error`s |
+| `05` | convention: an ill-typed test fails unless it is a `check-type-error` (T8); group 8's three tests that catch the sharing failure become `check-type-error`s |
 | `04` §6.5 | WORKFLOWSHARED: for a checked program, a type error rather than a catchable failure (§5.1, Q-1) |
 | `06` §4 | W1's premises (ii) and (iv) become warnings the checker issues |
 | `08` | deviations 1 and 2 revisited; a "skips run-time ownership" note if Q-1 is accepted |

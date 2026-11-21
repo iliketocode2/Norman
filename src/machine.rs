@@ -947,9 +947,18 @@ impl<'a> Machine<'a> {
             }
             Prim::Lt | Prim::Gt => {
                 arity(2)?;
+                use std::cmp::Ordering::{Equal, Greater, Less};
                 let ord = match (&args[0], &args[1]) {
                     (Num(a), Num(b)) | (Money(a), Money(b)) | (Dur(a), Dur(b)) => a.cmp(b),
                     (Str(a), Str(b)) => a.cmp(b),
+                    // ∞ is what (remaining) reports for a scope with no limit,
+                    // so it must compare: it is more than any amount of money
+                    // or time. Without this, 02's budget-aware choice
+                    // (> (. (remaining) cost) $0.10) crashed whenever the
+                    // budget was unlimited.
+                    (Inf, Inf) => Equal,
+                    (Inf, Money(_) | Dur(_)) => Greater,
+                    (Money(_) | Dur(_), Inf) => Less,
                     (a, b) => return stuck(format!("{} can't compare {} with {}", p.name(), a, b)),
                 };
                 Bool(if p == Prim::Lt { ord.is_lt() } else { ord.is_gt() })
