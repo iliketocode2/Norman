@@ -29,6 +29,9 @@ pub struct Interp {
     /// run-time error. It runs model-written code with no sandbox.
     #[cfg(not(target_arch = "wasm32"))]
     pub python: Option<String>,
+    /// In live mode, the person bound to each `human` grant (design/11 §4.1).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub people: crate::live::People,
     /// Print the trace of each top-level evaluation: one line per ask or call.
     pub trace: bool,
     /// Everything the interpreter reports, kept as a value rather than only
@@ -104,6 +107,8 @@ impl Interp {
             live: None,
             #[cfg(not(target_arch = "wasm32"))]
             python: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            people: Default::default(),
             trace: false,
             out: RefCell::new(String::new()),
         };
@@ -223,7 +228,8 @@ impl Interp {
             None => machine::run(&self.globals, &self.theta, &world, e.clone()),
             Some(live) => {
                 let hosts = self.kernel_hosts();
-                let oracle = Box::new(crate::live::LiveOracle::with_hosts(&self.theta, live.clone(), &hosts));
+                let oracle =
+                    Box::new(crate::live::LiveOracle::with_people(&self.theta, live.clone(), &hosts, &self.people));
                 machine::run_with(&self.globals, &self.theta, &world, oracle, e.clone())
             }
         }
@@ -237,6 +243,41 @@ impl Interp {
             }
         }
         Ok(outcome)
+    }
+
+    /// The start-up check of design/11 §4.1, H3: a live run refuses to start
+    /// unless every `human` grant in `path`, or in any file it `use`s, is
+    /// bound to a person or to `unattended`. It reads the files without
+    /// evaluating anything, so a missing person costs nothing. A binding that
+    /// names no human grant is refused too: it is almost always a typo, and a
+    /// typo here would leave the real grant unbound.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn check_people(&self, paths: &[&Path], bound: &[String]) -> Result<(), String> {
+        let mut grants = vec![];
+        let mut seen = std::collections::HashSet::new();
+        for path in paths {
+            human_grants(path, &mut seen, &mut grants)?;
+        }
+        let what = paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
+        let unbound: Vec<&str> = grants.iter().filter(|g| !bound.contains(g)).map(String::as_str).collect();
+        let stray: Vec<&str> = bound.iter().filter(|b| !grants.contains(b)).map(String::as_str).collect();
+        // Both problems in one message: an unbound grant beside a stray
+        // binding is usually one typo, and naming only half of it hides it.
+        let mut problems = vec![];
+        if !unbound.is_empty() {
+            let flags: Vec<String> = unbound.iter().map(|g| format!("--human {}=tty", g)).collect();
+            problems.push(format!(
+                "{} consults a person, but no one is bound to {}. Bind each one before the run starts, \
+                 for example {} (or =unattended to stop at the first consult).",
+                what,
+                unbound.join(", "),
+                flags.join(" ")
+            ));
+        }
+        if !stray.is_empty() {
+            problems.push(format!("--human names {}, but {} grants no such human.", stray.join(", "), what));
+        }
+        if problems.is_empty() { Ok(()) } else { Err(problems.join("\n")) }
     }
 
     /// A Python host for every `kernel` grant, if `python` is set.
@@ -417,6 +458,33 @@ impl Interp {
             }
         }
     }
+}
+
+/// The names of the `human` grants in `path` and every file it `use`s,
+/// found by reading, never evaluating. Forms that don't parse are skipped:
+/// loading the file reports them properly.
+#[cfg(not(target_arch = "wasm32"))]
+fn human_grants(
+    path: &Path,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    out: &mut Vec<String>,
+) -> Result<(), String> {
+    let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !seen.insert(key) {
+        return Ok(()); // already read: `use` cycles and diamonds
+    }
+    let src = std::fs::read_to_string(path).map_err(|e| format!("can't read {}: {}", path.display(), e))?;
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let theta = TypeEnv::default();
+    let parser = Parser::new(&theta);
+    for sx in read_all(&src, &path.display().to_string())? {
+        match parser.top(&sx) {
+            Ok(Top::Grant(x, HostSpec::Human { .. })) if !out.iter().any(|g| **g == *x) => out.push(x.to_string()),
+            Ok(Top::Use(f)) => human_grants(&dir.join(f), seen, out)?,
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// One line per ask or call: site, tokens, cost, when it started and ended, and how it ended.

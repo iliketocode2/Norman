@@ -23,12 +23,12 @@ Current results:
 | Step 6 law instances and non-law counterexamples | 26 of 26 pass |
 | Step 9 tests of the initial basis ([`../examples/step9-revisit.nrm`](../examples/step9-revisit.nrm)) | 39 of 39 pass |
 | Scripted-oracle tests ([`../examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm)) | 11 of 11 pass |
-| SAGA's bi-level loop ([`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)) | 7 of 7 pass |
+| SAGA's bi-level loop, at all three autonomy levels ([`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)) | 15 of 15 pass |
 | Strings and `show` ([`../examples/strings.nrm`](../examples/strings.nrm)) | 45 of 45 pass |
 | Typed grants ([`../examples/typed-tools.nrm`](../examples/typed-tools.nrm)) | 18 of 18 pass |
 | CP-Agent, scripted ([`../examples/cp-agent.nrm`](../examples/cp-agent.nrm)) | 6 of 6 pass |
 | `consult`, scripted ([`../examples/consult.nrm`](../examples/consult.nrm)) | 52 of 52 pass |
-| `consult`'s trace record and live-mode refusal ([`../tests/consult.rs`](../tests/consult.rs)) | 5 of 5 pass |
+| `consult`'s trace record, the terminal host driven by a simulated person, and the start-up check ([`../tests/consult.rs`](../tests/consult.rs)) | 18 of 18 pass |
 | Live client against a local stub server ([`../tests/live_stub.rs`](../tests/live_stub.rs)) | 9 of 9 pass |
 | Live `call` against real hosts, including Python ([`../tests/live_tools.rs`](../tests/live_tools.rs)) | 12 of 12 pass |
 | Random tests of 17 laws ([`../tests/properties.rs`](../tests/properties.rs)) | 150 cases each, all pass |
@@ -71,6 +71,8 @@ the event-by-event semantics implementable exactly.
 | the human oracle `H ⊢ ⟨η, …⟩ ⇝ …` | `Oracle::issue_consult`; the scripted oracle answers from `answer`, `approve` and `decline` entries |
 | an uncharged cut or cancelled consult | `Machine::abandon_charge`, used by `cut` and `cancel` |
 | a consult's audit record (`04` §5) | `TraceEntry::consult`, a `ConsultRecord` |
+| the live person (`11` §4.1) | `LiveOracle::issue_consult`, `show_next`, `on_line` and `withdraw` in [`src/live.rs`](../src/live.rs); typed lines arrive through `next` like any reply |
+| H3's start-up check | `Interp::check_people`, called by `main` before anything runs |
 | M-TIME | `advance_time`, then `complete` for each request, in issue order |
 | M-WF-SHARED, M-WF-START | `start_workflow` (the ownership check comes first) |
 | M-NODE-DONE, M-WF-DONE, M-NODE-FAIL | `finish` |
@@ -144,14 +146,34 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
    loading `step6-laws.nrm` also reports `step5-examples.nrm`.
 10. **Pure computation is bounded by a step limit** (20 million steps), which
     is a checked run-time error (`07` §7).
-11. **There is no live host for a person yet.** `consult` is built in scripted
-    mode only. In live mode every consult is a checked run-time error ("no
-    person is attached"), which is H3's rule that a missing person never
-    looks like a person saying no. It differs from H3 in *when* the error
-    comes: `11` §4.1 says a run with an unbound human grant refuses to
-    **start**, but today it stops at the first consult, so anything the
-    program did before then has already happened, and been paid for. The
-    `--human` flag and its start-up check come with the live host.
+11. **The live person is at the terminal, answering one line at a time**
+    (`11` §4.1). `--human NAME=tty` shows each consult on stderr and reads
+    the answer from stdin: `a` approves the proposal, `d REASON` declines,
+    and anything else is the answer, as JSON or, for a `Text` answer, as
+    plain text. A reply that doesn't fit the type is asked for again, which
+    is form validation, not a second consult. Four rules the design left
+    open are fixed here:
+    - **One question at a time.** Concurrent consults are shown in issue
+      order; each waits for the one before it, and the wait is its latency.
+    - **A line typed before a question appeared never answers it.** Each
+      line is timestamped when it's read. Without this, a reply meant for
+      one question could land on the next, and a pipe that types ahead could
+      approve something nobody saw.
+    - **A closed terminal is no person at all.** If stdin ends while a
+      question is waiting, the run stops with a checked run-time error,
+      rather than hanging forever or reporting a decline.
+    - **A withdrawn question can't be answered late.** When a deadline or
+      fail-fast withdraws a question, the console says so and moves on; a
+      line typed afterwards answers the next question or nothing. So the
+      design's `discarded` trace entry (`11` §2.3), meant for hosts that
+      can't withdraw a question, never arises here.
+
+    The start-up check runs before anything is evaluated: it reads the
+    files on the command line, and every file they `use`, for `human`
+    grants, and refuses the run (exit 2) if one is unbound or if `--human`
+    names a grant that doesn't exist, which is almost always a typo. A
+    consult that reaches the oracle with no binding anyway, as through the
+    library API, is still a checked run-time error.
 12. **A human's price is a money literal,** `[price $2.00]`, not an
     expression. Grants are read before anything is evaluated, as a model
     grant's prices are.
@@ -251,7 +273,6 @@ specification on every other test.
   They're still tested only indirectly.
 - **More examples.** P3 (the committee) and P5 (ProofFlow) from `01`/`02` as
   runnable programs.
-- **A live host for `consult`** ([`11`](11-consult.md) §4.1): the `tty` and
-  `unattended` bindings, the `--human` flag, the start-up check of deviation
-  11, and withdrawing a cut or cancelled question. Then SAGA's loop rewritten
-  with an autonomy level (`11` §9, step 7).
+- **Other hosts for a person,** such as a web form or a chat message, behind
+  the same interface as the terminal (`11` §4.1); and a person who can step
+  away, which is `11`'s open question Q-G.

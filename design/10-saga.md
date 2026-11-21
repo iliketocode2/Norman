@@ -215,7 +215,7 @@ type and effect system and `consult` remain.)*
 | | Work | Size | Why |
 |---|---|---|---|
 | ✅ | **Typed grants** (§2.1) | done | A grant declares each operation's result type; the interface is closed when it does. |
-| ✅ | **`consult`** (§2.2) | built, scripted | Designed in [`11`](11-consult.md); its rules are in `04` §6.5 and `07` §4. A live host for a person is next. |
+| ✅ | **`consult`** (§2.2) | done | Designed in [`11`](11-consult.md); its rules are in `04` §6.5 and `07` §4. A person answers at the terminal, and [`../examples/saga-loop.nrm`](../examples/saga-loop.nrm) now runs at all three autonomy levels. |
 | ✅ | **`show`** (§2.4) | done | Writes any askable value as JSON text that reads back (`04` §7.3). |
 | — | Everything else | — | Library, host, or not ours. |
 

@@ -4,18 +4,20 @@
 ;;; candidates. An outer loop plans objectives, implements them as scoring
 ;;; functions, optimizes candidates against them, and analyses the result; an
 ;;; inner loop does the optimizing. This file writes that architecture in
-;;; µNorman as it stands today, to find out which parts the language already
-;;; expresses and which it can't. design/10-saga.md records the answer.
+;;; µNorman, to find out which parts the language expresses and which it
+;;; can't. design/10-saga.md records the answer.
 ;;;
-;;; Two deliberate simplifications, both forced by gaps the exercise found:
+;;; One deliberate simplification remains:
 ;;;   1. Scoring is an `ask`, not a `call`. When this was written, a tool
 ;;;      result was always Text, so a scorer returning a number couldn't be
 ;;;      called. Typed grants have since closed that gap (design/10 §2.1,
 ;;;      examples/typed-tools.nrm); the ask is kept so this runs with no host.
-;;;   2. There is no human in the loop. SAGA's co-pilot and semi-pilot modes
-;;;      have no µNorman form at all; this is autopilot (design/10 §2.2).
+;;;
+;;; The other gap the exercise found, a person in the loop, is closed: SAGA's
+;;; three autonomy levels are below, written with `consult` (design/11 §6).
 
-(grant claude (model [in 3] [out 15] [ceiling 8000]))
+(grant claude   (model [in 3] [out 15] [ceiling 8000]))
+(grant reviewer (human))
 
 ;;; ------------------------------------------------------------------
 ;;; Step 1, forms of data: an objective is one of two forms.
@@ -42,11 +44,15 @@
   [Revise (report (Text 400)) (objectives (List Objective 4))]
   [Converged (report (Text 400))])
 
+;;; SAGA's autonomy levels differ only in which modules' output a person
+;;; approves. The level is ordinary data, not a form (design/10 §2.2).
+(datatype Autonomy [CoPilot] [SemiPilot] [AutoPilot])
+
 ;;; ------------------------------------------------------------------
-;;; Contexts. Note what can and can't be built: the report flows from the
-;;; analyzer to the planner as Text, exactly as in SAGA, so it needs no
-;;; rendering. The *objectives* could be rendered with `show` (design/10 §2.4),
-;;; but SAGA's planner sees only the report, so this doesn't.
+;;; Contexts. The report flows from the analyzer to the planner as Text,
+;;; exactly as in SAGA, so it needs no rendering. The optimizer works against
+;;; the current objectives, so they go into its context with `show`: that is
+;;; also what makes a person's edit to them matter.
 
 (val planner-role
   "You plan measurable objectives for a design search. Return at most four.")
@@ -66,41 +72,88 @@
   (list (Message [role System] [content role])
         (Message [role User]   [content goal])))
 
+(define optimize-ctx (goal objectives)
+  (append (work-ctx optimizer-role goal)
+          (list (Message [role User] [content (string-append "Objectives: " (show objectives))]))))
+
 ;;; ------------------------------------------------------------------
-;;; The four modules. Each is one `ask` for a typed answer.
-;;; SAGA's Implementer has no module here: it would compile an objective into
-;;; a scorer, which needs a capability the host grants (design/10 §2.3).
+;;; The four modules. Each is one `ask` for a typed answer, with its own
+;;; one-minute budget: the scope around the loop must leave room for a person
+;;; (design/11, H7), and without these a slow model could spend the
+;;; person's hours. SAGA's Implementer has no module here: it would compile
+;;; an objective into a scorer, which needs a capability the host grants
+;;; (design/10 §2.3).
 
 (define plan (m goal report)
-  (ask m (List Objective 4) (plan-ctx goal report) 'planner))
+  (budget ([time 1min]) (ask m (List Objective 4) (plan-ctx goal report) 'planner)))
 
 (define optimize (m goal objectives)                  ; the inner loop, as one step
-  (ask m (List Rated 6) (work-ctx optimizer-role goal) 'optimizer))
+  (budget ([time 1min]) (ask m (List Rated 6) (optimize-ctx goal objectives) 'optimizer)))
 
 (define analyze (m goal population)
-  (ask m Progress (work-ctx analyzer-role goal) 'analyzer))
+  (budget ([time 1min]) (ask m Progress (work-ctx analyzer-role goal) 'analyzer)))
+
+;;; ------------------------------------------------------------------
+;;; The person. Co-pilot and semi-pilot both review the objectives; co-pilot
+;;; also reviews the analyzer's verdict, and can stop the search by turning
+;;; `Revise` into `Converged`. Each prompt carries the goal, and each proposal
+;;; the whole value under review, so the person never has to remember an
+;;; earlier question (design/11 §2.5).
+
+(define reviews-objectives? (level) (case level [AutoPilot #f] [_ #t]))
+(define reviews-analysis?   (level) (case level [CoPilot #t]   [_ #f]))
+
+;; One site for every objectives review, the first plan's and each revision's:
+;; a site is fixed in the program text (scripts and traces are keyed by it),
+;; so a script answers the reviews in the order they happen.
+(define reviewed-objectives (level h goal objectives)
+  (if (reviews-objectives? level)
+      (consult h (List Objective 4)
+               (string-append "Approve, edit or decline these objectives for the search: " goal)
+               (propose objectives)
+               'review-objectives)
+      objectives))
+
+(define reviewed-analysis (level h goal progress)
+  (if (reviews-analysis? level)
+      (consult h Progress
+               (string-append "The analyzer's verdict on the search: " goal
+                              ". Approve it, edit it (to stop, make it Converged), or decline.")
+               (propose progress)
+               'review-analysis)
+      progress))
 
 ;;; ------------------------------------------------------------------
 ;;; The outer loop. Fuel makes the recursion Peano, so it terminates by
 ;;; construction; the enclosing budget stops it earlier if money runs out.
 ;;; `archive` keeps every candidate from every iteration, because SAGA's
 ;;; selector chooses retrospectively across all of them, not just the last
-;;; (paper, §S1.2 phase 5).
+;;; (paper, §S1.2 phase 5). Whatever a person approves or edits is what the
+;;; loop runs: the answer, never the original proposal (design/11 §3).
 
-(define outer (m goal objectives archive fuel)
+(define outer (m h level goal objectives archive fuel)
   (if (<= fuel 0)
       archive
       (let* ([population (optimize m goal objectives)]
              [archive    (append archive population)])
-        (case (analyze m goal population)
+        (case (reviewed-analysis level h goal (analyze m goal population))
           [(Converged report) archive]
           [(Revise report revised)
-             (outer m goal revised archive (- fuel 1))]))))
+             ;; A co-pilot person has just seen these objectives inside the
+             ;; verdict, so they aren't asked about them twice.
+             (let* ([next (if (reviews-analysis? level)
+                              revised
+                              (reviewed-objectives level h goal revised))])
+               (outer m h level goal next archive (- fuel 1)))]))))
 
-(define saga (m goal fuel)
-  (budget ([cost $0.50] [time 10min])
-    (let* ([objectives (plan m goal "First iteration: no results yet.")])
-      (outer m goal objectives '() fuel))))
+(define saga-at (level m h goal fuel)
+  (budget ([cost $0.50] [time 2h])
+    (let* ([objectives (reviewed-objectives level h goal
+                         (plan m goal "First iteration: no results yet."))])
+      (outer m h level goal objectives '() fuel))))
+
+;;; Autopilot: nobody is consulted, so the grant is never used.
+(define saga (m goal fuel) (saga-at AutoPilot m reviewer goal fuel))
 
 ;;; The selector: the best of the archive. `best` is an ordinary fold, so
 ;;; retrospective selection needs no new form.
@@ -128,33 +181,120 @@
              (reply "{\"tag\":\"Converged\",\"report\":\"Converged: the best candidate satisfies every objective.\"}")
              (out 25) (latency 4s)])
 
+(val goal "Design a stable, active compound.")
+
 (under ([script two-iterations] [cost $1.00] [time 5min])
 
   ;; The whole loop runs, and the archive holds both iterations' candidates.
-  (check-expect (length (saga claude "Design a stable, active compound." 3)) 4)
+  (check-expect (length (saga claude goal 3)) 4)
 
   ;; Retrospective selection finds the best candidate overall, from iteration 2.
-  (check-expect (best (saga claude "Design a stable, active compound." 3))
-                (Rated [candidate "c3"] [score 710]))
+  (check-expect (best (saga claude goal 3)) (Rated [candidate "c3"] [score 710]))
 
   ;; The analyzer's choice drives the loop: it stops on `Converged`, after two
   ;; iterations, even though it was given fuel for three.
-  (check-within (saga claude "Design a stable, active compound." 3)
+  (check-within (saga claude goal 3)
                 ([time 24s]))              ; 3 + (5 + 4) + (5 + 4) + 3 planner
 
   ;; A sum type with two shapes of constructor comes back correctly: `Weighted`
   ;; carries a nested datatype and a number, `Filter` carries nothing.
-  (check-expect (plan claude "Design a stable, active compound." "none yet")
+  (check-expect (plan claude goal "none yet")
                 (list (Objective [name 'activity] [rationale "primary goal"]
                                  [kind (Weighted Maximize 80)])))
 
   ;; Fuel bounds the loop by construction: with no fuel, the archive is empty
   ;; and only the first plan is paid for.
-  (check-expect (saga claude "Design a stable, active compound." 0) '()))
+  (check-expect (saga claude goal 0) '()))
 
 ;;; The budget is the real stop, not the fuel. With a penny, the first `ask`
 ;;; is refused and the whole search fails before anything is spent.
 (under ([script two-iterations] [cost $0.000001] [time 5min])
-  (check-fail   (saga claude "Design a stable, active compound." 3) OverBudget)
-  (check-within (catch (saga claude "Design a stable, active compound." 3) e 0)
+  (check-fail   (saga claude goal 3) OverBudget)
+  (check-within (catch (saga claude goal 3) e 0)
                 ([cost $0] [time 0s])))
+
+;;; ==================================================================
+;;; The autonomy levels. Each script is two-iterations plus what the person
+;;; does. A script with no entry for a site the level shouldn't consult makes
+;;; any such consult an exhausted-script error, so these tests also check
+;;; that each level asks exactly the questions it should.
+
+;;; Semi-pilot: a person approves the first plan and the revised objectives.
+(script semi-approves
+  [planner   (reply "[{\"name\":\"activity\",\"rationale\":\"primary goal\",\"kind\":{\"tag\":\"Weighted\",\"dir\":{\"tag\":\"Maximize\"},\"weight\":80}}]")
+             (out 40) (latency 3s)]
+  [optimizer (reply "[{\"candidate\":\"c1\",\"score\":120},{\"candidate\":\"c2\",\"score\":340}]")
+             (out 30) (latency 5s)
+             (reply "[{\"candidate\":\"c3\",\"score\":710},{\"candidate\":\"c4\",\"score\":560}]")
+             (out 30) (latency 5s)]
+  [analyzer  (reply "{\"tag\":\"Revise\",\"report\":\"Scores are low and the top candidates are unstable.\",\"objectives\":[{\"name\":\"stability\",\"rationale\":\"add a stability filter\",\"kind\":{\"tag\":\"Filter\"}}]}")
+             (out 60) (latency 4s)
+             (reply "{\"tag\":\"Converged\",\"report\":\"Converged: the best candidate satisfies every objective.\"}")
+             (out 25) (latency 4s)]
+  [review-objectives (approve) (latency 2min)     ; the first plan
+                     (approve) (latency 1min)])   ; the revision
+
+(under ([script semi-approves] [cost $1.00] [time 1h])
+  ;; Approving everything gives autopilot's result...
+  (check-expect (best (saga-at SemiPilot claude reviewer goal 3)) (Rated [candidate "c3"] [score 710]))
+  ;; ...and costs the person's time: 24 s of models and 3 min of reviewing.
+  (check-within (saga-at SemiPilot claude reviewer goal 3) ([time 204s])))
+
+;;; Semi-pilot: the person declines the first plan, and nothing is optimized.
+(script semi-declines
+  [planner   (reply "[{\"name\":\"activity\",\"rationale\":\"primary goal\",\"kind\":{\"tag\":\"Weighted\",\"dir\":{\"tag\":\"Maximize\"},\"weight\":80}}]")
+             (out 40) (latency 3s)]
+  [review-objectives (decline "Activity alone ignores toxicity.") (latency 2min)])
+
+(under ([script semi-declines] [cost $1.00] [time 1h])
+  (check-expect (catch (saga-at SemiPilot claude reviewer goal 3) e e)
+                (Declined "Activity alone ignores toxicity.")))
+
+;;; Co-pilot: the person also reviews each verdict. Here they approve the plan,
+;;; then stop the search after the first iteration by turning Revise into
+;;; Converged. The loop runs the answer, so it stops: half the archive, and
+;;; the best candidate is the first iteration's.
+(script co-stops-early
+  [planner   (reply "[{\"name\":\"activity\",\"rationale\":\"primary goal\",\"kind\":{\"tag\":\"Weighted\",\"dir\":{\"tag\":\"Maximize\"},\"weight\":80}}]")
+             (out 40) (latency 3s)]
+  [optimizer (reply "[{\"candidate\":\"c1\",\"score\":120},{\"candidate\":\"c2\",\"score\":340}]")
+             (out 30) (latency 5s)]
+  [analyzer  (reply "{\"tag\":\"Revise\",\"report\":\"Scores are low and the top candidates are unstable.\",\"objectives\":[{\"name\":\"stability\",\"rationale\":\"add a stability filter\",\"kind\":{\"tag\":\"Filter\"}}]}")
+             (out 60) (latency 4s)]
+  [review-objectives (approve) (latency 2min)]
+  [review-analysis   (answer "{\"tag\":\"Converged\",\"report\":\"Good enough for a first screen.\"}") (latency 1min)])
+
+(under ([script co-stops-early] [cost $1.00] [time 1h])
+  (check-expect (length (saga-at CoPilot claude reviewer goal 3)) 2)
+  (check-expect (best (saga-at CoPilot claude reviewer goal 3)) (Rated [candidate "c2"] [score 340])))
+
+;;; Co-pilot, approving everything: the plan, then both verdicts. There is
+;;; only one review-objectives entry, for the first plan, so this also checks
+;;; that a co-pilot person isn't asked about the revised objectives a second
+;;; time: that would exhaust the script.
+(script co-approves
+  [planner   (reply "[{\"name\":\"activity\",\"rationale\":\"primary goal\",\"kind\":{\"tag\":\"Weighted\",\"dir\":{\"tag\":\"Maximize\"},\"weight\":80}}]")
+             (out 40) (latency 3s)]
+  [optimizer (reply "[{\"candidate\":\"c1\",\"score\":120},{\"candidate\":\"c2\",\"score\":340}]")
+             (out 30) (latency 5s)
+             (reply "[{\"candidate\":\"c3\",\"score\":710},{\"candidate\":\"c4\",\"score\":560}]")
+             (out 30) (latency 5s)]
+  [analyzer  (reply "{\"tag\":\"Revise\",\"report\":\"Scores are low and the top candidates are unstable.\",\"objectives\":[{\"name\":\"stability\",\"rationale\":\"add a stability filter\",\"kind\":{\"tag\":\"Filter\"}}]}")
+             (out 60) (latency 4s)
+             (reply "{\"tag\":\"Converged\",\"report\":\"Converged: the best candidate satisfies every objective.\"}")
+             (out 25) (latency 4s)]
+  [review-objectives (approve) (latency 2min)]
+  [review-analysis   (approve) (latency 1min)
+                     (approve) (latency 1min)])
+
+(under ([script co-approves] [cost $1.00] [time 1h])
+  (check-expect (length (saga-at CoPilot claude reviewer goal 3)) 4))
+
+;;; A slow model can't spend the person's hours: each module has its own
+;;; one-minute budget inside the long outer scope (design/11, H7).
+(script slow-planner
+  [planner (reply "[]") (out 5) (latency 5min)])
+
+(under ([script slow-planner] [cost $1.00] [time 1h])
+  (check-fail   (saga claude goal 3) PastDeadline)
+  (check-within (catch (saga claude goal 3) e 0) ([time 1min])))

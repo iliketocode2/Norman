@@ -1,8 +1,9 @@
 # `consult`: asking a person
 
-> **Status: built in scripted mode (§9 steps 1–5); no live host yet.** In
-> live mode every consult is a checked run-time error, because no person is
-> attached (H3). The rules are now in `04` §6.5 and `07` §4, which are the
+> **Status: built** (all of §9). Scripts answer consults in tests; in live
+> mode a person answers at the terminal, and a run refuses to start while any
+> human grant is unbound (§4.1; `08`, deviation 11). [`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)
+> runs SAGA at all three autonomy levels. The rules are now in `04` §6.5 and `07` §4, which are the
 > reference; this document keeps the argument, as `10` does for typed grants.
 > [`../examples/consult.nrm`](../examples/consult.nrm) tests every rule of
 > §2.2, and [`../tests/properties.rs`](../tests/properties.rs) checks K1–K4 on
@@ -344,6 +345,18 @@ by a failing sibling, the host must withdraw the prompt from the person, so
 nobody keeps working on a question the program has stopped waiting for. An
 answer that arrives anyway is discarded and recorded (§2.3).
 
+> **As built** (`08`, deviation 11). The terminal host takes one line per
+> answer: `a` approves, `d REASON` declines, and anything else is the answer,
+> as JSON, or as plain text when τ is `Text`. Building it fixed four things
+> this section left open. Questions are shown one at a time, in issue order.
+> A line read before a question appeared never answers it, so a reply meant
+> for one question can't land on the next, and a pipe that types ahead can't
+> approve something nobody saw. A terminal whose input ends is treated like
+> `unattended`: a checked error, never a decline, and never an endless wait.
+> And because the terminal does withdraw a question, nothing typed afterwards
+> can answer it, so the `discarded` trace entry is needed only by a host that
+> can't withdraw.
+
 Other hosts (a web form, a chat message) fit the same interface later. The
 semantics doesn't care how the question reaches the person.
 
@@ -519,7 +532,7 @@ those win: they are the reference, and this document keeps the argument.
 | ✅ | `06` §4, §5, §7 | premise (iv) on W1, W4 and W5; K1–K4 and the non-laws; problems #10 and #11 |
 | ✅ | `07` §4, §6 | the three M-CONSULT transitions, the M-TIME rows, the consult case of M-NODE-FAIL; Theorems 1′ and 5(b) |
 | ✅ | `08` | the rule-to-code map; deviations 11 and 12 |
-| | `09` | the live human hosts and `--human`; refusing to start with an unbound grant; withdrawing cut and cancelled consults (only the gap is noted so far, in §7) |
+| ✅ | `08`, `09` | the live human hosts and `--human`; refusing to start with an unbound grant; withdrawing cut and cancelled consults |
 | ✅ | `10` §2.2, §4, §5 | point here; Q-C and Q-D settled |
 
 **The new proof cases are short:**

@@ -12,16 +12,115 @@
 //! once, as `ToolError` or as a checked run-time error.
 
 use crate::anthropic::{self, API_VERSION, COUNT_TOKENS_PATH, MESSAGES_PATH};
-use crate::host::{AskReq, Completion, Count, CountError, Oracle};
+use crate::ast::Type;
+use crate::host::{AskReq, Completion, ConsultReq, Count, CountError, Oracle};
 use crate::types::TypeEnv;
 use crate::value::Value;
-use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::collections::{HashMap, VecDeque};
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Shared by every `LiveOracle::new`, which has no hosts.
 static EMPTY_REGISTRY: OnceLock<crate::tools::HostRegistry> = OnceLock::new();
+/// Shared by every live oracle made without people.
+static NO_PEOPLE: OnceLock<People> = OnceLock::new();
+
+// ------------------------------------------------------------------ people
+//
+// A live person (design/11 §4.1). The operator binds each `human` grant on
+// the command line, to the terminal or to `unattended`. A consult bound to
+// the terminal is shown there and answered by a typed line; the line comes
+// back through the same event loop as a model's reply, so a deadline can cut
+// the person off and fail-fast can withdraw the question.
+
+/// How a `human` grant is bound for a live run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    /// Asked at the terminal.
+    Tty,
+    /// No person: any consult is a checked run-time error, never a decline.
+    Unattended,
+}
+
+impl std::str::FromStr for Binding {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Binding, String> {
+        match s {
+            "tty" => Ok(Binding::Tty),
+            "unattended" => Ok(Binding::Unattended),
+            other => Err(format!("a person is bound to `tty` or `unattended`, not `{}`", other)),
+        }
+    }
+}
+
+/// A line the person typed, and when it was read.
+pub type Line = (Instant, String);
+
+/// Where questions are shown and answers typed. One per process in normal
+/// use (stdin and stderr); tests make their own.
+#[derive(Clone)]
+pub struct Console {
+    lines: Arc<Mutex<Receiver<Line>>>,
+    out: Arc<Mutex<dyn Write + Send>>,
+}
+
+impl Console {
+    /// A console reading `lines` and writing to `out`.
+    pub fn new(lines: Receiver<Line>, out: Arc<Mutex<dyn Write + Send>>) -> Console {
+        Console { lines: Arc::new(Mutex::new(lines)), out }
+    }
+
+    /// The process's terminal: lines from stdin, questions on stderr, so
+    /// stdout stays the program's output. Stdin is read by one thread for
+    /// the whole process, whichever run is asking.
+    pub fn stdio() -> Console {
+        static STDIN: OnceLock<Arc<Mutex<Receiver<Line>>>> = OnceLock::new();
+        let lines = STDIN
+            .get_or_init(|| {
+                let (tx, rx) = channel();
+                std::thread::spawn(move || {
+                    let stdin = std::io::stdin();
+                    let mut buf = String::new();
+                    loop {
+                        buf.clear();
+                        match stdin.read_line(&mut buf) {
+                            Ok(0) | Err(_) => break, // end of input
+                            Ok(_) => {
+                                if tx.send((Instant::now(), buf.trim_end_matches(['\r', '\n']).to_string())).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
+                Arc::new(Mutex::new(rx))
+            })
+            .clone();
+        Console { lines, out: Arc::new(Mutex::new(std::io::stderr())) }
+    }
+}
+
+/// The people a live run may consult: a binding for each `human` grant.
+#[derive(Clone, Default)]
+pub struct People {
+    pub bindings: HashMap<String, Binding>,
+    /// Required when any binding is `Tty`.
+    pub console: Option<Console>,
+}
+
+fn closed(site: &str, human: &str) -> String {
+    format!("the terminal's input ended, so nobody can answer consult site '{}' (human {})", site, human)
+}
+
+/// The question on screen, and when it appeared.
+struct Showing {
+    rid: u64,
+    req: ConsultReq,
+    since: Instant,
+}
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 
@@ -64,6 +163,12 @@ enum Answer {
     Http(Result<(u16, String), String>),
     /// A tool's result, or a tool error the program can catch.
     Tool(Result<String, String>),
+    /// A line typed at the console. It belongs to no request until the
+    /// oracle matches it to the question on screen.
+    Line(String),
+    /// The console's input ended (a closed pipe, or Ctrl-D): nobody can
+    /// answer any more.
+    ConsoleClosed,
 }
 
 struct Arrival {
@@ -78,6 +183,8 @@ enum Pending {
     Ask { wrapped: bool },
     /// A call, and the host it is running on.
     Call { key: String },
+    /// A consult, shown or waiting its turn at the console.
+    Consult,
 }
 
 /// A running host: its worker thread, and the queue feeding it. Calls to one
@@ -102,6 +209,17 @@ pub struct LiveOracle<'a> {
     hosts: HashMap<String, Running>,
     /// A reply that arrived after the machine's limit, held for a later `next`.
     held: Vec<Arrival>,
+    /// Who may be consulted, and how.
+    people: &'a People,
+    /// The question on the console, and those waiting behind it. A person
+    /// answers one thing at a time, so consults are shown in issue order.
+    showing: Option<Showing>,
+    waiting: VecDeque<(u64, ConsultReq)>,
+    /// Set when the run ends, so the console's forwarding thread stops.
+    stop: Arc<AtomicBool>,
+    forwarding: bool,
+    /// The console's input has ended, so no consult can be answered.
+    console_closed: bool,
 }
 
 impl<'a> LiveOracle<'a> {
@@ -111,6 +229,16 @@ impl<'a> LiveOracle<'a> {
 
     /// A live oracle that can also reach real tools.
     pub fn with_hosts(theta: &'a TypeEnv, cfg: LiveConfig, registry: &'a crate::tools::HostRegistry) -> LiveOracle<'a> {
+        Self::with_people(theta, cfg, registry, NO_PEOPLE.get_or_init(Default::default))
+    }
+
+    /// A live oracle that can reach real tools and consult real people.
+    pub fn with_people(
+        theta: &'a TypeEnv,
+        cfg: LiveConfig,
+        registry: &'a crate::tools::HostRegistry,
+        people: &'a People,
+    ) -> LiveOracle<'a> {
         let agent = ureq::AgentBuilder::new().timeout(cfg.timeout).build();
         let (tx, rx) = channel();
         LiveOracle {
@@ -124,6 +252,138 @@ impl<'a> LiveOracle<'a> {
             held: vec![],
             registry,
             hosts: HashMap::new(),
+            people,
+            showing: None,
+            waiting: VecDeque::new(),
+            stop: Arc::new(AtomicBool::new(false)),
+            forwarding: false,
+            console_closed: false,
+        }
+    }
+
+    // ------------------------------------------------------------ console
+
+    fn say(&self, text: &str) {
+        if let Some(c) = &self.people.console
+            && let Ok(mut out) = c.out.lock()
+        {
+            let _ = out.write_all(text.as_bytes());
+            let _ = out.flush();
+        }
+    }
+
+    /// Forward the console's lines into this run's event loop, from the
+    /// first consult until the run ends. Polling with a timeout lets the
+    /// thread notice the end of the run and give the console back.
+    fn forward_console(&mut self) {
+        let Some(console) = self.people.console.clone() else { return };
+        if self.forwarding {
+            return;
+        }
+        self.forwarding = true;
+        let (tx, stop) = (self.tx.clone(), self.stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let Ok(lines) = console.lines.lock() else { return };
+                match lines.recv_timeout(Duration::from_millis(50)) {
+                    Ok((at, line)) => {
+                        if tx.send(Arrival { rid: u64::MAX, at, answer: Answer::Line(line) }).is_err() {
+                            return; // the run ended; nobody is asking, so the line is dropped
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => {
+                        let _ = tx.send(Arrival { rid: u64::MAX, at: Instant::now(), answer: Answer::ConsoleClosed });
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Put the next waiting question on the console, if nothing is showing.
+    fn show_next(&mut self) {
+        if self.showing.is_some() {
+            return;
+        }
+        let Some((rid, req)) = self.waiting.pop_front() else { return };
+        let mut text = format!("\n── consult '{} · human {} ──\n{}\n", req.site, req.human.name, req.prompt);
+        if let Some(p) = &req.proposal {
+            text.push_str(&format!("proposal: {}\n", p));
+        }
+        text.push_str(&format!("answer type: {}\n", req.ty));
+        if req.proposal.is_some() {
+            text.push_str("  a          approve the proposal as shown\n");
+        }
+        text.push_str("  d REASON   decline\n");
+        if matches!(req.ty, Type::Text(_)) {
+            text.push_str("  TEXT       anything else is your answer\n");
+        } else {
+            text.push_str("  JSON       answer with this value\n");
+        }
+        if !self.waiting.is_empty() {
+            text.push_str(&format!("({} more waiting)\n", self.waiting.len()));
+        }
+        text.push_str("> ");
+        self.say(&text);
+        self.showing = Some(Showing { rid, req, since: Instant::now() });
+    }
+
+    /// Match a typed line to the question on screen. A line read before the
+    /// question appeared never answers it: it was meant for something else.
+    /// A reply that doesn't fit is asked for again, which is the console's
+    /// form validation, not a second consult (design/11 §4.1).
+    fn on_line(&mut self, at: Instant, line: &str) -> Option<(u64, Completion)> {
+        let showing = self.showing.as_ref()?;
+        if at < showing.since {
+            return None;
+        }
+        let line = line.trim();
+        let req = &showing.req;
+        let completion = if line == "a" || line == "approve" {
+            match &req.proposal {
+                Some(p) => Completion::HumanAnswer { json: p.clone() },
+                None => {
+                    self.say("nothing was proposed, so there is nothing to approve; type an answer or `d REASON`\n> ");
+                    return None;
+                }
+            }
+        } else if line == "d" || line == "decline" {
+            Completion::Declined { reason: String::new() }
+        } else if let Some(reason) = line.strip_prefix("d ").or_else(|| line.strip_prefix("decline ")) {
+            Completion::Declined { reason: reason.trim().to_string() }
+        } else {
+            let json = match serde_json::from_str::<serde_json::Value>(line) {
+                Ok(_) => line.to_string(),
+                // For a Text answer, plain text is the answer itself.
+                Err(_) if matches!(req.ty, Type::Text(_)) => serde_json::Value::String(line.to_string()).to_string(),
+                Err(_) => {
+                    self.say("that isn't JSON; type `a`, `d REASON`, or a JSON value\n> ");
+                    return None;
+                }
+            };
+            let fits =
+                serde_json::from_str::<serde_json::Value>(&json).ok().and_then(|j| self.theta.validate(&j, &req.ty));
+            if fits.is_none() {
+                self.say(&format!("that doesn't fit {}; try again\n> ", req.ty));
+                return None;
+            }
+            Completion::HumanAnswer { json }
+        };
+        let rid = showing.rid;
+        self.showing = None;
+        self.show_next();
+        Some((rid, completion))
+    }
+
+    /// Take a question back: from the screen if it's showing, or from the queue.
+    fn withdraw(&mut self, rid: u64) {
+        if self.showing.as_ref().is_some_and(|s| s.rid == rid) {
+            self.showing = None;
+            self.say("\n(withdrawn: the program stopped waiting for this answer)\n");
+            self.show_next();
+        } else {
+            self.waiting.retain(|(r, _)| *r != rid);
         }
     }
 
@@ -181,7 +441,12 @@ impl<'a> LiveOracle<'a> {
             }
             (Answer::Tool(Ok(text)), _) => Ok(Completion::ToolResult { text }),
             (Answer::Tool(Err(msg)), _) => Ok(Completion::ToolError { msg }),
-            (Answer::Http(Ok(_)), Pending::Call { .. }) => Err("internal error: an HTTP reply completed a call".into()),
+            (Answer::Http(Ok(_)), _) => {
+                Err("internal error: an HTTP reply completed something other than an ask".into())
+            }
+            (Answer::Line(_) | Answer::ConsoleClosed, _) => {
+                Err("internal error: console input reached a request directly".into())
+            }
         }
     }
 }
@@ -190,6 +455,10 @@ impl<'a> LiveOracle<'a> {
 /// finish and close its process instead of outliving the run.
 impl Drop for LiveOracle<'_> {
     fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if self.showing.is_some() {
+            self.say("\n(withdrawn: the run ended)\n");
+        }
         let busy: Vec<String> = self
             .inflight
             .values()
@@ -275,12 +544,42 @@ impl<'a> Oracle for LiveOracle<'a> {
         Err(format!("'{}' is a live host, and live hosts cannot fork", key))
     }
 
+    /// A consult goes to the person its grant is bound to. `Unattended`, or
+    /// no binding at all, is a checked run-time error: a missing person must
+    /// never look like a person saying no (design/11, H3).
+    fn issue_consult(&mut self, rid: u64, req: ConsultReq, _now: i64) -> Result<(), String> {
+        let name = req.human.name.to_string();
+        match self.people.bindings.get(&name) {
+            Some(Binding::Tty) if self.console_closed => Err(closed(&req.site, &name)),
+            Some(Binding::Tty) if self.people.console.is_some() => {
+                self.forward_console();
+                self.inflight.insert(rid, Pending::Consult);
+                self.waiting.push_back((rid, req));
+                self.show_next();
+                Ok(())
+            }
+            Some(Binding::Tty) => Err(format!("human {} is bound to the terminal, but this run has none", name)),
+            Some(Binding::Unattended) => Err(format!(
+                "consult site '{}' needs a person, but human {} is unattended (--human {}=unattended)",
+                req.site, name, name
+            )),
+            None => Err(format!(
+                "no person is attached to answer consult site '{}' (human {}); bind one with --human {}=tty",
+                req.site, name, name
+            )),
+        }
+    }
+
     /// Abandon a request. An ask's worker thread finishes on its own and the
     /// reply is discarded. A call's host is interrupted, so whatever it was
-    /// running doesn't go on running after the program has moved on.
+    /// running doesn't go on running after the program has moved on. A
+    /// consult's question is withdrawn from the console, so nobody goes on
+    /// answering a question the program has stopped waiting for.
     fn cancel(&mut self, rid: u64) {
-        if let Some(Pending::Call { key }) = self.inflight.remove(&rid) {
-            self.interrupt(&key);
+        match self.inflight.remove(&rid) {
+            Some(Pending::Call { key }) => self.interrupt(&key),
+            Some(Pending::Consult) => self.withdraw(rid),
+            _ => {}
         }
     }
 
@@ -309,6 +608,27 @@ impl<'a> Oracle for LiveOracle<'a> {
                     }
                 }
             };
+            if let Answer::ConsoleClosed = arrival.answer {
+                // H3: a person who can no longer answer is no person at all,
+                // which is a checked run-time error, never a decline.
+                self.console_closed = true;
+                if let Some(s) = self.showing.as_ref().map(|s| &s.req).or(self.waiting.front().map(|(_, r)| r)) {
+                    return Err(closed(&s.site, &s.human.name));
+                }
+                continue;
+            }
+            if let Answer::Line(line) = &arrival.answer {
+                // A typed line answers the question on screen, if it fits.
+                // One typed after the machine's limit is discarded: by then
+                // the question has been, or is about to be, withdrawn.
+                let t = self.ms(arrival.at);
+                if limit.is_some_and(|l| t > l) {
+                    continue;
+                }
+                let Some((rid, c)) = self.on_line(arrival.at, line) else { continue };
+                self.inflight.remove(&rid);
+                return Ok(Some((t.max(self.ms(Instant::now()).min(limit.unwrap_or(i64::MAX))), vec![(rid, c)])));
+            }
             if !self.inflight.contains_key(&arrival.rid) {
                 continue; // cancelled earlier: discard
             }
@@ -323,6 +643,11 @@ impl<'a> Oracle for LiveOracle<'a> {
             let mut batch = vec![(rid, self.completion(arrival, pending)?)];
             // Whatever else has already arrived joins the batch, in issue order.
             while let Ok(more) = self.rx.try_recv() {
+                if matches!(more.answer, Answer::Line(_)) {
+                    // Lines are matched one at a time, in the order typed.
+                    self.held.push(more);
+                    continue;
+                }
                 match self.inflight.contains_key(&more.rid) {
                     true if limit.is_none_or(|l| self.ms(more.at) <= l) => {
                         let p = self.inflight.remove(&more.rid).unwrap();

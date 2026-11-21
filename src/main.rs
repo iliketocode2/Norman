@@ -5,7 +5,7 @@ use munorman::live::LiveConfig;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: norman [--live [--python EXE]] [--trace] FILE.nrm …
+const USAGE: &str = "usage: norman [--live [--python EXE] [--human NAME=tty|unattended]…] [--trace] FILE.nrm …
 
 Loads each file, printing the value of each top-level expression, then runs
 its unit tests (check-expect, check-fail, …).
@@ -17,7 +17,14 @@ its unit tests (check-expect, check-fail, …).
             with --live, back every `kernel` grant with a real Python
             process run by EXE (e.g. python3). WARNING: there is no
             sandbox; model-written code runs with your permissions.
-  --trace   after each evaluation, print one line per ask or call:
+  --human NAME=tty
+            with --live, put each `consult` of the human granted as NAME
+            to you at this terminal (questions on stderr, answers on stdin).
+  --human NAME=unattended
+            with --live, declare that nobody is there: a consult of NAME
+            stops the run with an error. It is never treated as a refusal.
+            A live run refuses to start while any human grant is unbound.
+  --trace   after each evaluation, print one line per ask, call or consult:
             site, tokens, cost, timing and outcome";
 
 fn main() -> ExitCode {
@@ -25,6 +32,7 @@ fn main() -> ExitCode {
     let mut live = false;
     let mut trace = false;
     let mut python = None;
+    let mut people = munorman::live::People::default();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -36,6 +44,24 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             },
+            "--human" => {
+                let parsed =
+                    args.next().ok_or_else(|| "--human needs NAME=tty or NAME=unattended".to_string()).and_then(|b| {
+                        let (name, how) = b
+                            .split_once('=')
+                            .ok_or_else(|| format!("--human {} should be NAME=tty or NAME=unattended", b))?;
+                        Ok((name.to_string(), how.parse::<munorman::live::Binding>()?))
+                    });
+                match parsed {
+                    Ok((name, how)) => {
+                        people.bindings.insert(name, how);
+                    }
+                    Err(msg) => {
+                        eprintln!("{}\n\n{}", msg, USAGE);
+                        return ExitCode::from(2);
+                    }
+                }
+            }
             "--trace" => trace = true,
             "-h" | "--help" => {
                 eprintln!("{}", USAGE);
@@ -56,10 +82,26 @@ fn main() -> ExitCode {
         eprintln!("--python only applies with --live; scripted runs answer `call` from scripts\n\n{}", USAGE);
         return ExitCode::from(2);
     }
+    if !people.bindings.is_empty() && !live {
+        eprintln!("--human only applies with --live; scripted runs answer `consult` from scripts\n\n{}", USAGE);
+        return ExitCode::from(2);
+    }
     let mut interp = Interp::new();
     interp.trace = trace;
     interp.python = python;
     if live {
+        // H3: refuse to start, before anything runs or is paid for, while any
+        // human grant is unbound.
+        let bound: Vec<String> = people.bindings.keys().cloned().collect();
+        let paths: Vec<&Path> = files.iter().map(Path::new).collect();
+        if let Err(msg) = interp.check_people(&paths, &bound) {
+            eprintln!("{}", msg);
+            return ExitCode::from(2);
+        }
+        if people.bindings.values().any(|b| *b == munorman::live::Binding::Tty) {
+            people.console = Some(munorman::live::Console::stdio());
+        }
+        interp.people = people;
         match LiveConfig::from_env() {
             Ok(cfg) => interp.live = Some(cfg),
             Err(msg) => {

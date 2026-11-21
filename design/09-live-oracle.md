@@ -301,6 +301,8 @@ consequences:
 - **No effort control.** A future `[effort low]` grant field would map to
   `output_config.effort`.
 - **Prices are not fetched.** They're stated in the grant (§0).
-- **No person can be consulted live.** `consult` ([`11`](11-consult.md)) is
-  answered only by scripts so far. With `--live`, a consult is a checked
-  run-time error, because no person is attached (`08`, deviation 11).
+- **A person is consulted only at the terminal.** With `--live`, each
+  `human` grant must be bound with `--human NAME=tty` or
+  `--human NAME=unattended`, or the run refuses to start
+  ([`11`](11-consult.md) §4.1; `08`, deviation 11). There is no web or chat
+  host yet.

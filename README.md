@@ -29,7 +29,12 @@ been benchmarked against a hand-written agent.
 ```
 cargo run -- --live --trace examples/cp-agent.nrm                     # asks go to Claude; calls fail
 cargo run -- --live --python python3 --trace examples/cp-agent.nrm    # calls run real Python too
+cargo run -- --live --human reviewer=tty --trace FILE.nrm             # you answer each consult
 ```
+
+A program that consults a person (`consult`) won't start live until each
+person it grants is bound: `--human NAME=tty` puts the questions to you at
+this terminal, and `--human NAME=unattended` makes any consult stop the run.
 
 > **Warning: `--python` has no sandbox.** It runs whatever code the model
 > writes, with your user's permissions, on your machine. Use it only in a

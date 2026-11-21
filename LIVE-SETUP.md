@@ -87,6 +87,18 @@ cargo run -- --live --trace FILE.nrm
 - `--python EXE` (with `--live`) backs every `kernel` grant with a real Python
   process, run by `EXE` (for example `python3`). Without it, a `call` in live
   mode is a run-time error.
+- `--human NAME=tty` (with `--live`) puts every `consult` of the person
+  granted as `NAME` to you at the terminal: questions on stderr, answers on
+  stdin. Type `a` to approve the proposal, `d REASON` to decline, or your own
+  answer. `--human NAME=unattended` says nobody is there, and a consult of
+  `NAME` stops the run. A program with a `human` grant won't start live until
+  every one is bound, so a missing person can't cost you anything
+  ([`design/11-consult.md`](design/11-consult.md) §4.1).
+
+> **Unit tests run live too.** In live mode a file's `under` blocks ignore
+> their scripts, so every `check-…` asks the real model and, for a consult,
+> you. A file whose tests expect scripted answers will mostly fail live.
+> Run live on a program written for it, with its own small budget.
 
 > **`--python` has no sandbox.** It runs whatever code the model writes, with
 > your user's permissions. Run it in a throwaway container or VM. A deadline

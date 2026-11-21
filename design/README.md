@@ -14,8 +14,8 @@ for what.
 
 > **Status:** a research prototype, designed and implemented. A Rust
 > interpreter runs the design's example programs and laws: 35 example tests,
-> 26 law tests, 39 tests of the predefined functions, 11 oracle tests, 7 tests
-> of SAGA's bi-level loop ([`10`](10-saga.md)), 45 string and `show` tests, 18
+> 26 law tests, 39 tests of the predefined functions, 11 oracle tests, 15 tests
+> of SAGA's bi-level loop at its three autonomy levels ([`10`](10-saga.md)), 45 string and `show` tests, 18
 > typed-tool tests, 6 CP-Agent tests and 52 tests of `consult`
 > ([`11`](11-consult.md)) all pass. Seventeen laws are also
 > checked on 150 random scripts each, and the budget invariant is checked in
@@ -233,10 +233,17 @@ costs nothing from the budget unless the grant gives a price,
 - **Waiting for a person spends time.** A consult inside a one-minute budget
   will almost always run out of time. Give the scope room for a person, and
   give each model call its own short `budget` inside it.
-- **A missing person is never a "no".** Tests answer from scripts. Live, a
-  consult with nobody attached stops the run with an error rather than
-  pretending someone declined (for now, live mode has no way to attach a
-  person; see below).
+- **A missing person is never a "no".** Tests answer from scripts. Live, you
+  bind each person on the command line, to your terminal or to `unattended`,
+  and a run won't start until every one is bound:
+
+  ```
+  cargo run -- --live --human reviewer=tty --trace FILE.nrm
+  ```
+
+  At the terminal you type `a` to approve, `d REASON` to decline, or an
+  answer of your own. A consult of an `unattended` person stops the run with
+  an error rather than pretending someone declined.
 
 ### 8. The rest is library, with laws
 
@@ -303,9 +310,10 @@ These are stated as theorems in [`04`](04-formal-definition.md) §8 and
 - **A loop that never calls a model or tool isn't stopped by the budget.** Pure
   computation takes no time in the model. The interpreter stops it with a step
   limit instead (20 million steps), as a run-time error.
-- **No live person yet.** `consult` is answered by scripts in tests. Live mode
-  has no way to attach a person, so a consult there stops the run with an
-  error. A terminal host is next ([`11`](11-consult.md) §4.1).
+- **A person is consulted only at the terminal.** There's no web form or
+  chat host yet, and a person can't step away: a consult waits against the
+  same deadline as everything else ([`11`](11-consult.md), open question
+  Q-G).
 
 ## How testing works
 
@@ -377,7 +385,7 @@ Ramsey's point exactly: proofs are most useful when they fail.
 | [`08-implementation-notes.md`](08-implementation-notes.md) | how to run it; rule-to-code map; every deliberate deviation; what the tests found | work on the interpreter |
 | [`09-live-oracle.md`](09-live-oracle.md) | connecting `ask` to a real model: request mapping, types to JSON Schema, reservations from `count_tokens`, refusals, the real clock. **The default model is Claude Sonnet 5, set in one place so it can change.** | connect µNorman to a model API |
 | [`10-saga.md`](10-saga.md) | what writing SAGA's bi-level loop in µNorman found: typed `call`, a form for consulting a human, derived capabilities | see what the language is missing, and why |
-| [`11-consult.md`](11-consult.md) | `consult`, a typed form for asking a person: the argument behind granted humans, `Declined`, and approval that binds to what runs. Built in scripted mode; the rules are in `04` and `07`. | see how a person fits into a program, and why |
+| [`11-consult.md`](11-consult.md) | `consult`, a typed form for asking a person: the argument behind granted humans, `Declined`, and approval that binds to what runs. The rules are in `04` and `07`; a live person answers at the terminal. | see how a person fits into a program, and why |
 | [`../LIVE-SETUP.md`](../LIVE-SETUP.md) | the operator's companion to `09`: getting an API key, setting it, capping the spend, and the plan for the first real call | actually run against a real model |
 
 Where documents disagree, the later one wins. Each correction is also noted at
