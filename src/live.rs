@@ -179,8 +179,9 @@ struct Arrival {
 
 /// What an in-flight request is waiting for.
 enum Pending {
-    /// An ask, and whether its answer is wrapped as `{"value": …}`.
-    Ask { wrapped: bool },
+    /// An ask, whether its answer is wrapped as `{"value": …}`, and its
+    /// grant's cache lifetime, which prices cache writes.
+    Ask { wrapped: bool, cache_ttl: Option<i64> },
     /// A call, and the host it is running on.
     Call { key: String },
     /// A consult, shown or waiting its turn at the console.
@@ -433,11 +434,11 @@ impl<'a> LiveOracle<'a> {
     /// Turn an arrival into a completion, or a checked run-time error for a fatal status.
     fn completion(&self, a: Arrival, pending: Pending) -> Result<Completion, String> {
         match (a.answer, pending) {
-            (Answer::Http(Ok((status, body))), Pending::Ask { wrapped }) => {
-                anthropic::parse_response(status, &body, wrapped)
+            (Answer::Http(Ok((status, body))), Pending::Ask { wrapped, cache_ttl }) => {
+                anthropic::parse_response(status, &body, wrapped, cache_ttl)
             }
             (Answer::Http(Err(e)), _) => {
-                Ok(Completion::ProviderError { msg: format!("network error: {}", e), input_tokens: 0 })
+                Ok(Completion::ProviderError { msg: format!("network error: {}", e), usage: Default::default() })
             }
             (Answer::Tool(Ok(text)), _) => Ok(Completion::ToolResult { text }),
             (Answer::Tool(Err(msg)), _) => Ok(Completion::ToolError { msg }),
@@ -508,7 +509,7 @@ impl<'a> Oracle for LiveOracle<'a> {
 
     fn issue_ask(&mut self, rid: u64, req: AskReq, _now: i64) -> Result<(), String> {
         let (body, wrapped) = anthropic::request_body(self.theta, &req)?;
-        self.inflight.insert(rid, Pending::Ask { wrapped });
+        self.inflight.insert(rid, Pending::Ask { wrapped, cache_ttl: req.model.cache_ttl });
         let (agent, cfg, tx) = (self.agent.clone(), self.cfg.clone(), self.tx.clone());
         let body = body.to_string();
         std::thread::spawn(move || {

@@ -248,12 +248,16 @@ pub type Ops = std::rc::Rc<Vec<(Name, Type)>>;
 /// What a `grant` hands to the program.
 #[derive(Debug, Clone)]
 pub enum HostSpec {
-    /// Prices are integer micro-dollars per token. Omitted fields take the
-    /// defaults in `crate::defaults` (Claude Sonnet 5).
+    /// Prices are nano-dollars per token (a grant states dollars per million
+    /// tokens). Omitted fields take the defaults in `crate::defaults`
+    /// (Claude Sonnet 5). `cache` is the prompt cache's lifetime in ms, if
+    /// the grant asks for caching (design/09 §7a).
     Model {
         id: String,
-        in_price: i64,
-        out_price: i64,
+        in_nano: i64,
+        out_nano: i64,
+        read_nano: i64,
+        cache: Option<i64>,
         ceiling: u64,
         think: u64,
     },

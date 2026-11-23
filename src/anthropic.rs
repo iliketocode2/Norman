@@ -8,7 +8,7 @@
 //! `POST /v1/messages` and `POST /v1/messages/count_tokens`, with headers
 //! `x-api-key` and `anthropic-version: 2023-06-01`.
 
-use crate::host::{AskReq, Completion};
+use crate::host::{AskReq, Completion, Usage};
 use crate::types::TypeEnv;
 use serde_json::{Value as J, json};
 
@@ -100,9 +100,24 @@ fn common_body(theta: &TypeEnv, req: &AskReq) -> Result<(serde_json::Map<String,
 }
 
 /// The `/v1/messages` request for an ask, and whether its answer is wrapped.
+///
+/// A grant with `[cache …]` asks for prompt caching (design/09 §7a), with two
+/// breakpoints: automatic caching, a top-level `cache_control` that the API
+/// places on the last block and moves forward as a conversation grows, and an
+/// explicit one on the system prompt, so asks that share a system prompt and
+/// answer type but differ after it share that prefix. Both have the grant's
+/// lifetime, which keeps them in the order the API requires.
 pub fn request_body(theta: &TypeEnv, req: &AskReq) -> Result<(J, bool), String> {
     let (mut body, wrapped) = common_body(theta, req)?;
     body.insert("max_tokens".into(), json!(req.max_tokens));
+    if let Some(ttl) = req.model.cache_ttl {
+        let marker =
+            if ttl > 300_000 { json!({"type": "ephemeral", "ttl": "1h"}) } else { json!({"type": "ephemeral"}) };
+        if let Some(J::String(system)) = body.remove("system") {
+            body.insert("system".into(), json!([{"type": "text", "text": system, "cache_control": marker.clone()}]));
+        }
+        body.insert("cache_control".into(), marker);
+    }
     Ok((J::Object(body), wrapped))
 }
 
@@ -145,25 +160,23 @@ pub fn classify_error(status: u16, body: &str) -> Failure {
 }
 
 /// Map a `/v1/messages` response to a completion (09 §4). `wrapped` says
-/// whether the answer is `{"value": …}` to be unwrapped before `validate`.
+/// whether the answer is `{"value": …}` to be unwrapped before `validate`;
+/// `cache_ttl` is the grant's cache lifetime, which prices cache writes when
+/// the response doesn't break them down by lifetime.
 /// `Err` is a checked run-time error: a request the program or its grants got wrong.
-pub fn parse_response(status: u16, body: &str, wrapped: bool) -> Result<Completion, String> {
+pub fn parse_response(status: u16, body: &str, wrapped: bool, cache_ttl: Option<i64>) -> Result<Completion, String> {
+    let none = Usage::default();
     if !(200..300).contains(&status) {
         return match classify_error(status, body) {
-            Failure::Transient(msg) => Ok(Completion::ProviderError { msg, input_tokens: 0 }),
+            Failure::Transient(msg) => Ok(Completion::ProviderError { msg, usage: none }),
             Failure::Fatal(msg) => Err(msg),
         };
     }
     let j: J = match serde_json::from_str(body) {
         Ok(j) => j,
-        Err(e) => return Ok(Completion::ProviderError { msg: format!("malformed response: {}", e), input_tokens: 0 }),
+        Err(e) => return Ok(Completion::ProviderError { msg: format!("malformed response: {}", e), usage: none }),
     };
-    let usage = |field: &str| j.pointer(&format!("/usage/{}", field)).and_then(J::as_i64).unwrap_or(0);
-    // Every input token is charged at the grant's input price. Cache writes and
-    // reads are priced differently by the provider, but µNorman doesn't send
-    // cache_control, so both are normally zero (09 §7).
-    let input_tokens = usage("input_tokens") + usage("cache_creation_input_tokens") + usage("cache_read_input_tokens");
-    let output_tokens = usage("output_tokens");
+    let usage = parse_usage(&j, cache_ttl);
     // The answer is the text blocks; thinking blocks are skipped.
     let text: String = j
         .get("content")
@@ -179,15 +192,38 @@ pub fn parse_response(status: u16, body: &str, wrapped: bool) -> Result<Completi
     let stop = j.get("stop_reason").and_then(J::as_str).unwrap_or("");
     Ok(match stop {
         "end_turn" | "stop_sequence" => {
-            Completion::Answer { json: unwrap_answer(&text, wrapped), input_tokens, output_tokens, truncated: false }
+            Completion::Answer { json: unwrap_answer(&text, wrapped), usage, truncated: false }
         }
-        "max_tokens" => Completion::Answer { json: text, input_tokens, output_tokens, truncated: true },
+        "max_tokens" => Completion::Answer { json: text, usage, truncated: true },
         "refusal" => {
             let category = j.pointer("/stop_details/category").and_then(J::as_str).unwrap_or("unspecified").to_string();
-            Completion::Refusal { category, input_tokens, output_tokens }
+            Completion::Refusal { category, usage }
         }
-        other => Completion::ProviderError { msg: format!("unexpected stop_reason {:?}", other), input_tokens },
+        other => Completion::ProviderError { msg: format!("unexpected stop_reason {:?}", other), usage },
     })
+}
+
+/// A response's `usage`, split the way it is priced. `input_tokens` is only
+/// the uncached remainder; cache writes come broken down by lifetime under
+/// `cache_creation` when the API gives that, and otherwise all at the grant's.
+fn parse_usage(j: &J, cache_ttl: Option<i64>) -> Usage {
+    let n = |path: &str| j.pointer(path).and_then(J::as_i64);
+    let written = n("/usage/cache_creation_input_tokens").unwrap_or(0);
+    let (w5, w1) = match (
+        n("/usage/cache_creation/ephemeral_5m_input_tokens"),
+        n("/usage/cache_creation/ephemeral_1h_input_tokens"),
+    ) {
+        (None, None) if cache_ttl.is_some_and(|t| t > 300_000) => (0, written),
+        (None, None) => (written, 0),
+        (a, b) => (a.unwrap_or(0), b.unwrap_or(0)),
+    };
+    Usage {
+        input: n("/usage/input_tokens").unwrap_or(0),
+        cache_write_5m: w5,
+        cache_write_1h: w1,
+        cache_read: n("/usage/cache_read_input_tokens").unwrap_or(0),
+        output: n("/usage/output_tokens").unwrap_or(0),
+    }
 }
 
 /// `{"value": x}` → the JSON text of `x`. Anything else is returned as-is,
@@ -246,14 +282,24 @@ mod tests {
                 name: Rc::from("m"),
                 id: "claude-sonnet-5".into(),
                 think: 2000,
-                in_price: 2,
-                out_price: 10,
+                in_nano: 2000,
+                out_nano: 10_000,
+                read_nano: 200,
+                cache_ttl: None,
                 ceiling: 128_000,
             }),
             ty,
             messages: messages.iter().map(|(r, c)| (Rc::from(*r), Rc::from(*c))).collect(),
             max_tokens: 2436,
+            schema: Rc::from(""),
         }
+    }
+
+    fn cached(mut r: AskReq, ttl: i64) -> AskReq {
+        let mut m = ModelSpec { ..(*r.model).clone() };
+        m.cache_ttl = Some(ttl);
+        r.model = Rc::new(m);
+        r
     }
 
     // ---------------------------------------------------------------- S(τ)
@@ -350,6 +396,58 @@ mod tests {
         assert!(body.get("thinking").is_none(), "thinking is left at the model's default");
     }
 
+    /// A grant without `[cache …]` sends no `cache_control`; with it, the
+    /// request asks for automatic caching and marks the system prompt, both
+    /// with the grant's lifetime (design/09 §7a). Counting doesn't change.
+    #[test]
+    fn a_caching_grant_marks_the_system_prompt_and_the_end() {
+        let r = req(&[("System", "You are an analyst."), ("User", "FY2025 10-K")], Type::named("Verdict"));
+        let (plain, _) = request_body(&theta(), &r).unwrap();
+        assert!(plain.get("cache_control").is_none());
+        assert_eq!(plain["system"], "You are an analyst.");
+
+        let (five, _) = request_body(&theta(), &cached(r.clone(), 300_000)).unwrap();
+        assert_eq!(five["cache_control"], json!({"type": "ephemeral"}));
+        assert_eq!(
+            five["system"],
+            json!([{"type": "text", "text": "You are an analyst.", "cache_control": {"type": "ephemeral"}}])
+        );
+        let (hour, _) = request_body(&theta(), &cached(r.clone(), 3_600_000)).unwrap();
+        assert_eq!(hour["cache_control"], json!({"type": "ephemeral", "ttl": "1h"}));
+        assert_eq!(hour["system"][0]["cache_control"], json!({"type": "ephemeral", "ttl": "1h"}));
+        assert_eq!(count_body(&theta(), &cached(r.clone(), 300_000)).unwrap(), count_body(&theta(), &r).unwrap());
+
+        // With no system prompt, only the automatic breakpoint.
+        let (bare, _) = request_body(&theta(), &cached(req(&[("User", "hi")], Type::Bool), 300_000)).unwrap();
+        assert!(bare.get("system").is_none());
+        assert_eq!(bare["cache_control"], json!({"type": "ephemeral"}));
+    }
+
+    /// Usage is split as it's priced: plain input, writes by lifetime, reads.
+    #[test]
+    fn usage_keeps_cache_reads_and_writes_apart() {
+        let body = |usage: J| {
+            json!({"content": [{"type": "text", "text": "true"}], "stop_reason": "end_turn", "usage": usage})
+                .to_string()
+        };
+        let usage_of = |b: String, ttl| match parse_response(200, &b, false, ttl).unwrap() {
+            Completion::Answer { usage, .. } => usage,
+            other => panic!("{:?}", other),
+        };
+        let u = usage_of(
+            body(json!({"input_tokens": 12, "cache_creation_input_tokens": 600, "cache_read_input_tokens": 900,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 500},
+                        "output_tokens": 7})),
+            None,
+        );
+        assert_eq!(u, Usage { input: 12, cache_write_5m: 100, cache_write_1h: 500, cache_read: 900, output: 7 });
+        assert_eq!(u.input_total(), 1512);
+        // Without the breakdown, writes take the grant's lifetime.
+        let flat = json!({"input_tokens": 1, "cache_creation_input_tokens": 600, "output_tokens": 2});
+        assert_eq!(usage_of(body(flat.clone()), Some(300_000)).cache_write_5m, 600);
+        assert_eq!(usage_of(body(flat), Some(3_600_000)).cache_write_1h, 600);
+    }
+
     #[test]
     fn count_body_is_the_same_input_without_max_tokens() {
         let r = req(&[("User", "hi")], Type::Bool);
@@ -405,22 +503,22 @@ mod tests {
 
     #[test]
     fn a_wrapped_answer_is_unwrapped_and_thinking_is_skipped() {
-        let c =
-            parse_response(200, &ok("end_turn", r#"{"value": {"tag": "Sell", "reason": "Margins."}}"#), true).unwrap();
-        let Completion::Answer { json, input_tokens, output_tokens, truncated } = c else { panic!("{:?}", c) };
+        let c = parse_response(200, &ok("end_turn", r#"{"value": {"tag": "Sell", "reason": "Margins."}}"#), true, None)
+            .unwrap();
+        let Completion::Answer { json, usage, truncated } = c else { panic!("{:?}", c) };
         assert_eq!(serde_json::from_str::<J>(&json).unwrap(), json!({"tag": "Sell", "reason": "Margins."}));
-        assert_eq!((input_tokens, output_tokens, truncated), (123, 45, false));
+        assert_eq!((usage.input_total(), usage.output, truncated), (123, 45, false));
     }
 
     #[test]
     fn an_unwrapped_answer_passes_through() {
-        let c = parse_response(200, &ok("end_turn", r#"{"x": 1, "y": 2}"#), false).unwrap();
+        let c = parse_response(200, &ok("end_turn", r#"{"x": 1, "y": 2}"#), false, None).unwrap();
         assert!(matches!(c, Completion::Answer { ref json, .. } if json == r#"{"x": 1, "y": 2}"#));
     }
 
     #[test]
     fn max_tokens_is_truncation() {
-        let c = parse_response(200, &ok("max_tokens", r#"{"value": {"tag": "Se"#), true).unwrap();
+        let c = parse_response(200, &ok("max_tokens", r#"{"value": {"tag": "Se"#), true, None).unwrap();
         assert!(matches!(c, Completion::Answer { truncated: true, .. }));
     }
 
@@ -432,24 +530,27 @@ mod tests {
             "usage": {"input_tokens": 50, "output_tokens": 0}
         })
         .to_string();
-        let c = parse_response(200, &body, true).unwrap();
-        assert!(matches!(c, Completion::Refusal { ref category, input_tokens: 50, .. } if category == "cyber"));
+        let c = parse_response(200, &body, true, None).unwrap();
+        assert!(matches!(c, Completion::Refusal { ref category, usage } if category == "cyber" && usage.input == 50));
     }
 
     #[test]
     fn transient_errors_are_tool_errors_and_request_errors_are_fatal() {
         let err = |t: &str, m: &str| json!({"type": "error", "error": {"type": t, "message": m}}).to_string();
-        let c = parse_response(429, &err("rate_limit_error", "slow down"), false).unwrap();
+        let c = parse_response(429, &err("rate_limit_error", "slow down"), false, None).unwrap();
         assert!(matches!(c, Completion::ProviderError { ref msg, .. } if msg == "429 rate_limit_error: slow down"));
         assert!(matches!(
-            parse_response(529, &err("overloaded_error", "busy"), false),
+            parse_response(529, &err("overloaded_error", "busy"), false, None),
             Ok(Completion::ProviderError { .. })
         ));
-        assert!(matches!(parse_response(503, "<html>gateway</html>", false), Ok(Completion::ProviderError { .. })));
-        let fatal = parse_response(404, &err("not_found_error", "model: claude-nope"), false).unwrap_err();
+        assert!(matches!(
+            parse_response(503, "<html>gateway</html>", false, None),
+            Ok(Completion::ProviderError { .. })
+        ));
+        let fatal = parse_response(404, &err("not_found_error", "model: claude-nope"), false, None).unwrap_err();
         assert!(fatal.contains("404 not_found_error"), "{}", fatal);
-        assert!(parse_response(401, &err("authentication_error", "bad key"), false).is_err());
-        assert!(parse_response(400, &err("invalid_request_error", "bad"), false).is_err());
+        assert!(parse_response(401, &err("authentication_error", "bad key"), false, None).is_err());
+        assert!(parse_response(400, &err("invalid_request_error", "bad"), false, None).is_err());
     }
 
     #[test]

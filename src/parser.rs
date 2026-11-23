@@ -61,6 +61,18 @@ fn fresh(base: &str) -> Name {
     Rc::from(format!("{} {}", base, n).as_str())
 }
 
+/// Dollars per million tokens as nano-dollars per token: `2` → 2000,
+/// `0.2` → 200, `0.025` → 25. At most three decimals.
+fn per_million(a: &str) -> Option<i64> {
+    let (whole, frac) = a.split_once('.').unwrap_or((a, ""));
+    let digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+    if whole.is_empty() || !digits(whole) || !digits(frac) || frac.len() > 3 || (a.contains('.') && frac.is_empty()) {
+        return None;
+    }
+    let frac: i64 = format!("{:0<3}", frac).parse().ok()?;
+    whole.parse::<i64>().ok()?.checked_mul(1000)?.checked_add(frac)
+}
+
 fn perr<T>(sx: &Sx, msg: impl AsRef<str>) -> P<T> {
     Err(format!("{}: {}", sx.loc(), msg.as_ref()))
 }
@@ -301,24 +313,40 @@ impl<'a> Parser<'a> {
                 // crate::defaults, which describe Claude Sonnet 5 (design/09 §0).
                 use crate::defaults as d;
                 let (mut id, mut i, mut o, mut c, mut t) =
-                    (d::MODEL_ID.to_string(), d::IN_PRICE, d::OUT_PRICE, d::CEILING, d::THINK);
+                    (d::MODEL_ID.to_string(), d::IN_PRICE * 1000, d::OUT_PRICE * 1000, d::CEILING, d::THINK);
+                let (mut read, mut cache) = (None, None);
                 for item in &spec[1..] {
                     match item.list() {
                         Some([k, Sx::Str(s, _)]) if k.atom() == Some("id") => id = s.to_string(),
+                        // Prices: dollars per million tokens, up to three decimals.
+                        Some([k, v]) if matches!(k.atom(), Some("in" | "out" | "cache-read")) => {
+                            let Some(n) = v.atom().and_then(per_million) else {
+                                return perr(v, "a price is dollars per million tokens, such as 2 or 0.25");
+                            };
+                            match k.atom() {
+                                Some("in") => i = n,
+                                Some("out") => o = n,
+                                _ => read = Some(n),
+                            }
+                        }
+                        // The cache's lifetime: the API offers exactly these two.
+                        Some([k, v]) if k.atom() == Some("cache") => match v.atom().map(classify) {
+                            Some(Ok(Atom::Dur(ms @ (300_000 | 3_600_000)))) => cache = Some(ms),
+                            _ => return perr(v, "a prompt cache lasts 5min or 1h"),
+                        },
                         Some([k, v]) => {
                             let n = match v.atom().map(classify) {
                                 Some(Ok(Atom::Num(n))) if n >= 0 => n,
                                 _ => return perr(v, "expected a non-negative numeral"),
                             };
                             match k.atom() {
-                                Some("in") => i = n,
-                                Some("out") => o = n,
                                 Some("ceiling") => c = n as u64,
                                 Some("think") => t = n as u64,
                                 _ => {
                                     return perr(
                                         k,
-                                        "model options are [id \"…\"], [in n], [out n], [ceiling n] and [think n]",
+                                        "model options are [id \"…\"], [in p], [out p], [cache-read p] (dollars per \
+                                         million tokens), [cache 5min|1h], [ceiling n] and [think n]",
                                     );
                                 }
                             }
@@ -326,7 +354,11 @@ impl<'a> Parser<'a> {
                         _ => return perr(item, "expected [option value]"),
                     }
                 }
-                HostSpec::Model { id, in_price: i, out_price: o, ceiling: c, think: t }
+                if read.is_some() && cache.is_none() {
+                    return perr(sx, "[cache-read …] needs [cache 5min] or [cache 1h]: without it nothing is cached");
+                }
+                let read_nano = read.unwrap_or(i / d::CACHE_READ_DIVISOR);
+                HostSpec::Model { id, in_nano: i, out_nano: o, read_nano, cache, ceiling: c, think: t }
             }
             "kernel" | "filesystem" | "http" => {
                 // `(kernel [exec (Text 4000)] [count Num])`: each operation

@@ -24,6 +24,14 @@
 //!    reported as a percentage so a near miss is visible, not just a pass.
 //! 4. Whether an unaffordable ask is refused *before* the call, against a real
 //!    provider rather than a stub. `an_unaffordable_ask_is_refused_for_free`.
+//! 5. Whether prompt caching works as the scripted simulation assumes: a
+//!    second identical ask on a `[cache 5min]` grant reads the cache, costs
+//!    less, and stays within its reservation (`09` §7a).
+//!    `a_cached_grant_reads_its_cache_on_the_second_ask`. It also checks the
+//!    simulation's one assumption about the API: that the schema is cached
+//!    with the system prompt.
+//! 6. How well the scripted tokenizer's schema rate predicts real counts.
+//!    `the_schema_is_most_of_the_input` prints both.
 
 use munorman::ast::Config;
 use munorman::driver::Interp;
@@ -83,10 +91,12 @@ fn report(title: &str, o: &Outcome) {
     println!("elapsed: {} ms", o.elapsed);
     for t in &o.trace {
         println!(
-            "  {} {}  in {} tok, out {} tok, cost {}, {}..{} ms, {}",
+            "  {} {}  in {} tok (cache read {}, wrote {}), out {} tok, cost {}, {}..{} ms, {}",
             t.kind,
             t.site,
             t.in_tokens,
+            t.cache_read,
+            t.cache_write,
             t.out_tokens,
             money(t.cost),
             t.start,
@@ -196,6 +206,7 @@ fn the_schema_is_most_of_the_input() {
         ty: Type::named("Verdict"),
         messages,
         max_tokens: 2436,
+        schema: Rc::from(""),
     };
 
     let full = anthropic::count_body(&i.theta, &req).expect("count body");
@@ -230,6 +241,67 @@ fn the_schema_is_most_of_the_input() {
     println!("messages + schema: {with_schema} tokens");
     println!("the schema costs:  {} tokens ({schema_bytes} bytes of JSON)", with_schema - without_schema);
     println!("the test tokenizer (05, convention 4) would say: {} tokens", munorman::host::test_tokens(&req.messages));
+    let schema_text = full["output_config"]["format"]["schema"].to_string();
+    println!(
+        "the scripted tokenizer's schema estimate: {} tokens (src/defaults.rs: {} tokens per {} bytes). \
+         If it's far off, set SCHEMA_TOKENS / SCHEMA_BYTES to {} / {}.",
+        munorman::host::schema_tokens(&schema_text),
+        munorman::defaults::SCHEMA_TOKENS,
+        munorman::defaults::SCHEMA_BYTES,
+        with_schema - without_schema,
+        schema_bytes
+    );
 
     assert!(with_schema > without_schema, "the schema must cost something");
+}
+
+/// (5) Prompt caching, live (design/09 §7a). Two identical asks on a grant
+/// with `[cache 5min]`, one after the other: the first writes the cache, the
+/// second must read it and cost less. The context is long enough to pass
+/// Claude Sonnet 5's 1 024-token minimum, below which nothing is cached.
+///
+/// This is the standing check the caching design needs: a change to how
+/// requests are built can stop the cache from hitting without any error,
+/// and only the usage fields show it.
+#[test]
+#[ignore = "sends two real requests and spends real money; run with --ignored"]
+fn a_cached_grant_reads_its_cache_on_the_second_ask() {
+    let Some(mut i) = live() else { return };
+    i.load_str(
+        r#"
+(grant cached (model [cache 5min]))
+(define repeat (n s) (if (<= n 0) "" (string-append s (repeat (- n 1) s))))
+(val brief (repeat 80 "Revenue fell 8% year over year and gross margin fell from 61% to 44%. "))
+(define cached-ask (q)
+  (ask cached Verdict
+       (list (Message [role System] [content (string-append "You are an equity analyst. " brief)])
+             (Message [role User] [content q]))
+       'analyst))
+"#,
+        "live-cached.nrm",
+        Path::new("."),
+    )
+    .expect("definitions load");
+    let o = run(&i, r#"(let* ([a (cached-ask "Verdict?")] [b (cached-ask "Verdict?")]) b)"#, Some(1_000_000));
+    report("two identical asks on a [cache 5min] grant", &o);
+    assert!(matches!(o.result, Res::Val(_)), "both asks should answer: {}", o.result);
+    let [first, second] = &o.trace[..] else { panic!("expected two trace entries, got {}", o.trace.len()) };
+    assert!(first.cache_write > 0, "the first ask wrote nothing to the cache: is the prompt below the minimum?");
+    assert!(
+        second.cache_read > 0,
+        "the second ask read nothing from the cache: something in the request changes between identical asks"
+    );
+    assert!(second.cost < first.cost, "a cache read should make the second ask cheaper");
+    for t in &o.trace {
+        assert!(!t.outcome.contains("over-reservation"), "a cached ask must stay within its reservation");
+    }
+    // The simulation assumes the schema is cached as part of the prefix (with
+    // the system prompt). If the API kept it outside the cache, the second
+    // ask would read roughly the messages only, not the schema too.
+    println!(
+        "second ask: read {} of {} input tokens from the cache ({}%)",
+        second.cache_read,
+        second.in_tokens,
+        100 * second.cache_read / second.in_tokens.max(1)
+    );
 }

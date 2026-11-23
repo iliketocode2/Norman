@@ -20,6 +20,9 @@ pub struct AskReq {
     /// The context, as (role, content) pairs; roles are System/User/Assistant/Tool.
     pub messages: Messages,
     pub max_tokens: i64,
+    /// The answer type's JSON schema, as sent (design/09 §2), or empty for a
+    /// type that can't be asked live (a recursive one). It is input too.
+    pub schema: Rc<str>,
 }
 
 /// One `consult`, as the oracle sees it (design/11 §2.1): what the person is
@@ -43,25 +46,87 @@ pub struct Count {
     pub exact: bool,
 }
 
+/// What a model request billed, in tokens. Input is split three ways,
+/// because the provider prices them differently (design/09 §7a): read from
+/// the prompt cache (cheap), written to it (dearer than plain input), and
+/// neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Usage {
+    pub input: i64,
+    pub cache_write_5m: i64,
+    pub cache_write_1h: i64,
+    pub cache_read: i64,
+    pub output: i64,
+}
+
+impl Usage {
+    /// Input billed at the plain input price.
+    pub fn uncached(input: i64) -> Usage {
+        Usage { input, ..Usage::default() }
+    }
+    /// Every input token, however it was priced.
+    pub fn input_total(&self) -> i64 {
+        self.input + self.cache_write_5m + self.cache_write_1h + self.cache_read
+    }
+    pub fn cache_write(&self) -> i64 {
+        self.cache_write_5m + self.cache_write_1h
+    }
+}
+
+/// What `usage` costs at `model`'s prices, in µ$, rounded up. Writes cost
+/// 1.25× the input price with the 5-minute lifetime and 2× with the hour's;
+/// reads cost the grant's read price. The sum is taken in quarter
+/// nano-dollars, where all of these are whole, so nothing is lost to rounding
+/// before the one rounding at the end.
+pub fn charge(model: &ModelSpec, u: &Usage) -> i64 {
+    let q = u.input as i128 * model.in_nano as i128 * 4
+        + u.cache_write_5m as i128 * model.in_nano as i128 * 5
+        + u.cache_write_1h as i128 * model.in_nano as i128 * 8
+        + u.cache_read as i128 * model.read_nano as i128 * 4
+        + u.output as i128 * model.out_nano as i128 * 4;
+    micro(q)
+}
+
+/// The most an ask with `n_in` input tokens and `max_out` output tokens can
+/// be charged (Theorem 1′). For a grant that caches, every input token might
+/// be a cache write, so input is reserved at the write price.
+pub fn reservation(model: &ModelSpec, n_in: i64, max_out: i64) -> i64 {
+    let per_in: i128 = match model.cache_ttl {
+        None => 4,
+        Some(ttl) if ttl > 300_000 => 8,
+        Some(_) => 5,
+    };
+    micro(n_in as i128 * model.in_nano as i128 * per_in + max_out as i128 * model.out_nano as i128 * 4)
+}
+
+/// Quarter nano-dollars to µ$, rounding up.
+fn micro(q: i128) -> i64 {
+    ((q + 3999) / 4000) as i64
+}
+
+/// The scripted tokenizer's count for an answer type's schema (design/09 §6a).
+pub fn schema_tokens(schema: &str) -> i64 {
+    use crate::defaults::{SCHEMA_BYTES, SCHEMA_TOKENS};
+    (schema.len() as i64 * SCHEMA_TOKENS + SCHEMA_BYTES - 1) / SCHEMA_BYTES
+}
+
 /// How a request ended, as reported by the oracle.
 #[derive(Debug, Clone)]
 pub enum Completion {
     /// A model reply. `truncated` means it stopped at `max_tokens`.
     Answer {
         json: String,
-        input_tokens: i64,
-        output_tokens: i64,
+        usage: Usage,
         truncated: bool,
     },
     Refusal {
         category: String,
-        input_tokens: i64,
-        output_tokens: i64,
+        usage: Usage,
     },
     /// A retryable provider failure (429, 5xx, network).
     ProviderError {
         msg: String,
-        input_tokens: i64,
+        usage: Usage,
     },
     ToolResult {
         text: String,
@@ -188,18 +253,104 @@ pub struct ScriptedOracle {
     state: ScriptState,
     /// (rid, due time, completion)
     inflight: Vec<(u64, i64, Completion)>,
+    cache: PromptCache,
 }
 
 impl ScriptedOracle {
     pub fn new(script: Option<Rc<Script>>) -> ScriptedOracle {
-        ScriptedOracle { state: ScriptState::new(script), inflight: vec![] }
+        ScriptedOracle { state: ScriptState::new(script), inflight: vec![], cache: PromptCache::default() }
+    }
+}
+
+/// An ask's input as the API renders it, cut where a cache entry can end:
+/// the schema and system prompt first, then one cut per turn. Each cut is
+/// (the prefix's text, its tokens, whether a breakpoint is there). The
+/// breakpoints are the two `request_body` sends: an explicit one ending the
+/// system prompt, and the automatic one ending the prompt. Tokens are the
+/// scripted tokenizer's, so the last cut's count is exactly `count`'s.
+fn prefix_cuts(req: &AskReq) -> Vec<(String, i64, bool)> {
+    let schema = schema_tokens(&req.schema);
+    let (system, turns): (Vec<_>, Vec<_>) = req.messages.iter().partition(|(r, _)| &**r == "System");
+    let mut text = format!("{}\u{0}", req.schema);
+    let mut bytes = 0i64;
+    let mut cuts = vec![];
+    for (i, (role, content)) in system.iter().chain(&turns).enumerate() {
+        text.push_str(role);
+        text.push('\u{0}');
+        text.push_str(content);
+        text.push('\u{0}');
+        bytes += role.len() as i64 + content.len() as i64 + 4;
+        let ends_system = i + 1 == system.len();
+        cuts.push((text.clone(), schema + (bytes + 3) / 4, ends_system));
+    }
+    if let Some(last) = cuts.last_mut() {
+        last.2 = true;
+    }
+    cuts
+}
+
+/// The prompt cache, simulated (design/09 §7a), so a scripted run is charged
+/// what a live run would be. Entries are per model, keyed by a prefix's
+/// text, and last their TTL on the scripted clock, measured from the start
+/// of the request that wrote or last read them. As in the API: a prompt
+/// below the model's minimum isn't cached at all; otherwise a request reads
+/// the longest live cached prefix, refreshing it, and writes everything past
+/// it; and an entry can be read only by a request that starts after the one
+/// that wrote it, since it exists only once that one's reply begins.
+#[derive(Default)]
+struct PromptCache {
+    /// (model, prefix) → (written at, expires at)
+    entries: HashMap<(String, String), (i64, i64)>,
+}
+
+impl PromptCache {
+    fn usage(&mut self, req: &AskReq, now: i64) -> Usage {
+        let cuts = prefix_cuts(req);
+        let total = cuts.last().map_or(schema_tokens(&req.schema), |c| c.1);
+        let Some(ttl) = req.model.cache_ttl else {
+            return Usage::uncached(total);
+        };
+        let model = req.model.id.clone();
+        let min = crate::defaults::min_cacheable(&model);
+        if total < min {
+            return Usage::uncached(total);
+        }
+        let live = |e: &(i64, i64)| e.0 < now && e.1 > now;
+        let mut read = 0;
+        for (text, n, _) in cuts.iter().rev() {
+            if let Some(e) = self.entries.get_mut(&(model.clone(), text.clone()))
+                && live(e)
+            {
+                e.1 = now + ttl;
+                read = *n;
+                break;
+            }
+        }
+        for (text, n, breakpoint) in &cuts {
+            if *breakpoint && *n >= min {
+                let e = self.entries.entry((model.clone(), text.clone())).or_insert((now, now + ttl));
+                if e.1 <= now {
+                    *e = (now, now + ttl); // expired: this is a new entry
+                } else {
+                    e.1 = e.1.max(now + ttl);
+                }
+            }
+        }
+        let write = total - read;
+        if ttl > 300_000 {
+            Usage { cache_write_1h: write, cache_read: read, ..Usage::default() }
+        } else {
+            Usage { cache_write_5m: write, cache_read: read, ..Usage::default() }
+        }
     }
 }
 
 impl Oracle for ScriptedOracle {
-    /// The test tokenizer defines billing in scripted mode, so the count is exact.
+    /// The test tokenizer defines billing in scripted mode, so the count is
+    /// exact. It counts the schema as well as the messages: the schema is
+    /// input, and usually most of it (design/09 §6a).
     fn count(&mut self, req: &AskReq) -> Result<Count, CountError> {
-        Ok(Count { tokens: test_tokens(&req.messages), exact: true })
+        Ok(Count { tokens: schema_tokens(&req.schema) + test_tokens(&req.messages), exact: true })
     }
 
     fn issue_ask(&mut self, rid: u64, req: AskReq, now: i64) -> Result<(), String> {
@@ -207,19 +358,16 @@ impl Oracle for ScriptedOracle {
             .state
             .next(&req.site)
             .ok_or_else(|| format!("script exhausted: no reply left for ask site '{}'", req.site))?;
-        let input_tokens = test_tokens(&req.messages);
-        let out = |n: u64| (n as i64).min(req.max_tokens);
+        let usage = self.cache.usage(&req, now);
+        let out = |n: u64| Usage { output: (n as i64).min(req.max_tokens), ..usage };
         let completion = match &entry {
-            Entry::Reply { json, out: n, .. } => Completion::Answer {
-                json: json.clone(),
-                input_tokens,
-                output_tokens: out(*n),
-                truncated: (*n as i64) > req.max_tokens,
-            },
-            Entry::Refusal { category, out: n, .. } => {
-                Completion::Refusal { category: category.clone(), input_tokens, output_tokens: out(*n) }
+            Entry::Reply { json, out: n, .. } => {
+                Completion::Answer { json: json.clone(), usage: out(*n), truncated: (*n as i64) > req.max_tokens }
             }
-            Entry::ProviderError { msg, .. } => Completion::ProviderError { msg: msg.clone(), input_tokens },
+            Entry::Refusal { category, out: n, .. } => {
+                Completion::Refusal { category: category.clone(), usage: out(*n) }
+            }
+            Entry::ProviderError { msg, .. } => Completion::ProviderError { msg: msg.clone(), usage },
             _ => return Err(format!("the script entry for ask site '{}' is not a model reply", req.site)),
         };
         self.inflight.push((rid, now + entry.latency(), completion));
@@ -284,5 +432,72 @@ impl Oracle for ScriptedOracle {
         }
         batch.sort_by_key(|(rid, _)| *rid);
         Ok(Some((t, batch)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(in_nano: i64, read_nano: i64, cache_ttl: Option<i64>) -> ModelSpec {
+        ModelSpec {
+            name: Rc::from("m"),
+            id: "claude-sonnet-5".into(),
+            think: 0,
+            in_nano,
+            out_nano: 10_000,
+            read_nano,
+            cache_ttl,
+            ceiling: 1000,
+        }
+    }
+
+    /// Writes cost 1.25× or 2× input, reads the grant's read price, and the
+    /// charge is rounded up once, at the end.
+    #[test]
+    fn charges_price_cache_reads_and_writes() {
+        let m = model(2000, 200, Some(300_000));
+        let u = |input, w5, w1, read, output| Usage {
+            input,
+            cache_write_5m: w5,
+            cache_write_1h: w1,
+            cache_read: read,
+            output,
+        };
+        assert_eq!(charge(&m, &u(100, 0, 0, 0, 10)), 300); // 100 × 2 + 10 × 10
+        assert_eq!(charge(&m, &u(0, 100, 0, 0, 0)), 250); // × 2.5
+        assert_eq!(charge(&m, &u(0, 0, 100, 0, 0)), 400); // × 4
+        assert_eq!(charge(&m, &u(0, 0, 0, 1000, 0)), 200); // × 0.2
+        assert_eq!(charge(&m, &u(0, 0, 0, 1, 0)), 1, "0.2 µ$ rounds up to 1");
+        assert_eq!(charge(&m, &u(0, 1, 0, 1, 0)), 3, "2.5 + 0.2 = 2.7, rounded once");
+    }
+
+    /// Theorem 1′ needs every charge within its reservation: a caching grant
+    /// reserves input at the write price, whatever mix of reads and writes
+    /// the provider then bills.
+    #[test]
+    fn a_charge_never_exceeds_its_reservation() {
+        for ttl in [None, Some(300_000), Some(3_600_000)] {
+            let m = model(1999, 133, ttl);
+            let r = reservation(&m, 1000, 50);
+            for written in [0, 1, 500, 1000] {
+                for read in [0, 1, 1000 - written] {
+                    let input = 1000 - written - read.min(1000 - written);
+                    let read = read.min(1000 - written);
+                    let u = match ttl {
+                        Some(t) if t > 300_000 => {
+                            Usage { input, cache_write_1h: written, cache_read: read, output: 50, ..Usage::default() }
+                        }
+                        Some(_) => {
+                            Usage { input, cache_write_5m: written, cache_read: read, output: 50, ..Usage::default() }
+                        }
+                        None => Usage { input: 1000, output: 50, ..Usage::default() },
+                    };
+                    assert!(charge(&m, &u) <= r, "{:?}: {} > {} for {:?}", ttl, charge(&m, &u), r, u);
+                }
+            }
+        }
+        // And without caching, nothing changes: the reservation is plain input.
+        assert_eq!(reservation(&model(2000, 200, None), 25, 436), 25 * 2 + 436 * 10);
     }
 }

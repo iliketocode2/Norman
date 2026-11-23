@@ -1,0 +1,117 @@
+;;; caching.nrm: prompt caching (design/09 §7a), scripted.
+;;;
+;;; A model grant with [cache 5min] or [cache 1h] asks the API to cache the
+;;; prompt. Scripted runs simulate that cache, so the costs below are what a
+;;; live run would be charged. Every number is worked out in its comment.
+;;;
+;;; Prices for the default model (Claude Sonnet 5): input 2 µ$ a token, output
+;;; 10. A cache write costs 1.25× input (2.5 µ$) with the 5-minute lifetime and
+;;; 2× (4 µ$) with the hour's; a cache read costs a tenth (0.2 µ$). Each ask's
+;;; charge is rounded up to a whole µ$.
+
+(grant plain  (model))
+(grant cached (model [cache 5min]))
+(grant hourly (model [cache 1h]))
+
+;; Money spent by a thunk, whether it succeeds or fails.
+(define spent (thunk)
+  (let* ([c0 (. (remaining) cost)]
+         [_  (catch (begin (thunk) #t) e #f)]
+         [c1 (. (remaining) cost)])
+    (- c0 c1)))
+
+(define repeat (n s) (if (<= n 0) "" (string-append s (repeat (- n 1) s))))
+
+;; A 4 700-byte system prompt, so the prompt is past Sonnet 5's 1 024-token
+;; minimum: 1 257 tokens in all, of which 1 254 are the Bool schema and the
+;; system prompt, and 3 the question.
+(val brief (repeat 100 "Revenue fell 8% and margins compressed again. "))
+(define ctx (q) (list (Message [role System] [content brief]) (Message [role User] [content q])))
+
+(define ask-with (m q) (ask m Bool (ctx q) 'a))
+
+(script yes
+  [a (reply "true") (out 5) (latency 2s) (reply "true") (out 5) (latency 2s)
+     (reply "true") (out 5) (latency 2s) (reply "true") (out 5) (latency 2s)])
+
+;;; ------------------------------------------------------------------
+;;; Without [cache], nothing changes: 1 257 × 2 + 5 × 10 = 2 564 µ$.
+
+(under ([script yes] [cost $1.00] [time 1h])
+  (check-expect (spent (lambda () (ask-with plain "Sell?"))) $0.002564)
+  (check-expect (spent (lambda () (begin (ask-with plain "Sell?") (ask-with plain "Sell?")))) $0.005128))
+
+;;; ------------------------------------------------------------------
+;;; The first ask writes the cache, and pays a quarter more for it:
+;;; 1 257 × 2.5 + 50 = 3 192.5 → 3 193 µ$. The same ask again reads all of it:
+;;; 1 257 × 0.2 + 50 = 301.4 → 302 µ$. A different question reads up to the
+;;; end of the system prompt, the explicit breakpoint, and writes the rest:
+;;; 1 254 × 0.2 + 3 × 2.5 + 50 = 308.3 → 309 µ$.
+
+(under ([script yes] [cost $1.00] [time 1h])
+  (check-expect (spent (lambda () (ask-with cached "Sell?"))) $0.003193)
+  (check-expect (spent (lambda () (begin (ask-with cached "Sell?") (ask-with cached "Sell?"))))
+                $0.003495)                                            ; 3 193 + 302
+  (check-expect (spent (lambda () (begin (ask-with cached "Sell?") (ask-with cached "Buy?"))))
+                $0.003502)                                            ; 3 193 + 309
+  ;; Two asks cost less than one uncached ask and a fifth.
+  (check-assert (< (spent (lambda () (begin (ask-with cached "Sell?") (ask-with cached "Sell?"))))
+                   (spent (lambda () (begin (ask-with plain "Sell?") (ask-with plain "Sell?")))))))
+
+;;; ------------------------------------------------------------------
+;;; Concurrent asks can't share: an entry exists only once the request that
+;;; writes it has started answering, so both write. 2 × 3 193 = 6 386 µ$.
+
+(under ([script yes] [cost $1.00] [time 1h])
+  (check-expect (spent (lambda () (par (ask-with cached "Sell?") (ask-with cached "Sell?")))) $0.006386))
+
+;;; ------------------------------------------------------------------
+;;; An entry lives five minutes from the start of the request that wrote or
+;;; last read it. Here the first reply takes six, so the second ask finds the
+;;; entry gone and writes it again: 2 × 3 193. With the hour's lifetime it is
+;;; still there: 1 257 × 4 + 50 = 5 078 to write, then 302 to read.
+
+(script slow
+  [a (reply "true") (out 5) (latency 6min) (reply "true") (out 5) (latency 2s)])
+
+(under ([script slow] [cost $1.00] [time 1h])
+  (check-expect (spent (lambda () (begin (ask-with cached "Sell?") (ask-with cached "Sell?")))) $0.006386)
+  (check-expect (spent (lambda () (begin (ask-with hourly "Sell?") (ask-with hourly "Sell?")))) $0.00538))
+
+;;; ------------------------------------------------------------------
+;;; A prompt below the model's minimum isn't cached: no write is charged, and
+;;; it costs what it would without [cache]. Here the prompt is the schema and
+;;; one short question, far below 1 024 tokens.
+
+(define short (m) (ask m Bool (list (Message [role User] [content "Sell?"])) 'a))
+
+(under ([script yes] [cost $1.00] [time 1h])
+  (check-expect (spent (lambda () (short cached))) (spent (lambda () (short plain)))))
+
+;;; ------------------------------------------------------------------
+;;; The budget guarantee (Theorem 1′) needs a reservation that covers the
+;;; worst case, and for a grant that caches, every input token might be a
+;;; write. Bool's answer allows 5 + 10 (the {"value": …} wrapper) + 2 000
+;;; (thinking) = 2 015 output tokens, so plain reserves 1 257 × 2 + 2 015 × 10
+;;; = 22 664 µ$, and cached 1 257 × 2.5 + 20 150 = 23 292.5 → 23 293 µ$.
+;;; A $0.023 budget affords the first and not the second.
+
+(under ([script yes] [cost $0.023] [time 1h])
+  (check-expect (ask-with plain "Sell?") #t)
+  (check-fail   (ask-with cached "Sell?") OverBudget))
+
+;;; ------------------------------------------------------------------
+;;; A growing conversation, as in an agent loop: the second ask's context is
+;;; the first's plus two turns, so it reads everything the first wrote (the
+;;; automatic breakpoint moved to the end) and writes only the new turns.
+
+(val turn2 (list (Message [role System] [content brief])
+                    (Message [role User] [content "Sell?"])
+                    (Message [role Assistant] [content "true"])
+                    (Message [role User] [content "And next quarter?"])))
+
+(under ([script yes] [cost $1.00] [time 1h])
+  (check-expect (spent (lambda () (begin (ask-with cached "Sell?") (ask cached Bool turn2 'a))))
+                $0.003522))
+;;   3 193 for the first, then 1 257 × 0.2 + 11 × 2.5 + 50 = 328.9 → 329: the two
+;;   new turns are 42 bytes, which the tokenizer's rounding makes 11 tokens.

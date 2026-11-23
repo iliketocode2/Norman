@@ -34,6 +34,7 @@ Current results:
 | Strings and `show` ([`../examples/strings.nrm`](../examples/strings.nrm)) | 45 of 45 pass |
 | Typed grants ([`../examples/typed-tools.nrm`](../examples/typed-tools.nrm)) | 18 of 18 pass |
 | CP-Agent, scripted ([`../examples/cp-agent.nrm`](../examples/cp-agent.nrm)) | 6 of 6 pass |
+| Prompt caching, scripted ([`../examples/caching.nrm`](../examples/caching.nrm)) | 13 of 13 pass |
 | `consult`, scripted ([`../examples/consult.nrm`](../examples/consult.nrm)) | 52 of 52 pass |
 | Type parameters ([`../examples/type-parameters.nrm`](../examples/type-parameters.nrm)) | 19 of 19 pass |
 | The type checker, `12` §9 ([`../tests/check.rs`](../tests/check.rs)): the prelude's inferred types, effects, rejections, load order, polymorphism, overloading, grants' named types, `fork`, ownership, warnings, Q-3, `check-type-error`, and every example | 31 of 31 pass |
@@ -109,15 +110,14 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
    function is **redefined**. In that case, earlier functions see the new
    definition. Ramsey's own interpreters behave the same way.
 3. **The test tokenizer.** A context's size is the sum, over its messages, of
-   role name + content + 4 bytes. Tokens are ⌈bytes ÷ 4⌉. That's the
-   convention `05` fixes for scripted mode; a live model reports real counts.
-   **It understates a live ask by about an order of magnitude**, because it
-   counts only the messages, and the JSON schema is sent as input too: for the
-   analyst ask, 39 predicted against 538 billed (`09` §6a). This is a
-   *fidelity* gap, not a soundness one — Theorem 1 holds in live mode because
-   the reservation comes from `count_tokens` on the real request, not from this
-   tokenizer — but every cost in the scripted examples is far below what the
-   same program would really pay.
+   role name + content + 4 bytes. Tokens are ⌈bytes ÷ 4⌉. To that it adds the
+   answer type's JSON schema at 478 tokens per 521 bytes (`09` §7a). Before
+   that, it counted only the messages and understated a live ask about
+   thirteen-fold: for the analyst ask, 39 predicted against 538 billed (`09`
+   §6a). The schema rate is calibrated on that one call, so scripted costs are
+   now the right size but not exact. This was always a *fidelity* gap, not a
+   soundness one: Theorem 1 holds in live mode because the reservation comes
+   from `count_tokens` on the real request, not from this tokenizer.
 4. **A scripted reply longer than `max_out`** is treated as truncated. It
    fails `Invalid` and is charged at `max_out`, so the charge never exceeds the
    reservation (Theorem 1′).

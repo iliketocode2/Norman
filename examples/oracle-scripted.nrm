@@ -10,7 +10,7 @@
   [Hold (reason (Text 400))]
   [Sell (reason (Text 400))])
 
-(define ctx0 ()                          ; 25 tokens under the test tokenizer
+(define ctx0 ()                          ; 25 tokens under the test tokenizer, before the schema
   (list (Message [role System] [content "You are an equity analyst. Give a verdict and a one-sentence reason."])
         (Message [role User]   [content "FY2025 10-K"])))
 
@@ -32,19 +32,21 @@
 ;;; ------------------------------------------------------------------
 ;;; The thinking allowance is reserved (decision A)
 ;;;   Verdict is a 3-constructor datatype, so its answer is wrapped as {"value": …} (+10 bytes).
-;;;   sonnet: max_tokens = 426 + 10 + 2000 = 2436  →  reserve 25×2 + 2436×10 = 24 410 µ$ ≈ $0.0244
-;;;   lean:   max_tokens = 426 + 10         =  436  →  reserve 25×2 +  436×10 =  4 410 µ$ ≈ $0.0044
+;;;   Input is 503 tokens: 25 for ctx0, and 478 for Verdict's schema, which is
+;;;   sent with every ask (design/09 §6a; the scripted tokenizer counts it).
+;;;   sonnet: max_tokens = 426 + 10 + 2000 = 2436  →  reserve 503×2 + 2436×10 = 25 366 µ$ ≈ $0.0254
+;;;   lean:   max_tokens = 426 + 10         =  436  →  reserve 503×2 +  436×10 =  5 366 µ$ ≈ $0.0054
 
 (script sell
   [analyst (reply "{\"tag\":\"Sell\",\"reason\":\"Margins are compressing.\"}") (out 20) (latency 2s)])
 
 (under ([script sell] [cost $0.024] [time 1min])
-  (check-fail   ((ask-with sonnet)) OverBudget)                     ; 24 410 µ$ > 24 000 µ$
+  (check-fail   ((ask-with sonnet)) OverBudget)                     ; 25 366 µ$ > 24 000 µ$
   (check-expect ((ask-with lean)) (Sell "Margins are compressing.")))
 
-(under ([script sell] [cost $0.025] [time 1min])
+(under ([script sell] [cost $0.026] [time 1min])
   (check-expect ((ask-with sonnet)) (Sell "Margins are compressing."))
-  (check-within ((ask-with sonnet)) ([cost $0.00025])))              ; actual charge: 25×2 + 20×10 = 250 µ$
+  (check-within ((ask-with sonnet)) ([cost $0.001206])))             ; actual charge: 503×2 + 20×10 = 1 206 µ$
 
 ;;; ------------------------------------------------------------------
 ;;; Truncation: a reply longer than max_tokens is Invalid, charged at max_tokens
@@ -54,5 +56,5 @@
 
 (under ([script long] [cost $1.00] [time 1min])
   (check-fail   ((ask-with lean)) (Invalid _))                     ; 500 > 436
-  (check-within ((ask-with lean)) ([cost $0.00441]))   ; 25×2 + 436×10 = 4 410 µ$
+  (check-within ((ask-with lean)) ([cost $0.005366]))  ; 503×2 + 436×10 = 5 366 µ$
   (check-expect ((ask-with sonnet)) (Sell "Margins are compressing.")))   ; 500 ≤ 2436: fits
