@@ -20,11 +20,11 @@ cargo test                                  # the design's example results and l
 
 No API key is needed for either command.
 
-**Status: research prototype.** The guarantees are enforced when a program
-runs. The static type and effect system is partly built: it infers every
-form's type and effects, checks that concurrent steps don't share a stateful
-tool, and decides unit tests, but doesn't yet reject a program before it runs. Nothing has
-been benchmarked against a hand-written agent.
+**Status: research prototype.** Every program is type-checked before it
+runs: types and effects are inferred (no annotations), and a program that
+doesn't check never starts, so a type mistake can't spend money.
+`--no-check` runs a program without the checker. Nothing has been
+benchmarked against a hand-written agent.
 
 ### Running against a real model and real Python
 

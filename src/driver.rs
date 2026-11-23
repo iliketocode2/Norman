@@ -40,12 +40,16 @@ pub struct Interp {
     /// is, and the documentation playground displays it.
     out: RefCell<String>,
     /// The type checker (design/12), which reads each file tree before it
-    /// is loaded. For now it only decides unit tests: a `check-type-error`
-    /// passes when it says so, and an ill-typed test fails without running
-    /// (T8). Rejecting an ill-typed program is step 5 of `12` §9.
+    /// is loaded. A file with a type error is not loaded at all (T2); in a
+    /// file that checks, a `check-type-error` passes when the checker says
+    /// so, and an ill-typed test fails without running (T8).
     checker: crate::check::Checker,
     /// What the checker said about each unit test, by location.
     verdicts: HashMap<String, Result<(), String>>,
+    /// Type-check each file before loading it (on by default). With it off
+    /// (`norman --no-check`), a program runs as it did before the checker,
+    /// and WORKFLOWSHARED is checked when a workflow starts.
+    pub check: bool,
 }
 
 impl Interp {
@@ -131,6 +135,7 @@ impl Interp {
             out: RefCell::new(String::new()),
             checker: crate::check::Checker::new(),
             verdicts: HashMap::new(),
+            check: true,
         };
         for p in Prim::ALL {
             i.globals.insert(Rc::from(p.name()), Value::Prim(p));
@@ -148,9 +153,30 @@ impl Interp {
 
     /// Check a file and everything it uses, then load it.
     pub fn load_file(&mut self, path: &Path) -> Result<Summary, String> {
-        let report = self.checker.check_file(path);
-        self.verdicts.extend(report.verdicts);
+        if self.check {
+            let report = self.checker.check_file(path);
+            if let Some(rejected) = self.absorb(report) {
+                return Ok(rejected);
+            }
+        }
         self.load_file_unchecked(path)
+    }
+
+    /// Take in what checking found: report its warnings, and if it found
+    /// errors, report them and return the summary of a file that never ran.
+    fn absorb(&mut self, report: crate::check::Report) -> Option<Summary> {
+        for w in &report.warnings {
+            self.complain(w);
+        }
+        if !report.ok() {
+            for e in &report.errors {
+                self.complain(format!("type error: {}", e));
+            }
+            self.complain("The program was not run, because it doesn't type-check (design/12, T2).");
+            return Some(Summary { passed: 0, total: 0, errors: report.errors.len() });
+        }
+        self.verdicts.extend(report.verdicts);
+        None
     }
 
     fn load_file_unchecked(&mut self, path: &Path) -> Result<Summary, String> {
@@ -163,8 +189,12 @@ impl Interp {
     /// Check `src` and everything it uses, then read and evaluate every
     /// definition in it, then run its unit tests.
     pub fn load_str(&mut self, src: &str, file: &str, dir: &Path) -> Result<Summary, String> {
-        let report = self.checker.check_str(src, file, dir);
-        self.verdicts.extend(report.verdicts);
+        if self.check {
+            let report = self.checker.check_str(src, file, dir);
+            if let Some(rejected) = self.absorb(report) {
+                return Ok(rejected);
+            }
+        }
         self.load_unchecked(src, file, dir)
     }
 
@@ -267,11 +297,16 @@ impl Interp {
     /// In live mode, asks go to the model; the configuration's money and time
     /// limits still apply, and its script (if any) is not consulted.
     pub fn run_in(&self, cfg: &Config, e: &ExpRef) -> Result<Outcome, String> {
+        self.run_world(cfg, e, self.check)
+    }
+
+    /// `checked` says the checker has vouched for `e` (Q-1).
+    fn run_world(&self, cfg: &Config, e: &ExpRef, checked: bool) -> Result<Outcome, String> {
         let script = match &cfg.script {
             Some(name) => Some(self.scripts.get(name).cloned().ok_or_else(|| format!("unknown script {}", name))?),
             None => None,
         };
-        let world = WorldConfig { cost: cfg.cost, time: cfg.time, script };
+        let world = WorldConfig { cost: cfg.cost, time: cfg.time, script, checked };
         #[cfg(not(target_arch = "wasm32"))]
         let outcome = match &self.live {
             None => machine::run(&self.globals, &self.theta, &world, e.clone()),
@@ -358,7 +393,8 @@ impl Interp {
         live: crate::live::LiveConfig,
         hosts: &crate::tools::HostRegistry,
     ) -> Result<Outcome, String> {
-        let world = WorldConfig { cost: cfg.cost, time: cfg.time, script: None };
+        // An expression run this way wasn't checked.
+        let world = WorldConfig { cost: cfg.cost, time: cfg.time, script: None, checked: false };
         let oracle = Box::new(crate::live::LiveOracle::with_hosts(&self.theta, live, hosts));
         let outcome = machine::run_with(&self.globals, &self.theta, &world, oracle, e.clone())
             .map_err(|e| format!("run-time error: {}", e.0))?;
@@ -371,13 +407,14 @@ impl Interp {
     }
 
     /// Parse and evaluate one expression under `cfg`: for tests and embedding.
+    /// The expression isn't type-checked, so every run-time check applies.
     pub fn eval_source(&self, src: &str, cfg: &Config) -> Result<Outcome, String> {
         let forms = read_all(src, "<source>")?;
         let [sx] = forms.as_slice() else {
             return Err(format!("expected exactly one expression, found {}", forms.len()));
         };
         let e = Parser::new(&self.theta).exp(sx)?;
-        self.run_in(cfg, &e)
+        self.run_world(cfg, &e, false)
     }
 
     fn run_tests(&self, file: &str, tests: Vec<PendingTest>) -> Summary {
@@ -409,7 +446,10 @@ impl Interp {
         match (&t.kind, self.verdicts.get(&t.loc.to_string())) {
             (TestKind::TypeError(_), Some(verdict)) => return verdict.clone(),
             (TestKind::TypeError(_), None) => {
-                return Err(format!("Check-type-error failed: {} was never type-checked.", text(0)));
+                return Err(format!(
+                    "Check-type-error failed: {} was never type-checked (is the checker off, with --no-check?).",
+                    text(0)
+                ));
             }
             (_, Some(Err(msg))) => return Err(format!("This test is ill-typed, so it was not run: {}", msg)),
             _ => {}

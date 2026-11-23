@@ -353,8 +353,8 @@
       <p>CP-Agent solves problems against Claude Sonnet 5 with a Python kernel. <a href="demo.html">The traces are here</a>, including the budget refusing to start a run it couldn&rsquo;t afford.</p>
     </div>
     <div class="card">
-      <h3>No static checking yet</h3>
-      <p>The guarantees above are enforced when a program <em>runs</em>. A type and effect system is designed but not built; it is what would move the checks to compile time.</p>
+      <h3>Checked before it runs</h3>
+      <p>Types and effects are inferred, with no annotations, and a program that doesn&rsquo;t type-check never starts, so a type mistake can&rsquo;t spend money. Sharing a stateful tool between concurrent steps is a type error too.</p>
     </div>
     <div class="card">
       <h3>A small standard library</h3>

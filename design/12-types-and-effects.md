@@ -1,14 +1,15 @@
 # Types and effects: checking a program before it runs
 
-> **Status: being built.** Steps 0 to 4 of §9 are implemented: the checker
-> infers types and effects for every form, checks ownership, and decides unit
-> tests, but doesn't yet reject a program (step 5). The design was
-> revised once after a critical review, and again where building it found a
-> mistake; both kinds of correction are marked where they were made. It
-> answers the second of Ramsey's three questions (`04`): *what checking does
-> a program undergo before it runs?* Today the answer is "parse-time
-> well-formedness, and nothing else", and every type mistake is found while
-> the program runs, often after it has spent money.
+> **Status: built.** Every step of §9 is implemented and tested, in
+> [`../src/check.rs`](../src/check.rs). The design was revised once after a
+> critical review, and again where building it found a mistake; both kinds
+> of correction are marked where they were made. It answers the second of
+> Ramsey's three questions (`04`): *what checking does a program undergo
+> before it runs?* Before the checker, the answer was "parse-time
+> well-formedness, and nothing else", and every type mistake was found while
+> the program ran, often after it had spent money. Now a program that
+> doesn't type-check never starts, and `norman --no-check` gives the old
+> behavior.
 
 `01` sketched a type grammar with effect sets on function types, and every
 document since has deferred something to "the type and effect system": the
@@ -582,13 +583,51 @@ In dependency order, and each testable on its own:
    is used; one that can no longer change is checked and dropped.
    Q-1 (skipping the run-time check for a checked program) waits for step 5,
    since until then the checker doesn't stop a program it rejects.
-5. **Warnings** (T2) and **wiring**: the driver checks a file tree before
+5. ✅ **Done.** Tested in [`../tests/check.rs`](../tests/check.rs) (the
+   warnings and Q-3) and [`../tests/examples.rs`](../tests/examples.rs) (an
+   ill-typed program never runs; `--no-check`; Q-1; the exit code).
+   **Warnings** (T2) and **wiring**: the driver checks a file tree before
    loading it; `norman --no-check` keeps today's behavior; the playground
    reports type errors. Two collisions with Q-2 must be fixed first: both
    `step5-examples.nrm` and `consult.nrm` define `spent` and `elapsed`, and
    both grant `claude`, and `tests/must-fail.nrm` uses both files.
-6. **The properties.** Random well-typed programs must never hit a check
-   Theorem 7 rules out, which is Theorem 7 tested the way `06`'s laws are.
+   **How it was built.**
+   - The driver checks each file tree before loading it. A file with a type
+     error is reported and not run at all: no top-level form, no test.
+     Warnings are printed and don't stop anything. `--no-check` (and
+     `Interp::check = false`) restores the old behavior.
+   - **Q-1:** a run of a checked program skips WORKFLOWSHARED. Expressions
+     run through `eval_source`, which the checker never saw, keep it.
+     `tests/examples.rs` runs the one program shape where the checks differ
+     (§5.3): a node holding a function that calls `py` but never calling
+     it. Checked, it runs; unchecked, the workflow is refused.
+   - **Warnings** for W1's premises (ii) and (iv) are predicates like `#`:
+     decided at once when the effects are known, and otherwise carried in
+     the scheme and reported where it is used, once per definition, naming
+     the function they came through. **Q-4's** unused consult is syntactic.
+     **Q-3:** a `case` that misses a constructor is an error on an answer
+     from `ask` or `consult` (directly, inside a `budget`, or through a
+     `let`-bound name that isn't shadowed) and a warning otherwise.
+   - **`Any` is gone** from the grammar; `Any` in a type is now an unknown
+     type, so it is an error wherever it appears.
+   - The Q-2 collisions are avoided by the split of the must-fail suite
+     (step 3) rather than by renaming: no file loads both
+     `step5-examples.nrm` and `consult.nrm` now.
+   - **Building it found a soundness bug.** A later definition could
+     generalize a capability name an earlier `val` had left monomorphic, so
+     after `(val k1 (call py fork))`, `(val k2 k1)` gave one kernel a new
+     name at every use. With Q-1 skipping the run-time check, two nodes
+     could then have shared it unseen. The globals' free variables now
+     count as the environment's; the test was mutation-checked.
+6. ✅ **Done.** [`../tests/soundness.rs`](../tests/soundness.rs) generates 400
+   random programs with a type-directed generator that gives a few subterms
+   the wrong type on purpose. Every program that checks is run, and may reach
+   only the errors §6 lists as dynamic. The rejected ones are run without
+   the checker, and must reach a ruled-out error often enough to show the
+   generator can (about 60 do). Disabling the ownership check, or the rule
+   that an `if` tests a Boolean, makes the test fail. **The properties.**
+   Random well-typed programs must never hit a check Theorem 7 rules out,
+   which is Theorem 7 tested the way `06`'s laws are.
 
 ---
 

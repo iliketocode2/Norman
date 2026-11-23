@@ -537,7 +537,6 @@ impl<'a> Parser<'a> {
                 "Sym" => Ok(Type::Sym),
                 "Money" => Ok(Type::Money),
                 "Dur" => Ok(Type::Dur),
-                "Any" => Ok(Type::Any),
                 v if v.starts_with(|c: char| c.is_ascii_lowercase()) => {
                     if params.iter().any(|p| &**p == v) {
                         Ok(Type::Var(Rc::from(v)))

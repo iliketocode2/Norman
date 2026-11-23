@@ -125,6 +125,51 @@ fn errors_outside_the_tests_are_counted() {
     assert!(s.clean());
 }
 
+/// A file that doesn't type-check is not run at all (design/12, T2): not its
+/// top-level forms, not its tests. `--no-check` runs it as before.
+#[test]
+fn an_ill_typed_program_never_runs() {
+    let src = "(println \"this ran\")\n(define broken () (+ 1 \"two\"))\n(check-expect 1 1)";
+    let mut i = Interp::new();
+    i.verbose = false;
+    i.clear_transcript();
+    let s = i.load_str(src, "ill-typed.nrm", Path::new(".")).unwrap();
+    assert_eq!((s.passed, s.total, s.errors), (0, 0, 1));
+    assert!(!i.transcript().contains("this ran"), "{}", i.transcript());
+    assert!(i.transcript().contains("type error") && i.transcript().contains("was not run"), "{}", i.transcript());
+
+    let mut i = Interp::new();
+    i.check = false;
+    let s = i.load_str(src, "ill-typed.nrm", Path::new(".")).unwrap();
+    assert!(s.clean() && s.total == 1, "with --no-check it runs: {:?}", s);
+    assert!(i.transcript().contains("this ran"));
+}
+
+/// Q-1: a checked program skips the run-time WORKFLOWSHARED check. The two
+/// checks differ here (§5.3): node `a` holds a function that calls `py` but
+/// never calls it. Statically it can't touch `py`, so the program checks
+/// and runs; the run-time check counts what a closure captures, so without
+/// the checker the workflow is refused.
+#[test]
+fn a_checked_program_skips_the_run_time_ownership_check() {
+    let src = r#"
+(grant py (kernel))
+(define run-it () (call py exec "x = 1"))
+(script one [py/exec (result "ok") (latency 1s)])
+(under ([script one] [cost $1.00] [time 1min])
+  (check-expect (workflow ([a (let* ([f run-it]) 1)] [b (call py exec "x = 2")]) b) "ok"))
+"#;
+    let mut i = Interp::new();
+    i.verbose = false;
+    let s = i.load_str(src, "q1.nrm", Path::new(".")).unwrap();
+    assert!(s.clean(), "checked, it runs: {:?}\n{}", s, i.transcript());
+    let mut i = Interp::new();
+    i.verbose = false;
+    i.check = false;
+    let s = i.load_str(src, "q1.nrm", Path::new(".")).unwrap();
+    assert_eq!(s.passed, 0, "unchecked, the run-time check refuses the workflow");
+}
+
 #[test]
 fn the_command_fails_when_anything_goes_wrong() {
     let dir = std::env::temp_dir().join(format!("norman-exit-{}", std::process::id()));
@@ -139,6 +184,18 @@ fn the_command_fails_when_anything_goes_wrong() {
     // Before this, a top-level error exited 0, so a script couldn't tell a
     // refused live consult from success.
     assert_eq!(run("top-level-error.nrm", "(fail 'boom)\n(check-expect 1 1)"), Some(1));
+    // A type error fails the command before anything runs...
+    assert_eq!(run("type-error.nrm", "(define f () (+ 1 \"x\"))\n(check-expect 1 1)"), Some(1));
+    // ...unless the checker is off.
+    let path = dir.join("type-error.nrm");
+    let code = std::process::Command::new(env!("CARGO_BIN_EXE_norman"))
+        .arg("--no-check")
+        .arg(&path)
+        .output()
+        .unwrap()
+        .status
+        .code();
+    assert_eq!(code, Some(0));
     std::fs::remove_dir_all(&dir).ok();
 }
 

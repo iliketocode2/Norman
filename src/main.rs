@@ -5,10 +5,12 @@ use munorman::live::LiveConfig;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: norman [--live [--python EXE] [--human NAME=tty|unattended]…] [--trace] FILE.nrm …
+const USAGE: &str =
+    "usage: norman [--live [--python EXE] [--human NAME=tty|unattended]…] [--trace] [--no-check] FILE.nrm …
 
-Loads each file, printing the value of each top-level expression, then runs
-its unit tests (check-expect, check-fail, …).
+Type-checks each file, then loads it, printing the value of each top-level
+expression, then runs its unit tests (check-expect, check-fail, …). A file
+that doesn't type-check is not run.
 
   --live    answer `ask` with a real model through the Anthropic API
             (needs ANTHROPIC_API_KEY; ANTHROPIC_BASE_URL overrides the endpoint).
@@ -25,12 +27,17 @@ its unit tests (check-expect, check-fail, …).
             stops the run with an error. It is never treated as a refusal.
             A live run refuses to start while any human grant is unbound.
   --trace   after each evaluation, print one line per ask, call or consult:
-            site, tokens, cost, timing and outcome";
+            site, tokens, cost, timing and outcome
+  --no-check
+            run without the type checker, as before it existed: type
+            mistakes are found when they happen, and check-type-error
+            tests fail";
 
 fn main() -> ExitCode {
     let mut files = vec![];
     let mut live = false;
     let mut trace = false;
+    let mut check = true;
     let mut python = None;
     let mut people = munorman::live::People::default();
     let mut args = std::env::args().skip(1);
@@ -63,6 +70,7 @@ fn main() -> ExitCode {
                 }
             }
             "--trace" => trace = true,
+            "--no-check" => check = false,
             "-h" | "--help" => {
                 eprintln!("{}", USAGE);
                 return ExitCode::SUCCESS;
@@ -88,6 +96,7 @@ fn main() -> ExitCode {
     }
     let mut interp = Interp::new();
     interp.trace = trace;
+    interp.check = check;
     interp.python = python;
     if live {
         // H3: refuse to start, before anything runs or is paid for, while any

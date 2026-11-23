@@ -109,6 +109,10 @@ pub struct WorldConfig {
     pub cost: Option<i64>,
     pub time: Option<i64>,
     pub script: Option<Rc<Script>>,
+    /// The expression was type-checked, ownership included, so WORKFLOWSHARED
+    /// can't fail and isn't checked again (design/12, Q-1). What the static
+    /// check would still reject can't interfere (§5.3).
+    pub checked: bool,
 }
 
 enum Ctl {
@@ -319,6 +323,8 @@ pub struct Machine<'a> {
     /// oracle, when the token-count assumption of 09 §3 fails; Theorem 1′ is
     /// conditional on it, so the invariant is no longer checked.
     over_reserved: bool,
+    /// See `WorldConfig::checked`.
+    checked: bool,
 }
 
 fn failure(name: &str, fields: Vec<Value>) -> Value {
@@ -354,6 +360,7 @@ pub fn run_with<'a>(
         steps: 0,
         broken: None,
         over_reserved: false,
+        checked: cfg.checked,
     };
     m.threads.push(Thread {
         ctl: Ctl::Eval(e, Env::default()),
@@ -1415,7 +1422,7 @@ impl<'a> Machine<'a> {
         }
         for i in 0..owned.len() {
             for j in i + 1..owned.len() {
-                if !owned[i].is_disjoint(&owned[j]) {
+                if !self.checked && !owned[i].is_disjoint(&owned[j]) {
                     // M-WF-SHARED
                     self.raise_con(tid, "Raised", vec![Value::Sym(Rc::from("shared-stateful-capability"))]);
                     return Ok(());

@@ -331,7 +331,7 @@ mod tests {
     fn recursive_types_cannot_be_asked_live() {
         let err = theta().json_schema(&Type::named("Tree")).unwrap_err();
         assert!(err.contains("recursive"), "{}", err);
-        assert!(theta().json_schema(&Type::Any).is_err());
+        assert!(theta().json_schema(&Type::Money).is_err());
     }
 
     // ------------------------------------------------------ request bodies
