@@ -1,8 +1,8 @@
 # Types and effects: checking a program before it runs
 
-> **Status: being built.** Steps 0 to 3 of §9 are implemented: the checker
-> infers types and effects for every form and decides unit tests, but doesn't
-> yet check ownership (step 4) or reject a program (step 5). The design was
+> **Status: being built.** Steps 0 to 4 of §9 are implemented: the checker
+> infers types and effects for every form, checks ownership, and decides unit
+> tests, but doesn't yet reject a program (step 5). The design was
 > revised once after a critical review, and again where building it found a
 > mistake; both kinds of correction are marked where they were made. It
 > answers the second of Ramsey's three questions (`04`): *what checking does
@@ -319,9 +319,15 @@ warning twenty times, and warnings that repeat get ignored.
 
 `fork` returns a capability with a **fresh name variable**, and generalizing
 the enclosing definition makes that variable fresh at each use. So
-`(workflow ([a (use py)] [b (use (call py fork))]) …)` passes `py # κ′`,
-which is the idiom the guide recommends ("to work in parallel, fork the
-kernel first").
+`(let* ([k (call py fork)]) (workflow ([a (use py)] [b (use k)]) …))`
+passes `py # κ′`, which is the idiom the guide recommends ("to work in
+parallel, fork the kernel first").
+
+> **Corrected in building.** This example used to fork *inside* node b:
+> `[b (use (call py fork))]`. That node calls `py` to fork it while node a
+> uses `py`, so both footprints contain `py`, and the program is rejected,
+> rightly: the run-time check rejects it too, and forking a kernel another
+> node is running is a race. The fork must happen before the workflow.
 
 > **Corrected in building.** A fresh name alone loses the fork's
 > operations: `Offers(κ′, op, τ)` on a fresh variable can never be decided,
@@ -558,9 +564,24 @@ In dependency order, and each testable on its own:
      doesn't check still loads. The must-fail suite is now two files,
      because `step5-examples.nrm` and `consult.nrm` both grant `claude`
      (Q-2), and each must check for its mutants to fail for the right reason.
-4. **Ownership** (§5). Tests: the Step 5 group 8 programs, rewritten as
+4. ✅ **Done.** Tested in [`../tests/check.rs`](../tests/check.rs) (the
+   `ownership` section) and by group 8 of `step5-examples.nrm`, whose three
+   sharing tests are now `check-type-error`s. **Ownership** (§5). Tests: the Step 5 group 8 programs, rewritten as
    `check-type-error`s (§5.1); `best-of` over a kernel; the fork idiom; and
    `(val k (call py fork))` used in two nodes, which must be rejected (§4.1).
+   **How it was built.** A `call` atom carries the capability's kind as
+   well as its name, so a footprint knows what is stateful even when the
+   name reaches it only through a latent effect (§1, "Names have kinds").
+   One predicate, `F₁ # F₂`, does the work of both `#` and `Stateless`:
+   when both footprints reach the same effect variable φ, every stateful
+   call φ ever makes is in both, so `#` already demands that φ be
+   stateless. It is printed as `Stateless e1` in that case, so `best-of`
+   reads `Stateless e1 e2 => (Num (-> a ! e1) (a -> Bool ! e2) -> a ! e1 e2)`.
+   A `#` that mentions a quantified variable goes into the scheme,
+   flattened like the effect bounds, and is checked again where the scheme
+   is used; one that can no longer change is checked and dropped.
+   Q-1 (skipping the run-time check for a checked program) waits for step 5,
+   since until then the checker doesn't stop a program it rejects.
 5. **Warnings** (T2) and **wiring**: the driver checks a file tree before
    loading it; `norman --no-check` keeps today's behavior; the playground
    reports type errors. Two collisions with Q-2 must be fixed first: both

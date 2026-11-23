@@ -201,17 +201,19 @@
 
 (define run-x (code) (call py exec code))   ; a closure that reaches py through fv, not through ρ
 
+;; Two nodes that share py are a type error (design/12 §5.1): there is no
+;; failure to catch, and nothing runs. Before the checker these were the
+;; catchable failure (Raised 'shared-stateful-capability), which `machine.rs`
+;; still raises for a program that isn't checked.
+
 (script kernels                         ; a forked kernel draws from its parent's script
   [py/exec (result "ok") (latency 1s)
            (result "ok") (latency 1s)])
 
 (under ([script kernels] [cost $1.00] [time 1min])
-  (check-expect (workflow ([a (call py exec "x = 1")] [b (call py exec "x = 2")]) a)
-                (fail (Raised 'shared-stateful-capability)))
-  (check-expect (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a)
-                (fail (Raised 'shared-stateful-capability)))
-  (check-within (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a)
-                ([cost $0] [time 0s]))      ; rejected before any node runs
+  (check-type-error (workflow ([a (call py exec "x = 1")] [b (call py exec "x = 2")]) a))
+  (check-type-error (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a))   ; through run-x's effect
+  (check-type-error (par (run-x "x = 1") (call py exec "x = 2")))
   (check-expect (let* ([py2 (call py fork)])
                   (workflow ([a (call py exec "x = 1")] [b (call py2 exec "x = 2")]) (list a b)))
                 (list "ok" "ok")))

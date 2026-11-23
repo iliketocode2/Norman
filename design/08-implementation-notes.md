@@ -36,13 +36,13 @@ Current results:
 | CP-Agent, scripted ([`../examples/cp-agent.nrm`](../examples/cp-agent.nrm)) | 6 of 6 pass |
 | `consult`, scripted ([`../examples/consult.nrm`](../examples/consult.nrm)) | 52 of 52 pass |
 | Type parameters ([`../examples/type-parameters.nrm`](../examples/type-parameters.nrm)) | 19 of 19 pass |
-| The type checker, steps 0–3 of `12` ([`../tests/check.rs`](../tests/check.rs)): the prelude's inferred types, effects, rejections, load order, polymorphism, overloading, grants' named types, `fork`, `check-type-error`, and every example | 21 of 21 pass; decides unit tests, but doesn't yet reject programs (`12` §9, step 5) |
+| The type checker, steps 0–4 of `12` ([`../tests/check.rs`](../tests/check.rs)): the prelude's inferred types, effects, rejections, load order, polymorphism, overloading, grants' named types, `fork`, ownership, `check-type-error`, and every example | 26 of 26 pass; decides unit tests, but doesn't yet reject programs (`12` §9, step 5) |
 | `consult`'s trace record, the terminal host driven by a simulated person, and the start-up check ([`../tests/consult.rs`](../tests/consult.rs)) | 18 of 18 pass |
 | Live client against a local stub server ([`../tests/live_stub.rs`](../tests/live_stub.rs)) | 9 of 9 pass |
 | Live `call` against real hosts, including Python ([`../tests/live_tools.rs`](../tests/live_tools.rs)) | 12 of 12 pass |
 | Random tests of 17 laws ([`../tests/properties.rs`](../tests/properties.rs)) | 150 cases each, all pass |
 | The same harness on 3 false laws | finds a counterexample to each, as it must |
-| Must-fail suite ([`../tests/must-fail.nrm`](../tests/must-fail.nrm), [`../tests/must-fail-consult.nrm`](../tests/must-fail-consult.nrm)) | 14 of 14 fail, as they must |
+| Must-fail suite ([`../tests/must-fail.nrm`](../tests/must-fail.nrm), [`../tests/must-fail-consult.nrm`](../tests/must-fail-consult.nrm)) | 15 of 15 fail, as they must |
 | Real API calls ([`../tests/live_real.rs`](../tests/live_real.rs), [`../tests/live_cp_agent.rs`](../tests/live_cp_agent.rs)) | 6 tests, `#[ignore]`d; they spend money, and `cargo test` skips them |
 
 Every scripted run also checks Theorem 1′ (the budget invariant) in every

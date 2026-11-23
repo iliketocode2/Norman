@@ -13,7 +13,7 @@
   (check-within (analyst claude "FY2025 10-K") ([cost $0.0001] [time 1s])))   ; really ~$0.0004, 2s
 (under ([script kernels] [cost $1.00] [time 1min])
   (check-expect (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) (list a b))
-                (list "ok" "ok")))                                    ; really rejected
+                (list "ok" "ok")))                                    ; really rejected: both nodes use py
 (under ([script garbled] [cost $1.00] [time 1min])
   (check-equiv (ask-analyst) (Hold "x") 'value))                      ; fail vs value
 (under ([script cp] [cost $1.00] [time 5min])
@@ -23,3 +23,6 @@
 ;;; asks for one, and a test that asks for one needs a type error.
 (check-error (+ 1 "two"))                                             ; really a type error, not a run-time one
 (check-type-error (+ 1 2))                                            ; really well typed
+(under ([script kernels] [cost $1.00] [time 1min])
+  (check-type-error (let* ([py2 (call py fork)])
+                      (workflow ([a (run-x "x = 1")] [b (call py2 exec "x = 2")]) a))))  ; really fine: a fork is a kernel of its own
