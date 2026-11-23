@@ -39,6 +39,13 @@ pub struct Interp {
     /// well; on wasm, where there is no terminal, it is the only output there
     /// is, and the documentation playground displays it.
     out: RefCell<String>,
+    /// The type checker (design/12), which reads each file tree before it
+    /// is loaded. For now it only decides unit tests: a `check-type-error`
+    /// passes when it says so, and an ill-typed test fails without running
+    /// (T8). Rejecting an ill-typed program is step 5 of `12` §9.
+    checker: crate::check::Checker,
+    /// What the checker said about each unit test, by location.
+    verdicts: HashMap<String, Result<(), String>>,
 }
 
 impl Interp {
@@ -122,11 +129,14 @@ impl Interp {
             people: Default::default(),
             trace: false,
             out: RefCell::new(String::new()),
+            checker: crate::check::Checker::new(),
+            verdicts: HashMap::new(),
         };
         for p in Prim::ALL {
             i.globals.insert(Rc::from(p.name()), Value::Prim(p));
         }
-        let summary = i.load_str(include_str!("prelude.nrm"), "prelude.nrm", Path::new("."));
+        // The checker has read the prelude already.
+        let summary = i.load_unchecked(include_str!("prelude.nrm"), "prelude.nrm", Path::new("."));
         assert!(
             summary.as_ref().is_ok_and(Summary::clean),
             "the prelude failed to load: {:?} ({})",
@@ -136,15 +146,29 @@ impl Interp {
         i
     }
 
+    /// Check a file and everything it uses, then load it.
     pub fn load_file(&mut self, path: &Path) -> Result<Summary, String> {
+        let report = self.checker.check_file(path);
+        self.verdicts.extend(report.verdicts);
+        self.load_file_unchecked(path)
+    }
+
+    fn load_file_unchecked(&mut self, path: &Path) -> Result<Summary, String> {
         let src = std::fs::read_to_string(path).map_err(|e| format!("can't read {}: {}", path.display(), e))?;
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        self.load_str(&src, &name, &dir)
+        self.load_unchecked(&src, &name, &dir)
     }
 
-    /// Read and evaluate every definition in `src`, then run its unit tests.
+    /// Check `src` and everything it uses, then read and evaluate every
+    /// definition in it, then run its unit tests.
     pub fn load_str(&mut self, src: &str, file: &str, dir: &Path) -> Result<Summary, String> {
+        let report = self.checker.check_str(src, file, dir);
+        self.verdicts.extend(report.verdicts);
+        self.load_unchecked(src, file, dir)
+    }
+
+    fn load_unchecked(&mut self, src: &str, file: &str, dir: &Path) -> Result<Summary, String> {
         let forms = read_all(src, file)?;
         let mut tests: Vec<PendingTest> = vec![];
         let mut errors = 0;
@@ -165,7 +189,7 @@ impl Interp {
                         errors += 1;
                     }
                 }
-                Top::Use(f) => match self.load_file(&dir.join(&f)) {
+                Top::Use(f) => match self.load_file_unchecked(&dir.join(&f)) {
                     // The used file has reported its own tests; what went
                     // wrong there still counts against this load.
                     Ok(used) => errors += used.errors + (used.total - used.passed),
@@ -381,22 +405,32 @@ impl Interp {
 
     fn run_test(&self, t: &UnitTest, cfg: &Config) -> Result<(), String> {
         let text = |i: usize| t.texts.get(i).cloned().unwrap_or_default();
+        // What the checker said comes first (design/12, T8).
+        match (&t.kind, self.verdicts.get(&t.loc.to_string())) {
+            (TestKind::TypeError(_), Some(verdict)) => return verdict.clone(),
+            (TestKind::TypeError(_), None) => {
+                return Err(format!("Check-type-error failed: {} was never type-checked.", text(0)));
+            }
+            (_, Some(Err(msg))) => return Err(format!("This test is ill-typed, so it was not run: {}", msg)),
+            _ => {}
+        }
         match &t.kind {
+            TestKind::TypeError(_) => unreachable!("decided by the checker"),
             TestKind::Expect(e1, e2) => {
                 let o1 = self.run_in(cfg, e1)?;
                 let o2 = self.run_in(cfg, e2)?;
-                let (Res::Val(v1), Res::Val(v2)) = (&o1.result, &o2.result) else {
-                    return Err(format!(
+                // Two values that are equal, or two failures that are: so
+                // `(check-expect e (fail φ))` says e fails with exactly φ, and
+                // type-checks, since `(fail φ)` has any type (design/12).
+                if o1.result.equal(&o2.result) {
+                    Ok(())
+                } else {
+                    Err(format!(
                         "Check-expect failed: expected {} to evaluate to {}, but it's {}.",
                         text(0),
                         o2.result,
                         o1.result
-                    ));
-                };
-                if v1.equal(v2) {
-                    Ok(())
-                } else {
-                    Err(format!("Check-expect failed: expected {} to evaluate to {}, but it's {}.", text(0), v2, v1))
+                    ))
                 }
             }
             TestKind::Assert(e) => match self.run_in(cfg, e)?.result {

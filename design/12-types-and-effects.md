@@ -1,8 +1,10 @@
 # Types and effects: checking a program before it runs
 
-> **Status: a design draft, not built, revised once after a critical
-> review.** The review's corrections are marked where they were made. Nothing
-> here is implemented. It
+> **Status: being built.** Steps 0 to 3 of §9 are implemented: the checker
+> infers types and effects for every form and decides unit tests, but doesn't
+> yet check ownership (step 4) or reject a program (step 5). The design was
+> revised once after a critical review, and again where building it found a
+> mistake; both kinds of correction are marked where they were made. It
 > answers the second of Ramsey's three questions (`04`): *what checking does
 > a program undergo before it runs?* Today the answer is "parse-time
 > well-formedness, and nothing else", and every type mistake is found while
@@ -321,6 +323,13 @@ the enclosing definition makes that variable fresh at each use. So
 which is the idiom the guide recommends ("to work in parallel, fork the
 kernel first").
 
+> **Corrected in building.** A fresh name alone loses the fork's
+> operations: `Offers(κ′, op, τ)` on a fresh variable can never be decided,
+> so a fork of a closed kernel would offer anything. A capability's type
+> therefore carries two names, its own (for ownership, and fresh for a fork)
+> and the grant whose operations it offers (kept by a fork). `(Kernel py)`
+> is a granted kernel; `(Kernel κ′ py)` is a fork of it.
+
 This is sound because a fresh name is introduced only where a new capability
 is created, and no rule makes two existing capabilities share a name they
 didn't already have. It relies on §4.1's rule that a name variable is never
@@ -514,7 +523,9 @@ In dependency order, and each testable on its own:
    from the record's, so `swap` came out as `((Pair a b) -> (Pair c a))`.
    A field several records share now gives a qualified type,
    `Has a x b => (a -> b)`, resolved where the function is used.
-3. **The agentic forms and constraints** of §3 and §4.2, and
+3. ✅ **Done.** Tested in [`../tests/check.rs`](../tests/check.rs), whose
+   `every_example_checks` reads every file in `examples/`, and by the
+   `check-type-error`s now in the examples. **The agentic forms and constraints** of §3 and §4.2, and
    `check-type-error`. Tests: every example file checks; the checked-error
    tests that are about types (a non-person consulted, an unaskable type, a
    malformed proposal, an undeclared operation) become `check-type-error`s,
@@ -522,6 +533,31 @@ In dependency order, and each testable on its own:
    proposed) stay `check-error`s (T8). A deliberately wrong version in
    `must-fail.nrm`: a `check-error` on an ill-typed expression, which must
    now fail.
+   **Building it changed four things.**
+   - *A capability's type has two names* (§5.2): its own, for ownership,
+     and the grant whose operations it offers, for `Offers`. A fork gets a
+     fresh name of its own but keeps its parent's offers, so a fork of a
+     closed kernel is closed too, which `typed-tools.nrm` tests. With one
+     name, `Offers` on a fork's fresh variable could never be decided.
+     They print as one name when they agree: `(Kernel py)`, `(Kernel a py)`.
+     `call` doesn't fix the kind, so a function generic in its capability
+     has type `(Cap k a b)`.
+   - *`(catch e x x)` is ill-typed* unless `e` is a `Failure`, and tests
+     used it to look at the failure they expected. Decided with the user:
+     `check-expect` passes when both sides fail with equal failures, so
+     `(check-expect e (fail φ))` says exactly how `e` fails and type-checks,
+     because `(fail φ)` has any type. `check-within` never needed the catch:
+     it measures a failing run as it does a successful one.
+   - *A type names exactly one grant* (T3), so `(list claude haiku)` is
+     ill-typed. No example needed two grants of one kind in one value; one
+     (`consult.nrm`'s `(list a b)` of Text and objectives) was heterogeneous
+     anyway and is now a `Pair`.
+   - *The driver runs the checker before loading,* ahead of step 5, but only
+     to decide unit tests: a `check-type-error` passes when the checker says
+     so, and an ill-typed test fails without running (T8). A file that
+     doesn't check still loads. The must-fail suite is now two files,
+     because `step5-examples.nrm` and `consult.nrm` both grant `claude`
+     (Q-2), and each must check for its mutants to fail for the right reason.
 4. **Ownership** (§5). Tests: the Step 5 group 8 programs, rewritten as
    `check-type-error`s (§5.1); `best-of` over a kernel; the fork idiom; and
    `(val k (call py fork))` used in two nodes, which must be rejected (§4.1).

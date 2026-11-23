@@ -40,7 +40,7 @@
 ;;; Problem #1: a negative count means no retries, not a budget-draining loop
 (under ([script garbled] [cost $1.00] [time 1min])
   (check-fail   (retry -1 ask-analyst) (Invalid _))
-  (check-within (catch (retry -1 ask-analyst) e 0) ([time 1s])))   ; exactly one call
+  (check-within (retry -1 ask-analyst) ([time 1s])))   ; exactly one call
 
 ;;; ------------------------------------------------------------------
 ;;; best-of
@@ -48,14 +48,14 @@
 ;;; Problem #2: width 0 does nothing and costs nothing
 (under ([script sell] [cost $1.00] [time 1min])
   (check-fail   (best-of 0 ask-analyst accept-all) (Raised _))
-  (check-within (catch (best-of 0 ask-analyst accept-all) e 0) ([cost $0] [time 0s])))
+  (check-within (best-of 0 ask-analyst accept-all) ([cost $0] [time 0s])))
 
 ;;; Problem #3: the correct best-of-1 law goes through attempt; the old law is false
 (under ([script garbled] [cost $1.00] [time 1min])
   (check-equiv (best-of 1 ask-analyst accept-all)
                (case (attempt ask-analyst accept-all) [(Some x) x] [None (fail 'none-accepted)])
                'exact)
-  (check-expect (catch (best-of 1 ask-analyst accept-all) e e) (Raised 'none-accepted))
+  (check-expect (best-of 1 ask-analyst accept-all) (fail (Raised 'none-accepted)))
   (check-fail   (ask-analyst) (Invalid _)))           ; …so they're ≡v but not ≡
 
 ;;; ------------------------------------------------------------------
@@ -109,9 +109,9 @@
 ;;; (retry -2 (λ () (retry 1 f))) calls f up to twice; (retry -3 f) once.
 
 (under ([script flaky3] [cost $1.00] [time 1min])
-  (check-within (catch (retry -2 (lambda () (retry 1 ask-analyst))) e 0) ([time 2s]))
+  (check-within (retry -2 (lambda () (retry 1 ask-analyst))) ([time 2s]))
   (check-fail   (retry -2 (lambda () (retry 1 ask-analyst))) (Invalid _))
-  (check-within (catch (retry -3 ask-analyst) e 0) ([time 1s])))
+  (check-within (retry -3 ask-analyst) ([time 1s])))
 
 ;;; ------------------------------------------------------------------
 ;;; Non-law: W1 without premise (iii). With a = 10 s and b = 30 s, the

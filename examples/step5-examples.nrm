@@ -123,7 +123,7 @@
 
 (under ([script both] [cost $0.05] [time 1min])
   (check-fail   (ask claude LooseVerdict (analyst-ctx "FY2025 10-K") 'loose) OverBudget)
-  (check-within (catch (ask claude LooseVerdict (analyst-ctx "FY2025 10-K") 'loose) e 0)
+  (check-within (ask claude LooseVerdict (analyst-ctx "FY2025 10-K") 'loose)
                 ([cost $0] [time 0s]))             ; refused before the oracle: no charge, no time
   (check-expect (ask-analyst) (Sell "Margins are compressing.")))
 
@@ -147,7 +147,7 @@
 
 (under ([script flaky] [cost $0.000001] [time 1min])   ; 1 µ$: nothing is affordable
   (check-fail   (retry 5 ask-analyst) OverBudget)
-  (check-within (catch (retry 5 ask-analyst) e 0) ([cost $0] [time 0s])))
+  (check-within (retry 5 ask-analyst) ([cost $0] [time 0s])))
 
 ;;; ==================================================================
 ;;; Group 6. ASKLATE: one absolute deadline (03, Q4)
@@ -157,10 +157,10 @@
 
 (under ([script slow] [cost $1.00] [time 1min])
   (check-fail   (ask-analyst) PastDeadline)
-  (check-within (catch (ask-analyst) e 0) ([time 1min])))   ; the clock stops at the deadline
+  (check-within (ask-analyst) ([time 1min])))   ; the clock stops at the deadline
 
 (under ([script sell] [cost $1.00] [time 1min])             ; a nested budget shrinks the deadline
-  (check-expect (catch (budget ([time 1s]) (ask-analyst)) e e) PastDeadline))
+  (check-expect (budget ([time 1s]) (ask-analyst)) (fail PastDeadline)))
 
 ;;; ==================================================================
 ;;; Group 7. WORKFLOW: work adds, span is the critical path (02, Part B)
@@ -206,11 +206,11 @@
            (result "ok") (latency 1s)])
 
 (under ([script kernels] [cost $1.00] [time 1min])
-  (check-expect (catch (workflow ([a (call py exec "x = 1")] [b (call py exec "x = 2")]) a) e e)
-                (Raised 'shared-stateful-capability))
-  (check-expect (catch (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a) e e)
-                (Raised 'shared-stateful-capability))
-  (check-within (catch (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a) e 0)
+  (check-expect (workflow ([a (call py exec "x = 1")] [b (call py exec "x = 2")]) a)
+                (fail (Raised 'shared-stateful-capability)))
+  (check-expect (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a)
+                (fail (Raised 'shared-stateful-capability)))
+  (check-within (workflow ([a (run-x "x = 1")] [b (run-x "x = 2")]) a)
                 ([cost $0] [time 0s]))      ; rejected before any node runs
   (check-expect (let* ([py2 (call py fork)])
                   (workflow ([a (call py exec "x = 1")] [b (call py2 exec "x = 2")]) (list a b)))
@@ -274,4 +274,4 @@
 
 (under ([script fail-fast] [cost $1.00] [time 1min])
   (check-fail   (two-steps claude) (Invalid _))
-  (check-within (catch (two-steps claude) e 0) ([time 5s])))   ; b is cancelled at 5 s, not awaited to 30 s
+  (check-within (two-steps claude) ([time 5s])))   ; b is cancelled at 5 s, not awaited to 30 s

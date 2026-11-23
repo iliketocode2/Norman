@@ -1,0 +1,16 @@
+;;; must-fail-consult.nrm: mutants of the consult tests (design/11), and of
+;;; the type checker's tests that need a person. Each must FAIL. They live
+;;; apart from must-fail.nrm because both example files grant claude, and a
+;;; name is defined once (design/12, Q-2).
+(use ../examples/consult.nrm)
+(under ([script declines-then-approves] [cost $1.00] [time 1h])
+  (check-expect (retry 3 (review reviewer)) objs))                    ; really Declined: never retried (K2)
+(under ([script slow] [cost $5.00] [time 1h])
+  (check-expect (spent (question paid)) $2.00))                       ; really $0: a cut consult isn't charged
+(under ([script would-answer] [cost $1.00] [time 1h])
+  (check-expect (consult reviewer (Text 20) "?" (propose 'potency) 'p)
+                "potency"))                                           ; really ill-typed: a symbol is not Text
+
+;;; A size bound is checked when the consult runs, not by the checker (T6).
+(under ([script would-answer] [cost $1.00] [time 1h])
+  (check-type-error (consult reviewer (List Objective 1) "?" (propose objs) 'review)))

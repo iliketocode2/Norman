@@ -18,13 +18,13 @@
 ;; Money and time spent by a thunk, whether it succeeds or fails.
 (define spent (thunk)
   (let* ([c0 (. (remaining) cost)]
-         [_  (catch (thunk) e e)]
+         [_  (catch (begin (thunk) #t) e #f)]
          [c1 (. (remaining) cost)])
     (- c0 c1)))
 
 (define elapsed (thunk)
   (let* ([t0 (. (remaining) time)]
-         [_  (catch (thunk) e e)]
+         [_  (catch (begin (thunk) #t) e #f)]
          [t1 (. (remaining) time)])
     (- t0 t1)))
 
@@ -76,7 +76,7 @@
 
 (under ([script declines] [cost $5.00] [time 1h])
   (check-fail   ((review reviewer)) (Declined _))
-  (check-expect (catch ((review reviewer)) e e) (Declined "These ignore cost."))
+  (check-expect ((review reviewer)) (fail (Declined "These ignore cost.")))
   (check-expect (spent (review paid)) $2.00))
 
 ;;; ==================================================================
@@ -134,20 +134,20 @@
 
 (under ([script would-answer] [cost $1.00] [time 1h])
   ;; A proposal that doesn't conform to τ (§2.2): caught before anyone is asked.
+  ;; A size bound is checked when the consult runs (design/12, T6)...
   (check-error (consult reviewer (List Objective 1) "Approve?" (propose objs) 'review))   ; two > one
-  (check-error (consult reviewer Num "Approve?" (propose "seven") 'n))
-  ;; It validates as Text, but reads back as a string, not the symbol: an
-  ;; approval would return something other than what was proposed, so K1
-  ;; would fail. Conformance is the round trip, not validation alone.
-  (check-error (consult reviewer (Text 20) "Approve?" (propose 'potency) 'p))
-  (check-error (catch (consult reviewer Num "Approve?" (propose "seven") 'n) e 0))  ; not catchable
-  ;; Premise order: a malformed proposal is the program's mistake whatever the
-  ;; clock says, so it is an error even past the deadline, not PastDeadline.
-  (check-error (budget ([time 0s]) (consult reviewer Num "Approve?" (propose "seven") 'n)))
-  (check-error (consult reviewer Any "Anything?" 'any))           ; τ must be askable (§1.3)
-  (check-error (consult claude (Text 10) "Hi?" 'hi))              ; a model is not a person
-  (check-error (consult reviewer (Text 10) 'not-text 'hi))        ; the prompt is Text
-  (check-error (show reviewer)))                                  ; a human can't be shown
+  ;; ...and everything else before the program runs (design/12 §4.2). A
+  ;; symbol would validate as Text but read back as a string, so approving it
+  ;; would break K1; statically it's simply not Text. A type error can't be
+  ;; caught, and the clock never gets a say.
+  (check-type-error (consult reviewer Num "Approve?" (propose "seven") 'n))
+  (check-type-error (consult reviewer (Text 20) "Approve?" (propose 'potency) 'p))
+  (check-type-error (catch (consult reviewer Num "Approve?" (propose "seven") 'n) e 0))
+  (check-type-error (budget ([time 0s]) (consult reviewer Num "Approve?" (propose "seven") 'n)))
+  (check-type-error (consult reviewer Any "Anything?" 'any))      ; τ must be askable (§1.3)
+  (check-type-error (consult claude (Text 10) "Hi?" 'hi))         ; a model is not a person
+  (check-type-error (consult reviewer (Text 10) 'not-text 'hi))   ; the prompt is Text
+  (check-type-error (show reviewer)))                             ; a human can't be shown
 
 ;; Controls: the same sites, well-formed, do answer. Without these, the
 ;; errors above could come from a broken script rather than from the checks.
@@ -197,8 +197,8 @@
   [review (approve)               (latency 10min)])
 
 (under ([script two-at-once] [cost $1.00] [time 1h])
-  (check-expect (workflow ([a ((question reviewer))] [b ((review reviewer))]) (list a b))
-                (list "toxicity" objs))
+  (check-expect (workflow ([a ((question reviewer))] [b ((review reviewer))]) (Pair [fst a] [snd b]))
+                (Pair [fst "toxicity"] [snd objs]))
   (check-expect (elapsed (lambda () (par ((question reviewer)) ((review reviewer))))) 10min))
 
 ;;; Fail-fast: a decline cancels its sibling, and the cancelled consult of

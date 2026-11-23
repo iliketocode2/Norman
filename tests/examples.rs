@@ -144,9 +144,17 @@ fn the_command_fails_when_anything_goes_wrong() {
 
 #[test]
 fn deliberately_wrong_tests_all_fail() {
-    let mut interp = Interp::new();
-    interp.verbose = false;
-    let s = interp.load_file(Path::new("tests/must-fail.nrm")).expect("file loads");
-    assert_eq!(s.total, 11);
-    assert_eq!(s.passed, 0, "a deliberately wrong test passed: the suite can't tell right from wrong");
+    for (file, total) in [("tests/must-fail.nrm", 10), ("tests/must-fail-consult.nrm", 4)] {
+        // Each file must check, so each mutant fails for the reason its
+        // comment gives, not because a name it uses failed to check.
+        let report = munorman::check::Checker::new().check_file(Path::new(file));
+        assert!(report.ok(), "{} doesn't type-check: {:?}", file, report.errors);
+        let mut interp = Interp::new();
+        interp.verbose = false;
+        let s = interp.load_file(Path::new(file)).expect("file loads");
+        assert_eq!(s.total, total, "{}", file);
+        assert_eq!(s.passed, 0, "{}: a deliberately wrong test passed: the suite can't tell right from wrong", file);
+        // The examples the mutants use still pass, with no errors.
+        assert_eq!(s.errors, 0, "{}: something outside the mutants went wrong", file);
+    }
 }

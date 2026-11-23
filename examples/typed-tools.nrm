@@ -52,8 +52,8 @@
 
 (under ([script typed] [cost $1.00] [time 1min])
   ;; An operation the grant never mentioned is a mistake in the program, so it
-  ;; is a checked run-time error -- not a failure the program could catch.
-  (check-error (call py frobnicate "x"))
+  ;; is a type error (design/12 §4.2) -- not a failure the program could catch.
+  (check-type-error (call py frobnicate "x"))
   ;; `fork` is a kernel's own operation and stays available.
   (check-expect (call py exec "x") "hello"))
 
@@ -123,5 +123,6 @@
                   (workflow ([a (call py exec "x = 1")] [b (call py2 exec "x = 2")])
                     (list a b)))
                 (list "one" "two"))
-  ;; The forked kernel is closed in the same way its parent is.
-  (check-error (let* ([py2 (call py fork)]) (call py2 frobnicate "x"))))
+  ;; The forked kernel is closed in the same way its parent is: a fork has a
+  ;; name of its own, but offers its parent's operations (design/12 §5.2).
+  (check-type-error (let* ([py2 (call py fork)]) (call py2 frobnicate "x"))))

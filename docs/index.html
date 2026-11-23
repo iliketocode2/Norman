@@ -190,7 +190,7 @@
   (check-fail (ask claude Loose (ctx) 'loose) OverBudget)
 
   ;; And refusing costs nothing at all: no money, no time, no call.
-  (check-within (catch (ask claude Loose (ctx) 'loose) e 0)
+  (check-within (ask claude Loose (ctx) 'loose)
                 ([cost $0] [time 0s])))</code></pre>
     <div class="result"></div>
   </div>

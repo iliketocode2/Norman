@@ -210,7 +210,7 @@
 ;;; is refused and the whole search fails before anything is spent.
 (under ([script two-iterations] [cost $0.000001] [time 5min])
   (check-fail   (saga claude goal 3) OverBudget)
-  (check-within (catch (saga claude goal 3) e 0)
+  (check-within (saga claude goal 3)
                 ([cost $0] [time 0s])))
 
 ;;; ==================================================================
@@ -247,8 +247,8 @@
   [review-objectives (decline "Activity alone ignores toxicity.") (latency 2min)])
 
 (under ([script semi-declines] [cost $1.00] [time 1h])
-  (check-expect (catch (saga-at SemiPilot claude reviewer goal 3) e e)
-                (Declined "Activity alone ignores toxicity.")))
+  (check-expect (saga-at SemiPilot claude reviewer goal 3)
+                (fail (Declined "Activity alone ignores toxicity."))))
 
 ;;; Co-pilot: the person also reviews each verdict. Here they approve the plan,
 ;;; then stop the search after the first iteration by turning Revise into
@@ -297,4 +297,4 @@
 
 (under ([script slow-planner] [cost $1.00] [time 1h])
   (check-fail   (saga claude goal 3) PastDeadline)
-  (check-within (catch (saga claude goal 3) e 0) ([time 1min])))
+  (check-within (saga claude goal 3) ([time 1min])))

@@ -104,7 +104,7 @@
 
 (under ([script mixed] [cost $1.00] [time 1min])
   (check-fail   (best-of 2 ask-analyst buy?) (Raised _))              ; garbage and Sell: none accepted
-  (check-within (catch (best-of 2 ask-analyst buy?) e 0) ([time 3s])))
+  (check-within (best-of 2 ask-analyst buy?) ([time 3s])))
 
 (under ([script mixed] [cost $1.00] [time 2s])                        ; the 3 s attempt misses the deadline
   (check-fail   (best-of 2 ask-analyst accept-all) PastDeadline))     ; PastDeadline is never absorbed

@@ -128,7 +128,7 @@
 (check-error (show (Oops "x")))
 
 (grant py (kernel))
-(check-error (show py))
-(check-error (show claude))
-(check-error (show (lambda (x) x)))
-(check-error (show show))
+(check-type-error (show py))
+(check-type-error (show claude))
+(check-type-error (show (lambda (x) x)))
+(check-type-error (show show))
