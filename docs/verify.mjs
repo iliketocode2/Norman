@@ -92,6 +92,24 @@ function checkEditor() {
 
 checkEditor();
 
+/* The Markdown export and the search index are generated from the pages and
+ * committed, since Pages has no build step. Each must match what the
+ * generator makes from the pages as they are now. Line endings are ignored:
+ * a Windows checkout may have turned LF into CRLF. */
+async function checkGenerated() {
+  const { generate } = await import(new URL('../scripts/docs-assets.mjs', import.meta.url));
+  for (const [file, expected] of Object.entries(generate())) {
+    const full = path.join(here, file);
+    const actual = fs.existsSync(full) ? fs.readFileSync(full, 'utf8').replace(/\r\n/g, '\n') : null;
+    report(`generated: docs/${file}`, actual === expected ? [] : [
+      actual === null ? 'missing' : 'out of date with the pages it is generated from',
+      'run `node scripts/docs-assets.mjs` and commit the result',
+    ]);
+  }
+}
+
+await checkGenerated();
+
 // Every starter program in the playground.
 const { EXAMPLES } = await import(new URL('./examples.js', import.meta.url));
 for (const [name, source] of Object.entries(EXAMPLES)) {
