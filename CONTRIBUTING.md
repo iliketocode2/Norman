@@ -69,6 +69,19 @@ and a fresh build, and leaves a notice if the committed module has drifted from
 - The `.wasm` is committed on purpose: it is what lets Pages work with no CI.
 - `docs/examples.js` is generated from the verified blocks in `docs/index.html`;
   don't edit the shared ones by hand.
+- `docs/munorman-reference.md` (the language reference as Markdown, behind the
+  ".md" export button) and `docs/search-index.js` (what the search box in the
+  header searches) are generated from the pages. After changing a page, run
+
+  ```bash
+  node scripts/docs-assets.mjs
+  ```
+
+  and commit the result. `node docs/verify.mjs` fails if either is stale. The
+  Markdown comes from `docs/docs.html` alone; the index covers `docs.html`,
+  `index.html`, `demo.html` and `playground.html`, one entry per heading, so
+  give a new section's heading an `id` (and, in `docs.html`, a `data-short`
+  label for the sidebar if the heading is long).
 - Anything that can't run in a browser — the live oracle, HTTP, threads, the
   real clock — is behind `#[cfg(not(target_arch = "wasm32"))]`. Keep it that
   way, or the site stops building.
