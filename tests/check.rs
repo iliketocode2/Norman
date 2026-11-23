@@ -45,8 +45,10 @@ fn the_prelude_checks_and_its_types_are_as_designed() {
         ("repair", "(Num ((List Message) -> a ! e1) (List Message) -> a ! e1)"),
         ("attempt", "((-> a ! e1) (a -> Bool ! e2) -> (Option a) ! e1 e2)"),
         ("first-some", "((Option a) (Option a) -> (Option a))"),
-        ("best-of*", "(Num (-> a ! e1) (a -> Bool ! e2) -> (Option a) ! e1 e2)"),
-        ("best-of", "(Num (-> a ! e1) (a -> Bool ! e2) -> a ! e1 e2)"),
+        // best-of* runs f and check in two concurrent nodes, so neither may
+        // touch a stateful capability (design/12 §5.1).
+        ("best-of*", "Stateless e1 e2 => (Num (-> a ! e1) (a -> Bool ! e2) -> (Option a) ! e1 e2)"),
+        ("best-of", "Stateless e1 e2 => (Num (-> a ! e1) (a -> Bool ! e2) -> a ! e1 e2)"),
         ("system?", "(Message -> Bool)"),
         ("drop", "(Num (List a) -> (List a))"),
         ("last-n", "(Num (List a) -> (List a))"),
@@ -97,8 +99,10 @@ fn effects_flow_through_let_par_workflow_and_recursion() {
 "#,
         &["via-let", "via-par", "via-node", "via-body", "via-rec", "via-catch"],
     );
-    for g in &got[..4] {
-        assert_eq!(g, "((-> a ! e1) -> a ! e1)");
+    for (i, g) in got[..4].iter().enumerate() {
+        // `par` runs f twice at once, so f must be stateless.
+        let want = if i == 1 { "Stateless e1 => ((-> a ! e1) -> a ! e1)" } else { "((-> a ! e1) -> a ! e1)" };
+        assert_eq!(g, want);
     }
     assert_eq!(got[4], "(Num (-> a ! e1) -> Num ! e1)");
     assert_eq!(got[5], "((-> a ! e1) (-> a ! e2) -> a ! e1 e2)", "a handler's effect counts too");
@@ -473,6 +477,89 @@ fn an_ill_typed_test_fails_alone() {
     );
     assert!(r.ok(), "the file is fine: {:?}", r.errors);
     assert_eq!(r.test_errors.len(), 2, "{:?}", r.test_errors);
+}
+
+// ------------------------------------------------------------------ ownership
+
+/// Check `GRANTS` plus `src`, plus a stateless HTTP grant.
+fn with_grants(src: &str) -> String {
+    format!("{}(grant web (http))\n{}", GRANTS, src)
+}
+
+/// Two concurrent nodes that share a stateful capability are a type error,
+/// found before anything runs: today's run-time WORKFLOWSHARED, statically
+/// (design/12 §5.1). It finds the sharing through a function's effect, and
+/// through a capability a node merely holds, as the run-time check does.
+#[test]
+fn sharing_a_stateful_capability_is_a_type_error() {
+    for src in [
+        "(define f () (par (call py exec \"1\") (call py exec \"2\")))",
+        "(define run (c) (call py exec c))\n(define f () (par (run \"1\") (run \"2\")))",
+        "(define f () (workflow ([a (call files read \"x\")] [b (call files write \"y\")]) a))",
+        "(define f () (par (list py) (call py exec \"x\")))",
+        // A fork is a call on its parent, so forking inside the workflow
+        // shares the parent: fork first.
+        "(define f () (par (call py exec \"1\") (call (call py fork) exec \"2\")))",
+    ] {
+        let err = rejected(&with_grants(src));
+        assert!(err.contains("two concurrent workflow nodes would both use"), "for {}\ngot: {}", src, err);
+    }
+}
+
+/// What ownership allows: different capabilities, a stateless one, a fork
+/// made before the workflow, and models and people, which aren't capabilities.
+#[test]
+fn what_ownership_allows() {
+    for src in [
+        "(define f () (par (call py exec \"1\") (call open exec \"2\")))",
+        "(define f () (par (call web get \"a\") (call web get \"b\")))",
+        "(define f () (let* ([k (call py fork)]) (par (call py exec \"1\") (call k exec \"2\"))))",
+        "(define forked () (call py fork))\n\
+         (define f () (let* ([a (forked)] [b (forked)]) (par (call a exec \"1\") (call b exec \"2\"))))",
+        "(define f () (par (ask claude Num (list) 'a) (ask claude Num (list) 'b)))",
+        "(define f () (best-of 3 (lambda () (ask claude Num (list) 'q)) (lambda (x) (> x 0))))",
+    ] {
+        let (_, r) = check(&with_grants(src));
+        assert!(r.ok(), "for {}\nrejected: {:?}", src, r.errors);
+    }
+}
+
+/// `best-of` runs its thunk in concurrent nodes, so it is `Stateless` in it,
+/// and a thunk that calls a kernel is rejected where `best-of` is used, not
+/// inside it (design/12 §7).
+#[test]
+fn best_of_over_a_kernel_is_rejected_where_it_is_used() {
+    let err = rejected(&with_grants("(define f () (best-of 2 (lambda () (call py exec \"x = 1\")) (lambda (x) #t)))"));
+    assert!(err.contains("in the definition of f") && err.contains("py, a stateful capability"), "{}", err);
+    // A stateless capability is fine.
+    assert!(check(&with_grants("(define f () (best-of 2 (lambda () (call web get \"u\")) (lambda (x) #t)))")).1.ok());
+}
+
+/// A function that runs two capability parameters at once is generic in
+/// both, with the constraint that they differ: the same kernel twice is
+/// rejected, a kernel and a fork of it are not.
+#[test]
+fn two_capability_parameters_must_differ_when_run_at_once() {
+    let src = with_grants("(define both (k1 k2) (par (call k1 exec \"1\") (call k2 exec \"2\")))\n");
+    let got = schemes(&src, &["both"]);
+    assert!(got[0].contains(" # "), "{}", got[0]);
+    let err = rejected(&format!("{}(define f () (both py py))", src));
+    assert!(err.contains("py, a stateful capability"), "{}", err);
+    let ok = format!("{}(define f () (let* ([k (call py fork)]) (both py k)))\n(define g () (both py open))", src);
+    assert!(check(&ok).1.ok(), "{:?}", check(&ok).1.errors);
+}
+
+/// A `val` bound to a fork is one kernel (§4.1): using it in two nodes is
+/// sharing, although each *use* of a function that forks is a new kernel.
+#[test]
+fn a_val_bound_to_a_fork_is_one_kernel() {
+    let err =
+        rejected(&with_grants("(val k (call py fork))\n(define f () (par (call k exec \"1\") (call k exec \"2\")))"));
+    assert!(err.contains("the same stateful capability"), "{}", err);
+    let err = rejected(&with_grants(
+        "(define f () (let* ([k (call py fork)]) (par (call k exec \"1\") (call k exec \"2\"))))",
+    ));
+    assert!(err.contains("the same stateful capability"), "{}", err);
 }
 
 // ------------------------------------------------------------------ the examples

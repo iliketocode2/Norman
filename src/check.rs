@@ -1,5 +1,6 @@
-//! The type and effect checker (design/12), steps 1 to 3: inference for
-//! every form, without ownership (step 4).
+//! The type and effect checker (design/12), steps 1 to 4: inference for
+//! every form, and ownership: concurrent workflow nodes share no stateful
+//! capability (§5).
 //!
 //! - Types are inferred as in Ramsey's µML (Hindley-Milner), with type
 //!   parameters on datatypes and records (design/12, T5).
@@ -87,25 +88,46 @@ pub enum Atom {
     /// Reading `(remaining)`.
     Observe,
     Ask(Nm),
-    Call(Nm),
+    /// A call on the capability named by the first, of the kind named by the
+    /// second (`#Kernel`, `#Filesystem`, `#Http`, or a variable). The kind is
+    /// what tells ownership whether the call touches something stateful
+    /// (design/12 §1, "Names have kinds"); it isn't printed.
+    Call(Nm, Nm),
     Consult(Nm),
 }
 
 impl Atom {
-    fn name(&self) -> Option<&Nm> {
+    fn names(&self) -> Vec<&Nm> {
         match self {
-            Atom::Observe => None,
-            Atom::Ask(n) | Atom::Call(n) | Atom::Consult(n) => Some(n),
+            Atom::Observe => vec![],
+            Atom::Ask(n) | Atom::Consult(n) => vec![n],
+            Atom::Call(n, k) => vec![n, k],
         }
     }
 
-    fn map(&self, f: impl FnOnce(&Nm) -> Nm) -> Atom {
+    fn map(&self, f: impl Fn(&Nm) -> Nm) -> Atom {
         match self {
             Atom::Observe => Atom::Observe,
             Atom::Ask(n) => Atom::Ask(f(n)),
-            Atom::Call(n) => Atom::Call(f(n)),
+            Atom::Call(n, k) => Atom::Call(f(n), f(k)),
             Atom::Consult(n) => Atom::Consult(f(n)),
         }
+    }
+}
+
+/// A workflow node's footprint (design/12 §5.1): the capabilities it can
+/// use, each with its kind, and the effect variables whose calls it makes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Foot {
+    names: Vec<(Ty, Ty)>,
+    evs: Vec<EV>,
+}
+
+/// Whether a capability of this kind is stateful, if the kind is known.
+fn stateful(kind: &Ty) -> Option<bool> {
+    match kind {
+        Ty::Con(k, _) => Some(matches!(&**k, "#Kernel" | "#Filesystem")),
+        _ => None,
     }
 }
 
@@ -142,6 +164,10 @@ pub enum Pred {
     /// `Offers(κ, op, τ)`: the grant named κ offers `op`, answering τ. The
     /// first argument is a capability's *offers* name (see the module notes).
     Offers(Ty, Name, Ty),
+    /// `F₁ # F₂`: two concurrent workflow nodes share no stateful
+    /// capability (§5.1). When both footprints include the same effect
+    /// variable this is `Stateless(φ)`, and it prints that way.
+    Disjoint(Foot, Foot),
 }
 
 /// `∀ tvs evs. preds ⇒ ty`. Quantified effect variables carry their lower
@@ -216,8 +242,72 @@ impl State {
         match self.prune(t) {
             Ty::Grant(g) => Nm::Grant(g),
             Ty::Var(v) => Nm::Var(v),
+            // A capability's kind, which a `call` atom carries too.
+            Ty::Con(k, args) if args.is_empty() => Nm::Grant(k),
             other => unreachable!("a name position holds {:?}", other),
         }
+    }
+
+    /// The type a name in an atom stands for.
+    fn nm_ty(&self, n: &Nm) -> Ty {
+        match n {
+            Nm::Grant(k) if k.starts_with('#') => con(k),
+            Nm::Grant(g) => Ty::Grant(g.clone()),
+            Nm::Var(v) => self.prune(&Ty::Var(*v)),
+        }
+    }
+
+    /// A footprint with its effect variables opened up: the capabilities of
+    /// every `call` they reach, and every variable they reach, by root.
+    fn expand(&mut self, f: &Foot) -> Foot {
+        let mut names: Vec<(Ty, Ty)> = f.names.iter().map(|(n, k)| (self.zonk(n), self.zonk(k))).collect();
+        let mut evs = BTreeSet::new();
+        for &e in &f.evs {
+            let (atoms, reached) = self.closure(e);
+            for a in atoms {
+                if let Atom::Call(n, k) = a {
+                    names.push((self.nm_ty(&n), self.nm_ty(&k)));
+                }
+            }
+            evs.extend(reached);
+        }
+        names.dedup();
+        Foot { names, evs: evs.into_iter().collect() }
+    }
+
+    /// `F₁ # F₂`, as far as it can be decided now: an error if both use one
+    /// stateful capability, and otherwise whether it may still fail later.
+    fn disjoint(&mut self, l: &Foot, r: &Foot) -> R<bool> {
+        let (l, r) = (self.expand(l), self.expand(r));
+        // An effect variable can still grow, and so conflict with anything
+        // on the other side.
+        let grows = |a: &Foot, b: &Foot| !a.evs.is_empty() && !(b.names.is_empty() && b.evs.is_empty());
+        let mut open = grows(&l, &r) || grows(&r, &l);
+        for (n1, k1) in &l.names {
+            for (n2, k2) in &r.names {
+                let (s1, s2) = (stateful(k1), stateful(k2));
+                if s1 == Some(false) || s2 == Some(false) {
+                    continue;
+                }
+                match (n1, n2) {
+                    (Ty::Grant(a), Ty::Grant(b)) if a != b => {}
+                    _ if n1 == n2 && (s1 == Some(true) || s2 == Some(true)) => {
+                        let what = match n1 {
+                            Ty::Grant(g) => format!("{}, a stateful capability", g),
+                            _ => "the same stateful capability".to_string(),
+                        };
+                        return Err(format!(
+                            "two concurrent workflow nodes would both use {}. Give each node its own: fork it \
+                             before the workflow, with (call k fork) (design/12 §5)",
+                            what
+                        ));
+                    }
+                    // Two names that may yet turn out to be one.
+                    _ => open = true,
+                }
+            }
+        }
+        Ok(open)
     }
 
     /// An atom with its name resolved as far as the substitution allows.
@@ -403,6 +493,12 @@ impl State {
                 self.ftv(a, out);
                 self.ftv(b, out);
             }
+            Pred::Disjoint(l, r) => {
+                for (n, k) in l.names.iter().chain(&r.names) {
+                    self.ftv(n, out);
+                    self.ftv(k, out);
+                }
+            }
         }
     }
 
@@ -410,9 +506,29 @@ impl State {
     fn atom_tvs(&mut self, phi: EV, out: &mut BTreeSet<TV>) {
         let (atoms, _) = self.closure(phi);
         for a in atoms {
-            if let Some(Nm::Var(v)) = a.name() {
-                out.insert(*v);
+            for n in a.names() {
+                if let Nm::Var(v) = n {
+                    out.insert(*v);
+                }
             }
+        }
+    }
+
+    /// Whether a predicate may still matter to something that outlives the
+    /// current group: it mentions a type variable in `tvs`, or (for `#`) it
+    /// reaches an effect variable in `evs`.
+    fn pred_live(&mut self, p: &Pred, tvs: &BTreeSet<TV>, evs: &BTreeSet<EV>) -> bool {
+        let mut vs = BTreeSet::new();
+        self.pred_ftv(p, &mut vs);
+        if vs.iter().any(|v| tvs.contains(v)) {
+            return true;
+        }
+        match p {
+            Pred::Disjoint(l, r) => {
+                let (l, r) = (self.expand(l), self.expand(r));
+                l.evs.iter().chain(&r.evs).any(|e| evs.contains(e))
+            }
+            _ => false,
         }
     }
 
@@ -425,6 +541,13 @@ impl State {
             Pred::Div(a, b, c) => Pred::Div(self.zonk(a), self.zonk(b), self.zonk(c)),
             Pred::Has(a, f, b) => Pred::Has(self.zonk(a), f.clone(), self.zonk(b)),
             Pred::Offers(a, op, b) => Pred::Offers(self.zonk(a), op.clone(), self.zonk(b)),
+            Pred::Disjoint(l, r) => {
+                let mut z = |f: &Foot| Foot {
+                    names: f.names.iter().map(|(n, k)| (self.zonk(n), self.zonk(k))).collect(),
+                    evs: f.evs.iter().map(|&e| self.find(e)).collect(),
+                };
+                Pred::Disjoint(z(l), z(r))
+            }
         }
     }
 }
@@ -586,7 +709,7 @@ impl Printer {
         match a {
             Atom::Observe => "observe".into(),
             Atom::Ask(n) => format!("ask {}", nm(n)),
-            Atom::Call(n) => format!("call {}", nm(n)),
+            Atom::Call(n, _) => format!("call {}", nm(n)),
             Atom::Consult(n) => format!("consult {}", nm(n)),
         }
     }
@@ -601,6 +724,28 @@ impl Printer {
             Pred::Div(a, b, c) => format!("Div {} {} {}", t(st, a), t(st, b), t(st, c)),
             Pred::Has(a, f, b) => format!("Has {} {} {}", t(st, a), f, t(st, b)),
             Pred::Offers(a, op, b) => format!("Offers {} {} {}", t(st, a), op, t(st, b)),
+            Pred::Disjoint(l, r) => {
+                // Shown by what a reader can see: the capabilities, and the
+                // effect variables named in the type.
+                let mut side = |st: &mut State, f: &Foot| -> Vec<String> {
+                    let f = st.expand(f);
+                    let mut out: Vec<String> = f.names.iter().map(|(n, _)| self.ty(st, n, false)).collect();
+                    for e in f.evs {
+                        if self.shown.contains(&e) {
+                            out.push(self.ename(e));
+                        }
+                    }
+                    out.sort();
+                    out.dedup();
+                    out
+                };
+                let (l, r) = (side(st, l), side(st, r));
+                if l == r && !l.is_empty() {
+                    format!("Stateless {}", l.join(" "))
+                } else {
+                    format!("({}) # ({})", l.join(" "), r.join(" "))
+                }
+            }
         }
     }
 }
@@ -909,8 +1054,9 @@ impl Checker {
     /// Infer `e` with no local variables, then discharge its predicates.
     fn infer_closed(&mut self, e: &ExpRef, mark: usize) -> R<Ty> {
         let mut env = vec![];
-        let result =
-            self.infer(&mut env, e).and_then(|(t, _)| self.settle(mark, &BTreeSet::new(), &BTreeSet::new()).map(|_| t));
+        let result = self
+            .infer(&mut env, e)
+            .and_then(|(t, _)| self.settle(mark, &BTreeSet::new(), &BTreeSet::new(), &BTreeSet::new()).map(|_| t));
         // Nothing about a closed expression is owed to anything later.
         self.st.preds.truncate(mark);
         result
@@ -951,11 +1097,14 @@ impl Checker {
         // Generalize: the group's types share variables, so quantify each
         // over the variables of all of them.
         let mut gen_tvs = BTreeSet::new();
+        let mut gen_evs = BTreeSet::new();
         for (_, t) in &mono {
             self.st.ftv(t, &mut gen_tvs);
+            self.st.fev(t, &mut gen_evs);
         }
-        if let Err(e) = self.settle(mark, &BTreeSet::new(), &gen_tvs) {
-            report.errors.push(format!("{}: {}", items[group[0]].0, e));
+        if let Err(e) = self.settle(mark, &BTreeSet::new(), &gen_tvs, &gen_evs) {
+            let names: Vec<&str> = mono.iter().map(|(n, _)| &**n).collect();
+            report.errors.push(format!("{}: in the definition of {}: {}", items[group[0]].0, names.join(" and "), e));
             failed = true;
         }
         let preds: Vec<Pred> = self.st.preds.drain(mark..).collect();
@@ -970,7 +1119,7 @@ impl Checker {
             let sc = if failed {
                 Scheme::mono(t)
             } else {
-                self.generalize(&t, &preds, &BTreeSet::new(), &BTreeSet::new(), values)
+                self.generalize(&t, &preds, &BTreeSet::new(), &BTreeSet::new(), values).0
             };
             self.globals.insert(name.clone(), Global::Scheme(sc));
             self.defined_in.insert(name, loc.to_string());
@@ -987,7 +1136,7 @@ impl Checker {
         env_tvs: &BTreeSet<TV>,
         env_evs: &BTreeSet<EV>,
         value: bool,
-    ) -> Scheme {
+    ) -> (Scheme, Vec<Pred>) {
         let ty = self.st.zonk(t);
         let mut roots = BTreeSet::new();
         self.st.fev(&ty, &mut roots);
@@ -1015,16 +1164,30 @@ impl Checker {
                 reached.into_iter().filter(|v| *v != r && (quantified.contains(v) || env_evs.contains(v))).collect();
             evs.push((r, Eff { atoms, vars }));
         }
-        let mut kept = vec![];
+        // The predicates on what the scheme quantifies go with it. A `#` is
+        // flattened like the effect bounds, so it mentions only variables
+        // instantiating will map, and capabilities.
+        let (mut kept, mut rest) = (vec![], vec![]);
+        let tv_set: BTreeSet<TV> = tvs.iter().copied().collect();
         for p in preds {
             let z = self.st.zonk_pred(p);
-            let mut v = BTreeSet::new();
-            self.st.pred_ftv(&z, &mut v);
-            if v.iter().any(|x| tvs.contains(x)) {
-                kept.push(z);
+            if !self.st.pred_live(&z, &tv_set, &quantified) {
+                rest.push(z);
+                continue;
             }
+            kept.push(match z {
+                Pred::Disjoint(l, r) => {
+                    let mut flat = |f: &Foot| {
+                        let mut f = self.st.expand(f);
+                        f.evs.retain(|e| quantified.contains(e) || env_evs.contains(e));
+                        f
+                    };
+                    Pred::Disjoint(flat(&l), flat(&r))
+                }
+                other => other,
+            });
         }
-        Scheme { tvs, evs, preds: kept, ty }
+        (Scheme { tvs, evs, preds: kept, ty }, rest)
     }
 
     fn instantiate(&mut self, sc: &Scheme) -> Ty {
@@ -1055,7 +1218,7 @@ impl Checker {
     /// point, default the numeric ones on variables that `keep` doesn't
     /// mention and the environment doesn't hold, and report what can never
     /// hold. Predicates still on `keep`'s variables stay for the scheme.
-    fn settle(&mut self, mark: usize, env_tvs: &BTreeSet<TV>, keep: &BTreeSet<TV>) -> R<()> {
+    fn settle(&mut self, mark: usize, env_tvs: &BTreeSet<TV>, keep: &BTreeSet<TV>, live: &BTreeSet<EV>) -> R<()> {
         loop {
             self.simplify_from(mark)?;
             // Default per binding group (design/12 §3).
@@ -1101,9 +1264,8 @@ impl Checker {
                     return Err(format!("can't tell which record's field {} this is; several records have it", f));
                 }
             }
-            let mut vs = BTreeSet::new();
-            self.st.pred_ftv(&p, &mut vs);
-            if vs.iter().any(|v| keep.contains(v) || env_tvs.contains(v)) {
+            let held: BTreeSet<TV> = keep.union(env_tvs).copied().collect();
+            if self.st.pred_live(&p, &held, live) {
                 i += 1;
                 continue;
             }
@@ -1115,6 +1277,10 @@ impl Checker {
                 }
                 Pred::Has(_, f, _) => {
                     return Err(format!("can't tell which record's field {} this is; several records have it", f));
+                }
+                // Checked as far as it ever can be: nothing can extend it.
+                Pred::Disjoint(..) => {
+                    self.st.preds.remove(i);
                 }
                 _ => i += 1,
             }
@@ -1257,6 +1423,13 @@ impl Checker {
                 }
                 _ => unreachable!("Offers holds a name"),
             },
+            Pred::Disjoint(l, r) => {
+                if self.st.disjoint(l, r)? {
+                    Ok(Step::Keep)
+                } else {
+                    Ok(Step::Done)
+                }
+            }
             Pred::Has(t, f, ft) => match t {
                 Ty::Grant(_) => unreachable!("a name is never a value's type"),
                 Ty::Con(r, _) if is_grant_type(r) => {
@@ -1509,17 +1682,13 @@ impl Checker {
                 }
                 let mut keep = BTreeSet::new();
                 self.st.ftv(&rt, &mut keep);
-                self.settle(mark, &env_tvs, &keep)?;
+                let mut live = env_evs.clone();
+                self.st.fev(&rt, &mut live);
+                self.settle(mark, &env_tvs, &keep, &live)?;
                 let preds: Vec<Pred> = self.st.preds.drain(mark..).collect();
-                let sc = self.generalize(&rt, &preds, &env_tvs, &env_evs, is_value(rhs));
+                let (sc, rest) = self.generalize(&rt, &preds, &env_tvs, &env_evs, is_value(rhs));
                 // Predicates the scheme didn't take stay pending outside it.
-                let taken: Vec<Pred> = sc.preds.clone();
-                for p in preds {
-                    let z = self.st.zonk_pred(&p);
-                    if !taken.contains(&z) {
-                        self.st.preds.push(z);
-                    }
-                }
+                self.st.preds.extend(rest);
                 env.push((x.clone(), sc));
                 let result = self.infer(env, body);
                 env.pop();
@@ -1601,17 +1770,17 @@ impl Checker {
                     self.st
                         .unify(&kt, &cap_of(con("#Kernel"), kappa.clone(), offers.clone()))
                         .map_err(|m| format!("only a kernel can fork: {}", m))?;
-                    let calls = Eff::atom(Atom::Call(self.st.nm(&kappa)));
+                    let calls = Eff::atom(Atom::Call(self.st.nm(&kappa), Nm::Grant(Rc::from("#Kernel"))));
                     let forked = self.st.fresh_cap_name();
                     return Ok((cap_of(con("#Kernel"), forked, offers), eff.union(&calls)));
                 }
                 let kind = self.st.fresh();
                 self.st
-                    .unify(&kt, &cap_of(kind, kappa.clone(), offers.clone()))
+                    .unify(&kt, &cap_of(kind.clone(), kappa.clone(), offers.clone()))
                     .map_err(|m| format!("call needs a capability: {}", m))?;
                 let res = self.st.fresh();
                 self.st.preds.push(Pred::Offers(offers, op.clone(), res.clone()));
-                let calls = Eff::atom(Atom::Call(self.st.nm(&kappa)));
+                let calls = Eff::atom(Atom::Call(self.st.nm(&kappa), self.st.nm(&kind)));
                 Ok((res, eff.union(&calls)))
             }
             Exp::Consult { human, ty, prompt, proposal, .. } => {
@@ -1662,9 +1831,11 @@ impl Checker {
             }
             Exp::Workflow(w) => {
                 // Each node sees the nodes it depends on; the body sees them
-                // all. Ownership (design/12 §5) is step 4.
+                // all. Every two nodes may run at once, so their footprints
+                // must share no stateful capability (design/12 §5.1).
                 let n = env.len();
                 let mut types: Vec<Option<Ty>> = vec![None; w.nodes.len()];
+                let mut feet: Vec<Foot> = vec![Foot::default(); w.nodes.len()];
                 let mut eff = Eff::default();
                 let mut remaining: Vec<usize> = (0..w.nodes.len()).collect();
                 while !remaining.is_empty() {
@@ -1680,8 +1851,14 @@ impl Checker {
                     let r = self.infer(env, &node.exp);
                     env.truncate(n);
                     let (t, e) = r?;
+                    feet[i] = self.footprint(env, w, node, &e);
                     types[i] = Some(t);
                     eff = eff.union(&e);
+                }
+                for i in 0..feet.len() {
+                    for j in i + 1..feet.len() {
+                        self.st.preds.push(Pred::Disjoint(feet[i].clone(), feet[j].clone()));
+                    }
                 }
                 for (node, t) in w.nodes.iter().zip(&types) {
                     env.push((node.name.clone(), Scheme::mono(t.clone().unwrap())));
@@ -1691,6 +1868,50 @@ impl Checker {
                 let (bt, be) = r?;
                 Ok((bt, eff.union(&be)))
             }
+        }
+    }
+
+    /// A node's footprint (§5.1): the calls its effect makes, and the
+    /// capabilities its free variables hold, which it could use or hand on.
+    /// Other nodes' results are not counted: a node that holds one runs after
+    /// the node that made it. A function's type says what it takes and
+    /// makes, not what it holds, so arrows aren't looked inside; what a
+    /// function calls is in the node's effect if the node calls it.
+    fn footprint(&mut self, env: &[(Name, Scheme)], w: &WorkflowDef, node: &Node, e: &Eff) -> Foot {
+        let mut names = vec![];
+        for a in &e.atoms {
+            if let Atom::Call(n, k) = self.st.norm_atom(a) {
+                names.push((self.st.nm_ty(&n), self.st.nm_ty(&k)));
+            }
+        }
+        for x in &node.fv {
+            if w.nodes.iter().any(|m| &m.name == x) {
+                continue;
+            }
+            let sc = match env.iter().rev().find(|(y, _)| y == x) {
+                Some((_, sc)) => sc.clone(),
+                None => match self.globals.get(x) {
+                    Some(Global::Scheme(sc)) => sc.clone(),
+                    _ => continue,
+                },
+            };
+            self.held(&sc.ty, &sc.tvs, &mut names);
+        }
+        Foot { names, evs: e.vars.iter().map(|&v| self.st.find(v)).collect() }
+    }
+
+    /// The capabilities a value of type `t` holds, outside any arrow, except
+    /// those whose names a scheme quantifies (they are parameters, not held).
+    fn held(&self, t: &Ty, quantified: &[TV], out: &mut Vec<(Ty, Ty)>) {
+        match self.st.prune(t) {
+            Ty::Con(c, args) if &*c == "#Cap" => {
+                let name = self.st.prune(&args[1]);
+                if !matches!(name, Ty::Var(v) if quantified.contains(&v)) {
+                    out.push((name, self.st.prune(&args[0])));
+                }
+            }
+            Ty::Con(_, args) => args.iter().for_each(|a| self.held(a, quantified, out)),
+            Ty::Var(_) | Ty::Grant(_) | Ty::Fun(..) => {}
         }
     }
 
@@ -1748,7 +1969,7 @@ impl Checker {
         if let TestKind::TypeError(e) = &t.kind {
             let mark = self.st.preds.len();
             let typed = self.infer(&mut vec![], e).and_then(|(ty, _)| {
-                self.settle(mark, &BTreeSet::new(), &BTreeSet::new())?;
+                self.settle(mark, &BTreeSet::new(), &BTreeSet::new(), &BTreeSet::new())?;
                 let mut p = Printer::default();
                 Ok(p.ty(&mut self.st, &ty, true))
             });
@@ -1783,7 +2004,7 @@ impl Checker {
                 TestKind::TypeError(_) => unreachable!("handled above"),
             }
         })();
-        let settled = result.and_then(|_| self.settle(mark, &BTreeSet::new(), &BTreeSet::new()));
+        let settled = result.and_then(|_| self.settle(mark, &BTreeSet::new(), &BTreeSet::new(), &BTreeSet::new()));
         self.st.preds.truncate(mark);
         settled
     }
@@ -1843,6 +2064,13 @@ fn subst_pred(p: &Pred, tm: &HashMap<TV, Ty>, em: &HashMap<EV, EV>) -> Pred {
         Pred::Div(a, b, c) => Pred::Div(s(a), s(b), s(c)),
         Pred::Has(a, f, b) => Pred::Has(s(a), f.clone(), s(b)),
         Pred::Offers(a, op, b) => Pred::Offers(s(a), op.clone(), s(b)),
+        Pred::Disjoint(l, r) => {
+            let f = |x: &Foot| Foot {
+                names: x.names.iter().map(|(n, k)| (s(n), s(k))).collect(),
+                evs: x.evs.iter().map(|e| *em.get(e).unwrap_or(e)).collect(),
+            };
+            Pred::Disjoint(f(l), f(r))
+        }
     }
 }
 

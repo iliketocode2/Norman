@@ -144,7 +144,7 @@ fn the_command_fails_when_anything_goes_wrong() {
 
 #[test]
 fn deliberately_wrong_tests_all_fail() {
-    for (file, total) in [("tests/must-fail.nrm", 10), ("tests/must-fail-consult.nrm", 4)] {
+    for (file, total) in [("tests/must-fail.nrm", 11), ("tests/must-fail-consult.nrm", 4)] {
         // Each file must check, so each mutant fails for the reason its
         // comment gives, not because a name it uses failed to check.
         let report = munorman::check::Checker::new().check_file(Path::new(file));
