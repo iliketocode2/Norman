@@ -190,11 +190,12 @@
 (<span class="lit">list</span> {<span class="meta">exp</span>})                <span class="meta">; a list</span>
 (<span class="lit">cons</span> <span class="meta">exp</span> <span class="meta">exp</span>)              <span class="meta">; prepend</span></pre>
 
-    <h2 id="effects">The six agentic forms</h2>
+    <h2 id="effects">The seven agentic forms</h2>
     <p>
       These are what the language adds. Everything a program can do to the outside world happens
-      through <code>ask</code> and <code>call</code>; there is no other door, which is why a budget,
-      a deadline, the trace and the ownership rules apply to <em>everything</em>.
+      through <code>ask</code>, <code>call</code> and <code>consult</code>; there is no other door,
+      which is why a budget, a deadline, the trace and the ownership rules apply to
+      <em>everything</em>.
     </p>
 
     <h3 id="ask" data-short="ask">ask</h3>
@@ -223,6 +224,58 @@
       come from there. What the operation answers with is declared by the grant, not written at the
       call site — see <a href="#hosts">Hosts and capabilities</a>.
     </p>
+
+    <h3 id="consult" data-short="consult">consult</h3>
+    <pre class="syntax">(<span class="lit">consult</span> <span class="meta">person</span> <span class="meta">ty</span> <span class="meta">prompt</span> [<span class="lit">propose</span> <span class="meta">exp</span>] [<span class="meta">'site</span>])</pre>
+    <p>
+      Put a question to a person <strong>once</strong>, for an answer of type <em>ty</em>. The
+      person comes from a <a href="#hosts"><code>human</code> grant</a>, and <em>ty</em> must be
+      askable, exactly as for <code>ask</code>. The answer is validated the same way.
+    </p>
+    <p>
+      With <code>[propose <em>v</em>]</code>, the person sees <em>v</em> as a pre-filled answer and
+      may approve it, edit it, or decline. <strong>Approving gives back exactly <em>v</em></strong>,
+      editing gives back the edit, and declining fails with <code>(Declined reason)</code>. Run the
+      answer, never the original proposal, and what runs is what was approved.
+      <code>retry</code> never retries <code>Declined</code>.
+    </p>
+    <p>
+      Waiting for a person spends the scope's time, so give a consult's scope room for a person and
+      each model call its own short <code>budget</code> inside it. A person costs no money unless
+      the grant gives a price.
+    </p>
+
+    <div class="example">
+      <div class="head"><span class="title">consult.nrm</span>
+        <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant reviewer (human))
+
+(define approved-plan (plan)
+  (consult reviewer (List (Text 80) 3)
+           "Approve, edit or decline this plan."
+           [propose plan]
+           'review))
+
+(val plan (list "read the failing test" "fix the parser"))
+
+(script approves  [review (approve) (latency 1min)])
+(script edits     [review (answer "[\"read the failing test\"]") (latency 2min)])
+(script declines  [review (decline "Don't touch the parser.") (latency 30s)])
+
+(under ([script approves] [time 1h])
+  ;; Approving gives back exactly what was proposed.
+  (check-expect (approved-plan plan) plan))
+
+(under ([script edits] [time 1h])
+  ;; Editing gives back the edit, and that is what the program runs.
+  (check-expect (approved-plan plan) (list "read the failing test")))
+
+(under ([script declines] [time 1h])
+  ;; Declining is a failure carrying the reason; retry leaves it alone.
+  (check-expect (approved-plan plan) (fail (Declined "Don't touch the parser.")))
+  (check-fail   (retry 3 (lambda () (approved-plan plan))) (Declined _)))</code></pre>
+      <div class="result"></div>
+    </div>
 
     <h3 id="fail-catch" data-short="fail and catch">fail and catch</h3>
     <pre class="syntax">(<span class="lit">fail</span> <span class="meta">exp</span>)
@@ -417,7 +470,15 @@
     <pre class="syntax">(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">model</span> [<span class="lit">id</span> <span class="meta">"…"</span>] [<span class="lit">in</span> <span class="meta">p</span>] [<span class="lit">out</span> <span class="meta">p</span>] [<span class="lit">cache</span> <span class="meta">5min|1h</span>] [<span class="lit">cache-read</span> <span class="meta">p</span>] [<span class="lit">ceiling</span> <span class="meta">n</span>] [<span class="lit">think</span> <span class="meta">n</span>]))
 (<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">kernel</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))        <span class="meta">; stateful</span>
 (<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">filesystem</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))    <span class="meta">; stateful</span>
-(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">http</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))          <span class="meta">; stateless</span></pre>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">http</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))          <span class="meta">; stateless</span>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">human</span> [<span class="lit">price</span> <span class="meta">money</span>]))        <span class="meta">; a person, for consult; the price is optional</span></pre>
+    <p>
+      Live, only <code>model</code> and <code>kernel</code> (with <code>--python</code>) have real
+      hosts so far; <code>filesystem</code> and <code>http</code> answer only from scripts. A
+      <code>human</code> grant must be bound on the command line before a live run starts:
+      <code>--human <em>name</em>=tty</code> asks at the terminal, and
+      <code>--human <em>name</em>=unattended</code> makes any consult stop the run.
+    </p>
 
     <h3 id="tool-types" data-short="What a tool answers with">What a tool answers with</h3>
     <p>
@@ -480,6 +541,9 @@
         <tr><td><code>(provider-error "503 …")</code></td><td>the provider fails</td></tr>
         <tr><td><code>(result "…")</code></td><td>a tool succeeds</td></tr>
         <tr><td><code>(error "…")</code></td><td>a tool fails</td></tr>
+        <tr><td><code>(approve)</code></td><td>a person approves the proposal unchanged</td></tr>
+        <tr><td><code>(answer "…")</code></td><td>a person gives this answer, as JSON</td></tr>
+        <tr><td><code>(decline "…")</code></td><td>a person declines, with this reason</td></tr>
         <tr><td><code>(latency 2s)</code></td><td>how long it takes on the simulated clock</td></tr>
       </tbody>
     </table>
@@ -547,7 +611,11 @@
 (<span class="lit">budget</span> ([<span class="lit">cost</span> <span class="meta">e</span>]) <span class="meta">body</span>)    =  BUDGET(<span class="meta">e</span>, ∞, <span class="meta">body</span>)</pre>
 
     <h2 id="wellformed">What is checked before a program runs</h2>
-    <p>Each of these is decidable from the syntax alone, so the parser rejects it outright.</p>
+    <p>
+      A whole file is checked before any of it runs, and a program that doesn't check never starts,
+      so a mistake found here can't spend money. There are two passes.
+    </p>
+    <p><strong>The parser</strong> rejects what is decidable from the syntax alone:</p>
     <ol>
       <li>The formals of a <code>lambda</code> or <code>define</code> are distinct; so are a datatype's constructors and a record's fields.</li>
       <li>A <code>workflow</code>'s binding names are distinct.</li>
@@ -556,10 +624,24 @@
       <li>Forms are applied with the right number of parts.</li>
     </ol>
     <p>
-      Askability is checked when the <code>ask</code> runs rather than at parse time, because a
-      function may ask for a datatype defined later in the file. Everything else about types is a
-      run-time check too. Moving those to compile time is what the planned type and effect system is
-      for — see <a href="./#status">Status</a>.
+      <strong>The type and effect checker</strong> then infers every type, with no annotations, and
+      rejects a program that could reach any of these:
+    </p>
+    <ul>
+      <li>an <code>if</code> on a non-Boolean; applying a non-function, or with the wrong number of arguments; an unbound name; an unknown constructor, record or field;</li>
+      <li><code>ask</code> on a non-model, <code>consult</code> on a non-person, <code>call</code> on a non-capability;</li>
+      <li>an <strong>unaskable type</strong> in <code>ask</code> or <code>consult</code>, or a proposal of the wrong shape;</li>
+      <li>an undeclared operation on a closed grant; <code>show</code> of a function, model, person or capability; <code>fail</code> of a non-<code>Failure</code>;</li>
+      <li>two concurrent <code>workflow</code> steps that <strong>share a stateful tool</strong>.</li>
+    </ul>
+    <p>
+      It <strong>warns</strong>, without rejecting, about a <code>case</code> that may not match, a
+      workflow step that reads <code>(remaining)</code>, and two steps that consult the same person.
+    </p>
+    <p>
+      Some things stay run-time errors by design: division by zero and overflow, a
+      <code>substring</code> out of range, a size bound exceeded, an exhausted script, and the step
+      limit. <code>norman --no-check</code> runs a program without the checker.
     </p>
 
     <h2 id="reserved">Reserved words</h2>

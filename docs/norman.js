@@ -52,15 +52,15 @@ const KEYWORDS = new Set([
   'datatype', 'record', 'grant', 'script', 'under', 'use',
 ]);
 
-/** The six agentic forms, plus the sugar that expands into them. */
+/** The seven agentic forms, plus the sugar that expands into them. */
 const FORMS = new Set([
-  'ask', 'call', 'fail', 'catch', 'budget', 'workflow', 'par', 'and', 'or',
+  'ask', 'call', 'consult', 'fail', 'catch', 'budget', 'workflow', 'par', 'and', 'or',
   'retry', 'repair', 'best-of', 'window', 'remaining', 'attempt', 'first-some',
   'show', 'substring', 'string-truncate', 'string-contains?',
   'string-append', 'string-length',
 ]);
 
-const CHECKS = /^check-(expect|assert|error|fail|within|equiv)$/;
+const CHECKS = /^check-(expect|assert|error|fail|within|equiv|type-error)$/;
 
 const escape = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 

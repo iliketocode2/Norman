@@ -129,9 +129,9 @@ Con                         ; a nullary constructor is just its name
 (cons exp exp)              ; prepend
 ```
 
-## The six agentic forms
+## The seven agentic forms
 
-These are what the language adds. Everything a program can do to the outside world happens through `ask` and `call`; there is no other door, which is why a budget, a deadline, the trace and the ownership rules apply to *everything*.
+These are what the language adds. Everything a program can do to the outside world happens through `ask`, `call` and `consult`; there is no other door, which is why a budget, a deadline, the trace and the ownership rules apply to *everything*.
 
 ### ask
 
@@ -152,6 +152,49 @@ Before the call, `ask` **reserves** the worst case: everything it is about to se
 ```
 
 Use a tool once. The capability comes from [`grant`](https://norman-docs.vercel.app/docs#hosts) and can only come from there. What the operation answers with is declared by the grant, not written at the call site — see [Hosts and capabilities](https://norman-docs.vercel.app/docs#hosts).
+
+### consult
+
+```
+(consult person ty prompt [propose exp] ['site])
+```
+
+Put a question to a person **once**, for an answer of type *ty*. The person comes from a [`human` grant](https://norman-docs.vercel.app/docs#hosts), and *ty* must be askable, exactly as for `ask`. The answer is validated the same way.
+
+With `[propose v]`, the person sees *v* as a pre-filled answer and may approve it, edit it, or decline. **Approving gives back exactly *v***, editing gives back the edit, and declining fails with `(Declined reason)`. Run the answer, never the original proposal, and what runs is what was approved. `retry` never retries `Declined`.
+
+Waiting for a person spends the scope's time, so give a consult's scope room for a person and each model call its own short `budget` inside it. A person costs no money unless the grant gives a price.
+
+Example, `consult.nrm`:
+
+```nrm
+(grant reviewer (human))
+
+(define approved-plan (plan)
+  (consult reviewer (List (Text 80) 3)
+           "Approve, edit or decline this plan."
+           [propose plan]
+           'review))
+
+(val plan (list "read the failing test" "fix the parser"))
+
+(script approves  [review (approve) (latency 1min)])
+(script edits     [review (answer "[\"read the failing test\"]") (latency 2min)])
+(script declines  [review (decline "Don't touch the parser.") (latency 30s)])
+
+(under ([script approves] [time 1h])
+  ;; Approving gives back exactly what was proposed.
+  (check-expect (approved-plan plan) plan))
+
+(under ([script edits] [time 1h])
+  ;; Editing gives back the edit, and that is what the program runs.
+  (check-expect (approved-plan plan) (list "read the failing test")))
+
+(under ([script declines] [time 1h])
+  ;; Declining is a failure carrying the reason; retry leaves it alone.
+  (check-expect (approved-plan plan) (fail (Declined "Don't touch the parser.")))
+  (check-fail   (retry 3 (lambda () (approved-plan plan))) (Declined _)))
+```
 
 ### fail and catch
 
@@ -321,7 +364,10 @@ These are written in µNorman itself, and each is defined by algebraic laws.
 (grant name (kernel {[op ty]}))        ; stateful
 (grant name (filesystem {[op ty]}))    ; stateful
 (grant name (http {[op ty]}))          ; stateless
+(grant name (human [price money]))        ; a person, for consult; the price is optional
 ```
+
+Live, only `model` and `kernel` (with `--python`) have real hosts so far; `filesystem` and `http` answer only from scripts. A `human` grant must be bound on the command line before a live run starts: `--human name=tty` asks at the terminal, and `--human name=unattended` makes any consult stop the run.
 
 ### What a tool answers with
 
@@ -365,6 +411,9 @@ Faults are injected the same way, which is what makes failure paths testable at 
 | `(provider-error "503 …")` | the provider fails |
 | `(result "…")` | a tool succeeds |
 | `(error "…")` | a tool fails |
+| `(approve)` | a person approves the proposal unchanged |
+| `(answer "…")` | a person gives this answer, as JSON |
+| `(decline "…")` | a person declines, with this reason |
 | `(latency 2s)` | how long it takes on the simulated clock |
 
 ### Test forms
@@ -447,7 +496,9 @@ Sugar is defined by translation, so it inherits every theorem already proved abo
 
 ## What is checked before a program runs
 
-Each of these is decidable from the syntax alone, so the parser rejects it outright.
+A whole file is checked before any of it runs, and a program that doesn't check never starts, so a mistake found here can't spend money. There are two passes.
+
+**The parser** rejects what is decidable from the syntax alone:
 
 1. The formals of a `lambda` or `define` are distinct; so are a datatype's constructors and a record's fields.
 2. A `workflow`'s binding names are distinct.
@@ -455,7 +506,17 @@ Each of these is decidable from the syntax alone, so the parser rejects it outri
 4. Patterns are flat, and no variable repeats within one pattern.
 5. Forms are applied with the right number of parts.
 
-Askability is checked when the `ask` runs rather than at parse time, because a function may ask for a datatype defined later in the file. Everything else about types is a run-time check too. Moving those to compile time is what the planned type and effect system is for — see [Status](https://norman-docs.vercel.app/#status).
+**The type and effect checker** then infers every type, with no annotations, and rejects a program that could reach any of these:
+
+- an `if` on a non-Boolean; applying a non-function, or with the wrong number of arguments; an unbound name; an unknown constructor, record or field;
+- `ask` on a non-model, `consult` on a non-person, `call` on a non-capability;
+- an **unaskable type** in `ask` or `consult`, or a proposal of the wrong shape;
+- an undeclared operation on a closed grant; `show` of a function, model, person or capability; `fail` of a non-`Failure`;
+- two concurrent `workflow` steps that **share a stateful tool**.
+
+It **warns**, without rejecting, about a `case` that may not match, a workflow step that reads `(remaining)`, and two steps that consult the same person.
+
+Some things stay run-time errors by design: division by zero and overflow, a `substring` out of range, a size bound exceeded, an exhausted script, and the step limit. `norman --no-check` runs a program without the checker.
 
 ## Reserved words
 

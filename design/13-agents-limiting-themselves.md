@@ -78,6 +78,16 @@ as context, so a false statement there becomes a wrong program.
 **Done when:** the reference and guide describe 0.4.0 exactly, and CI fails
 on the known stale phrases.
 
+> **Progress.** Items 1 and 2 are done. The site, the generated reference and
+> the guide now say what the checker checks; `docs/verify.mjs` has a `STALE`
+> list that fails CI if a known-false claim returns. It caught all ten in the
+> files as they were. Item 3 is partly done: `consult`, `human` grants and
+> the script entries that answer a consult were missing from the reference
+> entirely, and are now there, with a runnable example `verify.mjs` checks.
+> Still to do for item 3: document `(use file)`, and shorten the page by
+> moving rationale (the "Why 3 and 4 differ" box, the reserved-words
+> history) into the design documents.
+
 ---
 
 ## Phase 1: run a program, not just its tests

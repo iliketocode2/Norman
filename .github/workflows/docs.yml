@@ -1,11 +1,13 @@
 # Keep the documentation site honest.
 #
 # The site is served by GitHub Pages straight from docs/ on the default
-# branch, so this workflow publishes nothing. It checks two things:
+# branch, so this workflow publishes nothing. It checks three things:
 #
 #   1. the interpreter that is actually published runs every example on the
-#      site, and
-#   2. an interpreter freshly built from src/ runs them too.
+#      site,
+#   2. an interpreter freshly built from src/ runs them too, and
+#   3. the pages and READMEs repeat no claim known to be stale (the STALE
+#      list in docs/verify.mjs).
 #
 # The first catches a stale or broken commit; the second catches a source
 # change that breaks an example.
@@ -13,9 +15,9 @@ name: docs
 
 on:
   push:
-    paths: ['src/**', 'docs/**', 'Cargo.toml', 'Cargo.lock', 'scripts/**', '.github/workflows/docs.yml']
+    paths: ['src/**', 'docs/**', 'Cargo.toml', 'Cargo.lock', 'scripts/**', 'README.md', 'design/README.md', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['src/**', 'docs/**', 'Cargo.toml', 'Cargo.lock', 'scripts/**']
+    paths: ['src/**', 'docs/**', 'Cargo.toml', 'Cargo.lock', 'scripts/**', 'README.md', 'design/README.md']
 
 jobs:
   examples:
