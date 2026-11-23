@@ -1,5 +1,5 @@
-//! The type and effect checker (design/12), steps 1 and 2: inference for
-//! every form except the three that reach a model, a tool or a person.
+//! The type and effect checker (design/12), steps 1 to 3: inference for
+//! every form, without ownership (step 4).
 //!
 //! - Types are inferred as in Ramsey's µML (Hindley-Milner), with type
 //!   parameters on datatypes and records (design/12, T5).
@@ -8,16 +8,24 @@
 //!   instantiated, and defaulted per binding group as SML does (§3).
 //! - Effects follow Talpin and Jouvelot (§2): every arrow carries an effect
 //!   *variable*, and the rules add lower bounds to it (`ε ⊆ φ`). Unifying two
-//!   arrows unifies their effect variables. The only atom so far is
-//!   `observe`, for `(remaining)`; step 3 adds `ask μ`, `call κ` and
-//!   `consult η` with their grant names.
+//!   arrows unifies their effect variables. The atoms are `observe`, for
+//!   `(remaining)`, and `ask μ`, `call κ` and `consult η`, each with the
+//!   name of what it reaches (T3).
 //! - A file is checked as a whole before it runs (T7): definitions are
 //!   grouped into strongly connected components and generalized together,
 //!   a name defined twice is an error (Q-2), and a form that runs at load
 //!   time may depend only on definitions above it (§4.4).
 //!
-//! `ask`, `call`, `consult` and grants need name-indexed types, which are
-//! step 3; until then the checker reports them as not yet supported.
+//! **Names in types** (§1). A grant's type carries the grant's name:
+//! `(Model claude)`, `(Human reviewer)`, `(Kernel py)`. A name is a
+//! [`Ty::Grant`], or a type variable standing for one. A capability's type
+//! has *two* names: its own, which ownership is about, and the grant whose
+//! operations it offers, which `Offers` is about. They are the same for a
+//! granted capability. A fork gets a fresh name of its own (§5.2) but keeps
+//! its parent's operations, so a fork of a closed kernel is closed too.
+//! Capability names are the only variables kept from generalizing when the
+//! bound expression isn't a syntactic value (§4.1): `(val k (call py fork))`
+//! is one kernel, and every use of `k` must say so.
 
 use crate::ast::*;
 use crate::lexer::read_all;
@@ -36,9 +44,15 @@ type EV = u32;
 pub enum Ty {
     Var(TV),
     /// A base type (`Num`), `List`, or a datatype or record, with arguments.
+    /// The types of grants use constructors whose names start with `#`,
+    /// which no program can write, so a user's `Model` datatype can't be
+    /// confused with them: `(#Model μ)`, `(#Human η)`, and
+    /// `(#Cap kind name offers)` with kind `#Kernel`, `#Filesystem` or `#Http`.
     Con(Name, Vec<Ty>),
     /// A function: arguments, result, and the variable for its latent effect.
     Fun(Vec<Ty>, Box<Ty>, EV),
+    /// A grant's name, in a name position of a grant's type.
+    Grant(Name),
 }
 
 fn con(n: &str) -> Ty {
@@ -47,12 +61,52 @@ fn con(n: &str) -> Ty {
 fn list_of(t: Ty) -> Ty {
     Ty::Con(Rc::from("List"), vec![t])
 }
+fn model_of(n: Ty) -> Ty {
+    Ty::Con(Rc::from("#Model"), vec![n])
+}
+fn human_of(n: Ty) -> Ty {
+    Ty::Con(Rc::from("#Human"), vec![n])
+}
+fn cap_of(kind: Ty, name: Ty, offers: Ty) -> Ty {
+    Ty::Con(Rc::from("#Cap"), vec![kind, name, offers])
+}
+fn is_grant_type(n: &str) -> bool {
+    matches!(n, "#Model" | "#Human" | "#Cap")
+}
 
-/// An effect atom. Step 3 adds `ask μ`, `call κ` and `consult η`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A name in an effect atom: a grant's, or a variable standing for one.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Nm {
+    Grant(Name),
+    Var(TV),
+}
+
+/// An effect atom (design/12 §2).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Atom {
     /// Reading `(remaining)`.
     Observe,
+    Ask(Nm),
+    Call(Nm),
+    Consult(Nm),
+}
+
+impl Atom {
+    fn name(&self) -> Option<&Nm> {
+        match self {
+            Atom::Observe => None,
+            Atom::Ask(n) | Atom::Call(n) | Atom::Consult(n) => Some(n),
+        }
+    }
+
+    fn map(&self, f: impl FnOnce(&Nm) -> Nm) -> Atom {
+        match self {
+            Atom::Observe => Atom::Observe,
+            Atom::Ask(n) => Atom::Ask(f(n)),
+            Atom::Call(n) => Atom::Call(f(n)),
+            Atom::Consult(n) => Atom::Consult(f(n)),
+        }
+    }
 }
 
 /// An effect: some atoms, and the effect variables whose effects it includes.
@@ -66,8 +120,11 @@ impl Eff {
     fn var(e: EV) -> Eff {
         Eff { atoms: BTreeSet::new(), vars: [e].into() }
     }
+    fn atom(a: Atom) -> Eff {
+        Eff { atoms: [a].into(), vars: BTreeSet::new() }
+    }
     fn union(mut self, other: &Eff) -> Eff {
-        self.atoms.extend(other.atoms.iter().copied());
+        self.atoms.extend(other.atoms.iter().cloned());
         self.vars.extend(other.vars.iter().copied());
         self
     }
@@ -82,6 +139,9 @@ pub enum Pred {
     Div(Ty, Ty, Ty),
     Showable(Ty),
     Has(Ty, Name, Ty),
+    /// `Offers(κ, op, τ)`: the grant named κ offers `op`, answering τ. The
+    /// first argument is a capability's *offers* name (see the module notes).
+    Offers(Ty, Name, Ty),
 }
 
 /// `∀ tvs evs. preds ⇒ ty`. Quantified effect variables carry their lower
@@ -129,6 +189,9 @@ struct State {
     tsub: Vec<Option<Ty>>,
     evars: Vec<EffVar>,
     preds: Vec<Pred>,
+    /// The variables that stand for a capability's own name, which
+    /// generalize only for syntactic values (design/12 §4.1).
+    cap_names: HashSet<TV>,
 }
 
 type R<T> = Result<T, String>;
@@ -137,6 +200,32 @@ impl State {
     fn fresh(&mut self) -> Ty {
         self.tsub.push(None);
         Ty::Var((self.tsub.len() - 1) as TV)
+    }
+
+    /// A fresh variable for a capability's own name.
+    fn fresh_cap_name(&mut self) -> Ty {
+        let t = self.fresh();
+        if let Ty::Var(v) = t {
+            self.cap_names.insert(v);
+        }
+        t
+    }
+
+    /// The name a name-position type stands for, as an atom holds it.
+    fn nm(&self, t: &Ty) -> Nm {
+        match self.prune(t) {
+            Ty::Grant(g) => Nm::Grant(g),
+            Ty::Var(v) => Nm::Var(v),
+            other => unreachable!("a name position holds {:?}", other),
+        }
+    }
+
+    /// An atom with its name resolved as far as the substitution allows.
+    fn norm_atom(&self, a: &Atom) -> Atom {
+        a.map(|n| match n {
+            Nm::Var(v) => self.nm(&Ty::Var(*v)),
+            g => g.clone(),
+        })
     }
 
     fn fresh_ev(&mut self) -> EV {
@@ -160,7 +249,7 @@ impl State {
         let r = self.find(phi);
         let vars: Vec<EV> = eff.vars.iter().map(|&v| self.find(v)).filter(|&v| v != r).collect();
         let low = &mut self.evars[r as usize].lower;
-        low.atoms.extend(eff.atoms.iter().copied());
+        low.atoms.extend(eff.atoms.iter().cloned());
         low.vars.extend(vars);
     }
 
@@ -183,7 +272,8 @@ impl State {
             if !seen.insert(v) {
                 continue;
             }
-            atoms.extend(self.evars[v as usize].lower.atoms.iter().copied());
+            let found: Vec<Atom> = self.evars[v as usize].lower.atoms.iter().map(|a| self.norm_atom(a)).collect();
+            atoms.extend(found);
             let next: Vec<EV> = self.evars[v as usize].lower.vars.iter().copied().collect();
             for n in next {
                 todo.push(self.find(n));
@@ -208,6 +298,7 @@ impl State {
     fn zonk(&mut self, t: &Ty) -> Ty {
         match self.prune(t) {
             Ty::Var(v) => Ty::Var(v),
+            Ty::Grant(g) => Ty::Grant(g),
             Ty::Con(n, args) => Ty::Con(n, args.iter().map(|a| self.zonk(a)).collect()),
             Ty::Fun(args, res, e) => {
                 let args = args.iter().map(|a| self.zonk(a)).collect();
@@ -220,6 +311,7 @@ impl State {
     fn occurs(&self, v: TV, t: &Ty) -> bool {
         match self.prune(t) {
             Ty::Var(w) => v == w,
+            Ty::Grant(_) => false,
             Ty::Con(_, args) => args.iter().any(|a| self.occurs(v, a)),
             Ty::Fun(args, res, _) => args.iter().any(|a| self.occurs(v, a)) || self.occurs(v, &res),
         }
@@ -234,8 +326,18 @@ impl State {
                     let (sa, sb) = self.show_pair(&a, &b);
                     return Err(format!("{} would have to contain itself, as {}", sa, sb));
                 }
+                // A capability's name stays a capability's name.
+                if self.cap_names.contains(x)
+                    && let Ty::Var(y) = t
+                {
+                    self.cap_names.insert(*y);
+                }
                 self.tsub[*x as usize] = Some(t.clone());
                 Ok(())
+            }
+            (Ty::Grant(g), Ty::Grant(h)) if g == h => Ok(()),
+            (Ty::Grant(g), Ty::Grant(h)) => {
+                Err(format!("{} and {} are different grants, and a type names exactly one (design/12, T3)", h, g))
             }
             (Ty::Con(m, xs), Ty::Con(n, ys)) if m == n && xs.len() == ys.len() => {
                 xs.iter().zip(ys).try_for_each(|(x, y)| self.unify(x, y))
@@ -267,6 +369,7 @@ impl State {
             Ty::Var(v) => {
                 out.insert(v);
             }
+            Ty::Grant(_) => {}
             Ty::Con(_, args) => args.iter().for_each(|a| self.ftv(a, out)),
             Ty::Fun(args, res, _) => {
                 args.iter().for_each(|a| self.ftv(a, out));
@@ -277,7 +380,7 @@ impl State {
 
     fn fev(&mut self, t: &Ty, out: &mut BTreeSet<EV>) {
         match self.prune(t) {
-            Ty::Var(_) => {}
+            Ty::Var(_) | Ty::Grant(_) => {}
             Ty::Con(_, args) => args.iter().for_each(|a| self.fev(a, out)),
             Ty::Fun(args, res, e) => {
                 args.iter().for_each(|a| self.fev(a, out));
@@ -296,9 +399,19 @@ impl State {
                 self.ftv(b, out);
                 self.ftv(c, out);
             }
-            Pred::Has(a, _, b) => {
+            Pred::Has(a, _, b) | Pred::Offers(a, _, b) => {
                 self.ftv(a, out);
                 self.ftv(b, out);
+            }
+        }
+    }
+
+    /// The name variables in the atoms an effect variable reaches.
+    fn atom_tvs(&mut self, phi: EV, out: &mut BTreeSet<TV>) {
+        let (atoms, _) = self.closure(phi);
+        for a in atoms {
+            if let Some(Nm::Var(v)) = a.name() {
+                out.insert(*v);
             }
         }
     }
@@ -311,6 +424,7 @@ impl State {
             Pred::Mul(a, b, c) => Pred::Mul(self.zonk(a), self.zonk(b), self.zonk(c)),
             Pred::Div(a, b, c) => Pred::Div(self.zonk(a), self.zonk(b), self.zonk(c)),
             Pred::Has(a, f, b) => Pred::Has(self.zonk(a), f.clone(), self.zonk(b)),
+            Pred::Offers(a, op, b) => Pred::Offers(self.zonk(a), op.clone(), self.zonk(b)),
         }
     }
 }
@@ -422,16 +536,33 @@ impl Printer {
         }
         match st.prune(t) {
             Ty::Var(v) => self.tname(v),
-            Ty::Con(n, args) if args.is_empty() => n.to_string(),
+            Ty::Grant(g) => g.to_string(),
+            Ty::Con(n, args) if &*n == "#Cap" => {
+                // `(Kernel py)`; `(Kernel a py)` for a capability named a that
+                // offers py's operations, such as a fork; `(Cap k a b)` when
+                // the kind isn't known.
+                let kind = match st.prune(&args[0]) {
+                    Ty::Con(k, _) => k.trim_start_matches('#').to_string(),
+                    other => format!("Cap {}", self.ty(st, &other, false)),
+                };
+                let (name, offers) = (st.prune(&args[1]), st.prune(&args[2]));
+                let shown = self.ty(st, &name, false);
+                if name == offers {
+                    format!("({} {})", kind, shown)
+                } else {
+                    format!("({} {} {})", kind, shown, self.ty(st, &offers, false))
+                }
+            }
+            Ty::Con(n, args) if args.is_empty() => n.trim_start_matches('#').to_string(),
             Ty::Con(n, args) => {
                 let args: Vec<String> = args.iter().map(|a| self.ty(st, a, false)).collect();
-                format!("({} {})", n, args.join(" "))
+                format!("({} {})", n.trim_start_matches('#'), args.join(" "))
             }
             Ty::Fun(args, res, e) => {
                 let args: Vec<String> = args.iter().map(|a| self.ty(st, a, false)).collect();
                 let res = self.ty(st, &res, false);
                 let (atoms, vars) = st.closure(e);
-                let mut eff: Vec<String> = atoms.iter().map(|a| format!("{:?}", a).to_lowercase()).collect();
+                let mut eff: Vec<String> = atoms.iter().map(|a| self.atom(a)).collect();
                 for v in vars {
                     if self.shown.contains(&v) {
                         eff.push(self.ename(v));
@@ -447,6 +578,19 @@ impl Printer {
         }
     }
 
+    fn atom(&mut self, a: &Atom) -> String {
+        let mut nm = |n: &Nm| match n {
+            Nm::Grant(g) => g.to_string(),
+            Nm::Var(v) => self.tname(*v),
+        };
+        match a {
+            Atom::Observe => "observe".into(),
+            Atom::Ask(n) => format!("ask {}", nm(n)),
+            Atom::Call(n) => format!("call {}", nm(n)),
+            Atom::Consult(n) => format!("consult {}", nm(n)),
+        }
+    }
+
     fn pred(&mut self, st: &mut State, p: &Pred) -> String {
         let mut t = |st: &mut State, x: &Ty| self.ty(st, x, false);
         match p {
@@ -456,6 +600,7 @@ impl Printer {
             Pred::Mul(a, b, c) => format!("Mul {} {} {}", t(st, a), t(st, b), t(st, c)),
             Pred::Div(a, b, c) => format!("Div {} {} {}", t(st, a), t(st, b), t(st, c)),
             Pred::Has(a, f, b) => format!("Has {} {} {}", t(st, a), f, t(st, b)),
+            Pred::Offers(a, op, b) => format!("Offers {} {} {}", t(st, a), op, t(st, b)),
         }
     }
 }
@@ -472,9 +617,14 @@ enum Item {
 pub struct Report {
     /// Errors that reject the program.
     pub errors: Vec<String>,
-    /// Unit tests whose expressions are ill-typed. Each fails on its own,
-    /// without rejecting the file (design/12, T8).
+    /// Unit tests whose expressions are ill-typed, and `check-type-error`s
+    /// whose expression is well typed. Each fails on its own, without
+    /// rejecting the file (design/12, T8).
     pub test_errors: Vec<String>,
+    /// What checking said about each unit test, by its location: `Ok` if
+    /// the checker has nothing against it (for a `check-type-error`, that
+    /// it passes), and otherwise why it fails.
+    pub verdicts: HashMap<String, Result<(), String>>,
 }
 
 impl Report {
@@ -489,6 +639,9 @@ pub struct Checker {
     globals: HashMap<Name, Global>,
     /// Where each global was defined, for the redefinition rule (Q-2).
     defined_in: HashMap<Name, String>,
+    /// The operations each capability grant declares; none means an open
+    /// interface, every operation answering Text (`10` §2.1).
+    ops: HashMap<Name, Vec<(Name, Type)>>,
     st: State,
     used: HashSet<PathBuf>,
 }
@@ -518,6 +671,7 @@ impl Checker {
             theta: TypeEnv::default(),
             globals,
             defined_in: HashMap::new(),
+            ops: HashMap::new(),
             st: State::default(),
             used: HashSet::new(),
         }
@@ -597,11 +751,25 @@ impl Checker {
                     let used = self.check_file(&dir.join(&f));
                     report.errors.extend(used.errors);
                     report.test_errors.extend(used.test_errors);
+                    report.verdicts.extend(used.verdicts);
                 }
-                Top::Grant(x, _) => {
-                    // Step 3 gives grants name-indexed types. Until then a
-                    // grant is a name the checker knows but can't use.
-                    self.define_global(&x, Global::Scheme(Scheme::mono(con("Grant"))), &loc.to_string(), &mut report);
+                Top::Grant(x, spec) => {
+                    // A grant's type carries its name (design/12 §1).
+                    let me = Ty::Grant(x.clone());
+                    let (ty, ops) = match spec {
+                        HostSpec::Model { .. } => (model_of(me), None),
+                        HostSpec::Human { .. } => (human_of(me), None),
+                        HostSpec::Kernel(ops) => (cap_of(con("#Kernel"), me.clone(), me), Some(ops)),
+                        HostSpec::Filesystem(ops) => (cap_of(con("#Filesystem"), me.clone(), me), Some(ops)),
+                        HostSpec::Http(ops) => (cap_of(con("#Http"), me.clone(), me), Some(ops)),
+                    };
+                    let before = report.errors.len();
+                    self.define_global(&x, Global::Scheme(Scheme::mono(ty)), &loc.to_string(), &mut report);
+                    if report.errors.len() == before
+                        && let Some(ops) = ops
+                    {
+                        self.ops.insert(x, (*ops).clone());
+                    }
                 }
                 Top::Script(..) => {}
                 Top::Under(_, ts) => tests.extend(ts),
@@ -610,9 +778,23 @@ impl Checker {
         }
         self.check_items(file, items, &mut report);
         for t in &tests {
-            if let Err(e) = self.check_test(t) {
+            let mut verdict = self.check_test(t);
+            // A type error proves nothing in a file that doesn't check: the
+            // name the test uses may be the one whose definition was wrong.
+            if matches!(t.kind, TestKind::TypeError(_))
+                && verdict.is_ok()
+                && let Some(first) = report.errors.first()
+            {
+                verdict = Err(format!(
+                    "Check-type-error failed: this file doesn't type-check, so a type error here proves nothing. \
+                     The first error: {}",
+                    first
+                ));
+            }
+            if let Err(e) = &verdict {
                 report.test_errors.push(format!("{}: {}", t.loc, e));
             }
+            report.verdicts.insert(t.loc.to_string(), verdict);
         }
         report
     }
@@ -777,24 +959,48 @@ impl Checker {
             failed = true;
         }
         let preds: Vec<Pred> = self.st.preds.drain(mark..).collect();
+        // Capability names generalize only if every binding is a value.
+        let values = group.iter().all(|&i| match &items[i].1 {
+            Item::Define(..) => true,
+            Item::Val(_, e) => is_value(e),
+            Item::Expr(_) => unreachable!(),
+        });
         for (name, t) in mono {
             let loc = &items[group[mono_index(group, items, &name)]].0;
-            let sc =
-                if failed { Scheme::mono(t) } else { self.generalize(&t, &preds, &BTreeSet::new(), &BTreeSet::new()) };
+            let sc = if failed {
+                Scheme::mono(t)
+            } else {
+                self.generalize(&t, &preds, &BTreeSet::new(), &BTreeSet::new(), values)
+            };
             self.globals.insert(name.clone(), Global::Scheme(sc));
             self.defined_in.insert(name, loc.to_string());
         }
     }
 
-    /// `∀` over the variables of `t` not free in the environment.
-    fn generalize(&mut self, t: &Ty, preds: &[Pred], env_tvs: &BTreeSet<TV>, env_evs: &BTreeSet<EV>) -> Scheme {
+    /// `∀` over the variables of `t` not free in the environment. Unless
+    /// the bound expression is a syntactic value (`value`), capability names
+    /// stay monomorphic (design/12 §4.1).
+    fn generalize(
+        &mut self,
+        t: &Ty,
+        preds: &[Pred],
+        env_tvs: &BTreeSet<TV>,
+        env_evs: &BTreeSet<EV>,
+        value: bool,
+    ) -> Scheme {
         let ty = self.st.zonk(t);
-        let mut tvs = BTreeSet::new();
-        self.st.ftv(&ty, &mut tvs);
-        let tvs: Vec<TV> = tvs.difference(env_tvs).copied().collect();
         let mut roots = BTreeSet::new();
         self.st.fev(&ty, &mut roots);
         let quantified: BTreeSet<EV> = roots.difference(env_evs).copied().collect();
+        // The type's variables, and the names in the effects it quantifies:
+        // a function that forks inside makes a new name at every call.
+        let mut tvs = BTreeSet::new();
+        self.st.ftv(&ty, &mut tvs);
+        for &r in &quantified {
+            self.st.atom_tvs(r, &mut tvs);
+        }
+        let tvs: Vec<TV> =
+            tvs.difference(env_tvs).copied().filter(|v| value || !self.st.cap_names.contains(v)).collect();
         // Each quantified effect variable takes its lower bound along,
         // *flattened*: every atom it reaches, every other quantified variable
         // it reaches, and every variable the environment can still extend,
@@ -822,11 +1028,15 @@ impl Checker {
     }
 
     fn instantiate(&mut self, sc: &Scheme) -> Ty {
-        let tmap: HashMap<TV, Ty> = sc.tvs.iter().map(|&v| (v, self.st.fresh())).collect();
+        let tmap: HashMap<TV, Ty> = sc
+            .tvs
+            .iter()
+            .map(|&v| (v, if self.st.cap_names.contains(&v) { self.st.fresh_cap_name() } else { self.st.fresh() }))
+            .collect();
         let emap: HashMap<EV, EV> = sc.evs.iter().map(|(e, _)| (*e, self.st.fresh_ev())).collect();
         for (e, lower) in &sc.evs {
             let mapped = Eff {
-                atoms: lower.atoms.clone(),
+                atoms: lower.atoms.iter().map(|a| subst_atom(a, &tmap)).collect(),
                 vars: lower.vars.iter().map(|v| *emap.get(v).unwrap_or(v)).collect(),
             };
             self.st.include(emap[e], &mapped);
@@ -1010,17 +1220,49 @@ impl Checker {
             Pred::Showable(t) => match t {
                 Ty::Var(_) => Ok(Step::Keep),
                 Ty::Fun(..) => Err("a function can't be shown".into()),
+                Ty::Grant(_) => unreachable!("a name is never a value's type"),
                 Ty::Con(n, args) => match &**n {
                     "Text" | "Num" | "Bool" | "Sym" | "Money" | "Dur" => Ok(Step::Done),
                     "List" => Ok(Step::Then(vec![Pred::Showable(args[0].clone())])),
-                    "Grant" => Err("a model, a person or a capability can't be shown".into()),
+                    n if is_grant_type(n) => {
+                        let mut pr = Printer::default();
+                        Err(format!(
+                            "a model, a person or a capability can't be shown, and this is {}",
+                            pr.ty(&mut self.st, t, false)
+                        ))
+                    }
                     _ => {
                         let fields = self.field_types(n, args)?;
                         Ok(Step::Then(fields.into_iter().map(Pred::Showable).collect()))
                     }
                 },
             },
+            Pred::Offers(k, op, res) => match k {
+                Ty::Var(_) => Ok(Step::Keep),
+                Ty::Grant(g) => {
+                    let ops = self.ops.get(g).cloned().unwrap_or_default();
+                    if ops.is_empty() {
+                        return Ok(Step::Unify(vec![(res.clone(), con("Text"))]));
+                    }
+                    match ops.iter().find(|(o, _)| o == op) {
+                        Some((_, t)) => {
+                            let t = self.convert(t, &HashMap::new())?;
+                            Ok(Step::Unify(vec![(res.clone(), t)]))
+                        }
+                        None => {
+                            let known: Vec<&str> = ops.iter().map(|(o, _)| &**o).collect();
+                            Err(format!("{} does not offer {}; it offers {}", g, op, known.join(", ")))
+                        }
+                    }
+                }
+                _ => unreachable!("Offers holds a name"),
+            },
             Pred::Has(t, f, ft) => match t {
+                Ty::Grant(_) => unreachable!("a name is never a value's type"),
+                Ty::Con(r, _) if is_grant_type(r) => {
+                    let mut pr = Printer::default();
+                    Err(format!("{} is not a record, so it has no field {}", pr.ty(&mut self.st, t, false), f))
+                }
                 Ty::Con(r, args) => {
                     if !self.theta.is_record(r) {
                         return Err(format!("{} is not a record, so it has no field {}", r, f));
@@ -1258,15 +1500,18 @@ impl Checker {
                 let mark = self.st.preds.len();
                 let (rt, re) = self.infer(env, rhs)?;
                 // Type variables generalize freely: µNorman has no mutable
-                // references (design/12 §4.1). Name variables, which step 3
-                // adds, will generalize only for syntactic values.
-                let env_tvs = self.env_tvs(env);
+                // references (design/12 §4.1). Capability names generalize
+                // only for syntactic values.
                 let env_evs = self.env_evs(env);
+                let mut env_tvs = self.env_tvs(env);
+                for &e in &env_evs {
+                    self.st.atom_tvs(e, &mut env_tvs);
+                }
                 let mut keep = BTreeSet::new();
                 self.st.ftv(&rt, &mut keep);
                 self.settle(mark, &env_tvs, &keep)?;
                 let preds: Vec<Pred> = self.st.preds.drain(mark..).collect();
-                let sc = self.generalize(&rt, &preds, &env_tvs, &env_evs);
+                let sc = self.generalize(&rt, &preds, &env_tvs, &env_evs, is_value(rhs));
                 // Predicates the scheme didn't take stay pending outside it.
                 let taken: Vec<Pred> = sc.preds.clone();
                 for p in preds {
@@ -1327,9 +1572,65 @@ impl Checker {
                 }
                 Ok((result, eff))
             }
-            Exp::Ask { .. } => Err("the checker doesn't handle ask yet (design/12 §9, step 3)".into()),
-            Exp::Call { .. } => Err("the checker doesn't handle call yet (design/12 §9, step 3)".into()),
-            Exp::Consult { .. } => Err("the checker doesn't handle consult yet (design/12 §9, step 3)".into()),
+            // The agentic forms (design/12 §4.2).
+            Exp::Ask { model, ty, ctx, .. } => {
+                let answer = self.answer_type(ty, "an ask")?;
+                let (mt, me) = self.infer(env, model)?;
+                let mu = self.st.fresh();
+                self.st.unify(&mt, &model_of(mu.clone())).map_err(|m| format!("ask needs a model: {}", m))?;
+                let (ct, ce) = self.infer(env, ctx)?;
+                self.st
+                    .unify(&ct, &list_of(con("Message")))
+                    .map_err(|m| format!("an ask's context is a list of messages: {}", m))?;
+                let asks = Eff::atom(Atom::Ask(self.st.nm(&mu)));
+                Ok((answer, me.union(&ce).union(&asks)))
+            }
+            Exp::Call { cap, op, args } => {
+                let (kt, mut eff) = self.infer(env, cap)?;
+                // A live host receives each argument as `show` writes it.
+                for a in args {
+                    let (at, ae) = self.infer(env, a)?;
+                    self.st.preds.push(Pred::Showable(at));
+                    eff = eff.union(&ae);
+                }
+                let kappa = self.st.fresh_cap_name();
+                let offers = self.st.fresh();
+                if &**op == "fork" {
+                    // A fork is a new kernel: a fresh name, the same
+                    // operations (design/12 §5.2).
+                    self.st
+                        .unify(&kt, &cap_of(con("#Kernel"), kappa.clone(), offers.clone()))
+                        .map_err(|m| format!("only a kernel can fork: {}", m))?;
+                    let calls = Eff::atom(Atom::Call(self.st.nm(&kappa)));
+                    let forked = self.st.fresh_cap_name();
+                    return Ok((cap_of(con("#Kernel"), forked, offers), eff.union(&calls)));
+                }
+                let kind = self.st.fresh();
+                self.st
+                    .unify(&kt, &cap_of(kind, kappa.clone(), offers.clone()))
+                    .map_err(|m| format!("call needs a capability: {}", m))?;
+                let res = self.st.fresh();
+                self.st.preds.push(Pred::Offers(offers, op.clone(), res.clone()));
+                let calls = Eff::atom(Atom::Call(self.st.nm(&kappa)));
+                Ok((res, eff.union(&calls)))
+            }
+            Exp::Consult { human, ty, prompt, proposal, .. } => {
+                let answer = self.answer_type(ty, "a consult")?;
+                let (ht, mut eff) = self.infer(env, human)?;
+                let eta = self.st.fresh();
+                self.st.unify(&ht, &human_of(eta.clone())).map_err(|m| format!("consult needs a person: {}", m))?;
+                let (pt, pe) = self.infer(env, prompt)?;
+                self.st.unify(&pt, &con("Text")).map_err(|m| format!("a consult's prompt is Text: {}", m))?;
+                eff = eff.union(&pe);
+                if let Some(p) = proposal {
+                    // So `v ⊨ τ` can fail only on a size bound (T6).
+                    let (vt, ve) = self.infer(env, p)?;
+                    self.st.unify(&vt, &answer).map_err(|m| format!("a proposal has the answer's type: {}", m))?;
+                    eff = eff.union(&ve);
+                }
+                let consults = Eff::atom(Atom::Consult(self.st.nm(&eta)));
+                Ok((answer, eff.union(&consults)))
+            }
             Exp::Fail(x) => {
                 let (xt, xe) = self.infer(env, x)?;
                 self.st.unify(&xt, &con("Failure")).map_err(|m| format!("fail needs a Failure: {}", m))?;
@@ -1434,8 +1735,33 @@ impl Checker {
         }
     }
 
-    /// A unit test's expressions are checked on their own (T8).
+    /// The answer type written in an `ask` or `consult`: ground, and
+    /// askable here rather than when the form runs (`08`, deviation 1).
+    fn answer_type(&mut self, ty: &Type, form: &str) -> R<Ty> {
+        self.theta.askable(ty).map_err(|e| format!("the answer type of {}: {}", form, e))?;
+        self.convert(ty, &HashMap::new())
+    }
+
+    /// A unit test's expressions are checked on their own (T8). A
+    /// `check-type-error` passes exactly when its expression is ill-typed.
     fn check_test(&mut self, t: &UnitTest) -> R<()> {
+        if let TestKind::TypeError(e) = &t.kind {
+            let mark = self.st.preds.len();
+            let typed = self.infer(&mut vec![], e).and_then(|(ty, _)| {
+                self.settle(mark, &BTreeSet::new(), &BTreeSet::new())?;
+                let mut p = Printer::default();
+                Ok(p.ty(&mut self.st, &ty, true))
+            });
+            self.st.preds.truncate(mark);
+            return match typed {
+                Err(_) => Ok(()),
+                Ok(ty) => Err(format!(
+                    "Check-type-error failed: expected {} to be ill-typed, but it has type {}.",
+                    t.texts.first().map(String::as_str).unwrap_or("the expression"),
+                    ty
+                )),
+            };
+        }
         let mark = self.st.preds.len();
         let result = (|| -> R<()> {
             let mut env = vec![];
@@ -1454,6 +1780,7 @@ impl Checker {
                     self.infer(&mut env, a)?;
                     self.pattern(p, &con("Failure")).map(|_| ())
                 }
+                TestKind::TypeError(_) => unreachable!("handled above"),
             }
         })();
         let settled = result.and_then(|_| self.settle(mark, &BTreeSet::new(), &BTreeSet::new()));
@@ -1472,9 +1799,31 @@ fn mono_index(group: &[usize], items: &[(Loc, Item)], name: &Name) -> usize {
         .expect("every group member has a name")
 }
 
+/// A syntactic value (design/12 §4.1): evaluating it creates no capability.
+fn is_value(e: &Exp) -> bool {
+    match e {
+        Exp::Literal(_) | Exp::Var(_) | Exp::Lambda(_) => true,
+        Exp::Con(_, args) => args.iter().all(|a| is_value(a)),
+        Exp::Record(_, fields) => fields.iter().all(|(_, a)| is_value(a)),
+        _ => false,
+    }
+}
+
+fn subst_atom(a: &Atom, tmap: &HashMap<TV, Ty>) -> Atom {
+    a.map(|n| match n {
+        Nm::Var(v) => match tmap.get(v) {
+            Some(Ty::Var(w)) => Nm::Var(*w),
+            Some(Ty::Grant(g)) => Nm::Grant(g.clone()),
+            _ => n.clone(),
+        },
+        g => g.clone(),
+    })
+}
+
 fn subst_ty(t: &Ty, tmap: &HashMap<TV, Ty>, emap: &HashMap<EV, EV>) -> Ty {
     match t {
         Ty::Var(v) => tmap.get(v).cloned().unwrap_or(Ty::Var(*v)),
+        Ty::Grant(g) => Ty::Grant(g.clone()),
         Ty::Con(n, args) => Ty::Con(n.clone(), args.iter().map(|a| subst_ty(a, tmap, emap)).collect()),
         Ty::Fun(args, res, e) => Ty::Fun(
             args.iter().map(|a| subst_ty(a, tmap, emap)).collect(),
@@ -1493,6 +1842,7 @@ fn subst_pred(p: &Pred, tm: &HashMap<TV, Ty>, em: &HashMap<EV, EV>) -> Pred {
         Pred::Mul(a, b, c) => Pred::Mul(s(a), s(b), s(c)),
         Pred::Div(a, b, c) => Pred::Div(s(a), s(b), s(c)),
         Pred::Has(a, f, b) => Pred::Has(s(a), f.clone(), s(b)),
+        Pred::Offers(a, op, b) => Pred::Offers(s(a), op.clone(), s(b)),
     }
 }
 

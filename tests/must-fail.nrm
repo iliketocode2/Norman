@@ -19,12 +19,7 @@
 (under ([script cp] [cost $1.00] [time 5min])
   (check-error (cp-agent claude py "Compute 6 * 7.")))                ; really succeeds
 
-;;; consult (design/11): the mistakes the design rules out.
-(use ../examples/consult.nrm)
-(under ([script declines-then-approves] [cost $1.00] [time 1h])
-  (check-expect (retry 3 (review reviewer)) objs))                    ; really Declined: never retried (K2)
-(under ([script slow] [cost $5.00] [time 1h])
-  (check-expect (spent (question paid)) $2.00))                       ; really $0: a cut consult isn't charged
-(under ([script would-answer] [cost $1.00] [time 1h])
-  (check-expect (consult reviewer (Text 20) "?" (propose 'potency) 'p)
-                "potency"))                                           ; really an error: K1 would break
+;;; The type checker (design/12, T8): a type error satisfies only a test that
+;;; asks for one, and a test that asks for one needs a type error.
+(check-error (+ 1 "two"))                                             ; really a type error, not a run-time one
+(check-type-error (+ 1 2))                                            ; really well typed

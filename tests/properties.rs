@@ -236,7 +236,7 @@ fn law_b4_a_scope_never_spends_more_than_its_limit() {
     property("B4", |r, _| {
         let c = r.range(1_000, 30_000);
         let e = analyst_exp(r);
-        let checks = format!("(check-within (catch (budget ([cost {}]) {}) e 0) ([cost {}]))", money(c), e, money(c));
+        let checks = format!("(check-within (budget ([cost {}]) {}) ([cost {}]))", money(c), e, money(c));
         (limits(r), checks)
     });
 }
@@ -253,7 +253,7 @@ fn law_b5_an_expired_scope_never_calls_the_oracle() {
         };
         let checks = format!(
             "(check-equiv (budget ([time 0s]) {}) (fail PastDeadline) 'exact)\n\
-             (check-within (catch (budget ([time 0s]) {}) e 0) ([cost $0] [time 0s]))",
+             (check-within (budget ([time 0s]) {}) ([cost $0] [time 0s]))",
             e, e
         );
         (limits(r), checks)
@@ -326,8 +326,8 @@ fn law_w5_parallelizing_is_never_slower_when_no_limit_binds() {
         assert!(par <= seq, "the law's arithmetic: {} > {}", par, seq);
         let checks = format!(
             "(check-equiv (seq-ab) (par-ab) 'value)
-             (check-expect (elapsed (lambda () (catch (seq-ab) e 0))) {seq}s)
-             (check-expect (elapsed (lambda () (catch (par-ab) e 0))) {par}s)"
+             (check-expect (elapsed (lambda () (catch (begin (seq-ab) 0) e 0))) {seq}s)
+             (check-expect (elapsed (lambda () (catch (begin (par-ab) 0) e 0))) {par}s)"
         );
         ("[time 100min]".into(), checks)
     });
@@ -468,9 +468,9 @@ const CONSULT_PREAMBLE: &str = r#"
 (datatype Shape [Dot] [Box (w Num) (label (Text 30))])
 (record Item (name Sym) (on Bool) (shape Shape) (tags (List (Text 12) 3)))
 (define spent (thunk)
-  (let* ([c0 (. (remaining) cost)] [_ (catch (thunk) e e)] [c1 (. (remaining) cost)]) (- c0 c1)))
+  (let* ([c0 (. (remaining) cost)] [_ (catch (begin (thunk) #t) e #f)] [c1 (. (remaining) cost)]) (- c0 c1)))
 (define elapsed (thunk)
-  (let* ([t0 (. (remaining) time)] [_ (catch (thunk) e e)] [t1 (. (remaining) time)]) (- t0 t1)))
+  (let* ([t0 (. (remaining) time)] [_ (catch (begin (thunk) #t) e #f)] [t1 (. (remaining) time)]) (- t0 t1)))
 "#;
 
 /// Text that is hard to round-trip: quotes, backslashes, control characters

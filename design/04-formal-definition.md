@@ -95,9 +95,10 @@ host-spec ::= (model {[id string] | [in n] | [out n] | [ceiling n] | [think n]})
             | (under ({config}) {unit-test})
             | unit-test
 
-unit-test ::= (check-expect exp exp)
+unit-test ::= (check-expect exp exp)                  ; equal values, or equal failures
             | (check-assert exp)
             | (check-error exp)                        ; a checked run-time error (stuck)
+            | (check-type-error exp)                   ; ill-typed (12, T8)
             | (check-fail exp pattern)                 ; evaluates to (fail φ), φ matching pattern
             | (check-within exp ([cost exp] [time exp])) ; spends at most, takes at most
             | (check-equiv exp exp quoted-symbol)        ; 'exact | 'resource | 'value (06 §0);
@@ -139,7 +140,7 @@ literal   ::= numeral | string | money | duration | #t | #f | quoted-symbol | '(
 ```
 
 **Reserved words:** `val define datatype record use grant script under
-check-expect check-assert check-error check-fail check-within check-equiv if let* lambda
+check-expect check-assert check-error check-fail check-within check-equiv check-type-error if let* lambda
 case ask call consult fail catch budget workflow begin par and or _`.
 
 `cost` and `time` are **not** reserved. They occur only in fixed bracket

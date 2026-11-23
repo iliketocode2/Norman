@@ -21,7 +21,9 @@ cargo test                                  # the design's example results and l
 No API key is needed for either command.
 
 **Status: research prototype.** The guarantees are enforced when a program
-runs; the static type and effect system is designed but not built. Nothing has
+runs. The static type and effect system is partly built: it infers every
+form's type and effects and decides unit tests, but doesn't yet reject a
+program or check ownership before it runs. Nothing has
 been benchmarked against a hand-written agent.
 
 ### Running against a real model and real Python

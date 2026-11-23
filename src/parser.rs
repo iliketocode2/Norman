@@ -30,6 +30,7 @@ const KEYWORDS: &[&str] = &[
     "check-fail",
     "check-within",
     "check-equiv",
+    "check-type-error",
     "if",
     "let*",
     "lambda",
@@ -471,6 +472,10 @@ impl<'a> Parser<'a> {
                 self.arity(sx, head, args, 1)?;
                 TestKind::Error(self.exp(&args[0])?)
             }
+            "check-type-error" => {
+                self.arity(sx, head, args, 1)?;
+                TestKind::TypeError(self.exp(&args[0])?)
+            }
             "check-fail" => {
                 self.arity(sx, head, args, 2)?;
                 TestKind::Fail(self.exp(&args[0])?, self.pattern(&args[1])?)
@@ -503,7 +508,7 @@ impl<'a> Parser<'a> {
             _ => {
                 return perr(
                     sx,
-                    "expected a unit test (check-expect, check-assert, check-error, check-fail, check-within, check-equiv)",
+                    "expected a unit test (check-expect, check-assert, check-error, check-fail, check-within, check-equiv, check-type-error)",
                 );
             }
         };

@@ -25,9 +25,9 @@
 
 (under ([script refusing] [cost $1.00] [time 1min])
   (check-fail   ((ask-with sonnet)) (Refused _))
-  (check-expect (catch ((ask-with sonnet)) e e) (Refused 'cyber))
+  (check-expect ((ask-with sonnet)) (fail (Refused 'cyber)))
   (check-fail   (retry 3 (ask-with sonnet)) (Refused _))           ; the second reply is never requested
-  (check-within (catch (retry 3 (ask-with sonnet)) e 0) ([time 1s])))
+  (check-within (retry 3 (ask-with sonnet)) ([time 1s])))
 
 ;;; ------------------------------------------------------------------
 ;;; The thinking allowance is reserved (decision A)
@@ -54,5 +54,5 @@
 
 (under ([script long] [cost $1.00] [time 1min])
   (check-fail   ((ask-with lean)) (Invalid _))                     ; 500 > 436
-  (check-within (catch ((ask-with lean)) e 0) ([cost $0.00441]))   ; 25×2 + 436×10 = 4 410 µ$
+  (check-within ((ask-with lean)) ([cost $0.00441]))   ; 25×2 + 436×10 = 4 410 µ$
   (check-expect ((ask-with sonnet)) (Sell "Margins are compressing.")))   ; 500 ≤ 2436: fits

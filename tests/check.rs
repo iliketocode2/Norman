@@ -159,10 +159,162 @@ fn any_has_no_static_meaning() {
     assert!(err.contains("Any has no static meaning"), "{}", err);
 }
 
+// ------------------------------------------------------------------ the agentic forms
+
+const GRANTS: &str = r#"
+(grant claude   (model))
+(grant reviewer (human))
+(grant py       (kernel [exec (Text 4000)] [count Num]))
+(grant open     (kernel))
+(grant files    (filesystem))
+"#;
+
+/// A grant's type carries its name, and every effect says which grant it
+/// reaches (design/12 §1, §2, T3). A function given no capability can only
+/// ask, which is the claim of `01` P3 that Theorem 8 proves.
 #[test]
-fn ask_call_and_consult_wait_for_step_3() {
-    let err = rejected("(grant m (model))\n(define f () (ask m Num (list) 'q))");
-    assert!(err.contains("step 3"), "{}", err);
+fn grants_have_named_types_and_effects_name_them() {
+    let src = format!(
+        "{}{}",
+        GRANTS,
+        r#"
+(define ask-it (ctx) (ask claude Num ctx 'q))
+(define generic-ask (m) (ask m Text (list) 'q))
+(define review (h) (consult h Bool "ok?" 'r))
+(define propose-it () (consult reviewer (Option Num) "ok?" (propose (Some 1)) 'r))
+(define observe (k code) (call k exec code))
+(define count-it () (call py count "x"))
+(define run-open () (call open anything 1 "two"))
+(define read-it () (call files read "notes.txt"))
+(define analyst-then-tool (ctx) (call py exec (show (ask-it ctx))))
+"#
+    );
+    let got = schemes(
+        &src,
+        &[
+            "claude",
+            "reviewer",
+            "py",
+            "files",
+            "ask-it",
+            "generic-ask",
+            "review",
+            "propose-it",
+            "observe",
+            "count-it",
+            "run-open",
+            "read-it",
+            "analyst-then-tool",
+        ],
+    );
+    let want = [
+        "(Model claude)",
+        "(Human reviewer)",
+        "(Kernel py)",
+        "(Filesystem files)",
+        "((List Message) -> Num ! ask claude)",
+        "((Model a) -> Text ! ask a)",
+        "((Human a) -> Bool ! consult a)",
+        "(-> (Option Num) ! consult reviewer)",
+        // Generic in the capability, its kind, the grant whose operations
+        // it offers, and the argument, which a host receives as `show`
+        // writes it.
+        "Showable d, Offers c exec e => ((Cap a b c) d -> e ! call b)",
+        "(-> Num ! call py)",
+        "(-> Text ! call open)",
+        "(-> Text ! call files)",
+        "((List Message) -> Text ! ask claude call py)",
+    ];
+    for (g, w) in got.iter().zip(want) {
+        assert_eq!(g, w);
+    }
+    // Used at a closed grant, `observe` answers what the grant declares.
+    let used = format!("{}\n(define obs () (observe py \"x\"))\n(define cnt () (+ 1 (call py count)))", src);
+    assert_eq!(schemes(&used, &["obs", "cnt"]), ["(-> Text ! call py)", "(-> Num ! call py)"]);
+}
+
+#[test]
+fn the_agentic_forms_reject_what_used_to_fail_at_run_time() {
+    for (src, says) in [
+        ("(define f () (call py frobnicate \"x\"))", "py does not offer frobnicate; it offers exec, count"),
+        ("(define f () (ask claude Money (list) 'q))", "not askable"),
+        ("(define f () (ask claude Any (list) 'q))", "Any is not askable"),
+        ("(define f () (ask claude Option (list) 'q))", "Option takes 1 type argument"),
+        ("(define f () (ask claude Num \"hi\" 'q))", "an ask's context is a list of messages"),
+        ("(define f () (ask reviewer Num (list) 'q))", "ask needs a model"),
+        ("(define f () (consult claude Num \"?\" 'q))", "consult needs a person"),
+        ("(define f () (consult reviewer Num 'what 'q))", "a consult's prompt is Text"),
+        ("(define f () (consult reviewer Num \"?\" (propose \"7\") 'q))", "a proposal has the answer's type"),
+        ("(define f () (call claude exec \"x\"))", "call needs a capability"),
+        ("(define f () (call py exec (lambda (x) x)))", "a function can't be shown"),
+        ("(define f () (call py exec py))", "can't be shown, and this is (Kernel py)"),
+        ("(define f () (call files fork))", "only a kernel can fork"),
+        ("(define f (b) (if b claude reviewer))", "expected"),
+        ("(define f () (+ (call py exec \"x\") 1))", "expected"),
+        ("(define f () (. claude id))", "(Model claude) is not a record"),
+    ] {
+        let err = rejected(&format!("{}{}", GRANTS, src));
+        assert!(err.contains(says), "for {}\nexpected an error mentioning {:?}, got: {}", src, says, err);
+    }
+}
+
+/// A type names exactly one grant, so two models can't share a list. This
+/// is the price of per-grant effects (T3).
+#[test]
+fn a_type_names_one_grant() {
+    let err = rejected("(grant a (model))\n(grant b (model))\n(define both () (list a b))");
+    assert!(err.contains("are different grants"), "{}", err);
+}
+
+/// `fork` makes a new name, with its parent's operations (§5.2). A function
+/// that forks makes a new name at each call; a `val` bound to a fork is one
+/// kernel, so its name is not generalized (§4.1).
+#[test]
+fn forks_are_new_names_and_vals_keep_theirs() {
+    let src = format!(
+        "{}{}",
+        GRANTS,
+        r#"
+(define forked () (call py fork))
+(define two-forks () (Pair [fst (forked)] [snd (forked)]))
+(define fork-and-run () (let* ([k (call py fork)]) (call k exec "x")))
+(define fork-and-count () (call (forked) count))
+(val k (call py fork))
+(define k-twice () (Pair [fst k] [snd k]))
+(val id (lambda (x) x))
+"#
+    );
+    let got = schemes(&src, &["forked", "two-forks", "fork-and-run", "fork-and-count", "k-twice", "id"]);
+    assert_eq!(got[0], "(-> (Kernel a py) ! call py)");
+    assert_eq!(got[1], "(-> (Pair (Kernel a py) (Kernel b py)) ! call py)", "a new name at each call");
+    assert_eq!(got[2], "(-> Text ! call py call a)");
+    assert_eq!(got[3], "(-> Num ! call py call a)", "a fork offers its parent's operations");
+    assert_eq!(got[4], "(-> (Pair (Kernel a py) (Kernel a py)))", "one kernel, one name");
+    assert_eq!(got[5], "(a -> a)", "a val bound to a value generalizes as usual");
+    // And a fork of a closed kernel is closed.
+    let err = rejected(&format!("{}(define f () (call (call py fork) frobnicate))", GRANTS));
+    assert!(err.contains("py does not offer frobnicate"), "{}", err);
+}
+
+/// `(check-type-error e)` passes exactly when `e` is ill-typed (T8), and
+/// proves nothing in a file that doesn't check.
+#[test]
+fn check_type_error_passes_only_on_a_type_error() {
+    let (_, r) = check(&format!(
+        "{}{}",
+        GRANTS,
+        r#"
+(check-type-error (call py frobnicate "x"))
+(check-type-error (+ 1 2))
+(check-type-error (show claude))
+"#
+    ));
+    assert!(r.ok(), "{:?}", r.errors);
+    assert_eq!(r.test_errors.len(), 1, "{:?}", r.test_errors);
+    assert!(r.test_errors[0].contains("expected (+ 1 2) to be ill-typed, but it has type Num"), "{:?}", r.test_errors);
+    let (_, r) = check("(define broken () (+ 1 \"x\"))\n(check-type-error (no-such-name))");
+    assert!(!r.ok());
+    assert!(r.test_errors.iter().any(|e| e.contains("proves nothing")), "{:?}", r.test_errors);
 }
 
 // ------------------------------------------------------------------ the top level
@@ -321,4 +473,27 @@ fn an_ill_typed_test_fails_alone() {
     );
     assert!(r.ok(), "the file is fine: {:?}", r.errors);
     assert_eq!(r.test_errors.len(), 2, "{:?}", r.test_errors);
+}
+
+// ------------------------------------------------------------------ the examples
+
+/// Step 3's test (design/12 §9): every example file checks, and every unit
+/// test in it is well typed, except the `check-type-error`s, which aren't.
+#[test]
+fn every_example_checks() {
+    let mut failures = vec![];
+    let mut files: Vec<_> = std::fs::read_dir("examples")
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "nrm"))
+        .collect();
+    files.sort();
+    for path in files {
+        let mut c = Checker::new();
+        let r = c.check_file(&path);
+        for e in r.errors.iter().chain(&r.test_errors) {
+            failures.push(format!("{}: {}", path.display(), e));
+        }
+    }
+    assert!(failures.is_empty(), "{} problem(s):\n{}", failures.len(), failures.join("\n"));
 }

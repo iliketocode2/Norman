@@ -476,13 +476,15 @@
     <pre class="syntax">(<span class="lit">under</span> ([<span class="lit">script</span> <span class="meta">Name</span>] [<span class="lit">cost</span> <span class="meta">$1.00</span>] [<span class="lit">time</span> <span class="meta">1min</span>]) {<span class="meta">unit-test</span>})</pre>
     <dl class="forms">
       <dt>(check-expect <em>e</em> <em>expected</em>)</dt>
-      <dd>Both sides run in their own fresh world, so evaluating the expected value cannot consume the script.</dd>
+      <dd>Both sides run in their own fresh world, so evaluating the expected value cannot consume the script. Two equal failures agree too, so <code>(check-expect (ask-v) (fail (Refused 'cyber)))</code> says exactly how it fails.</dd>
       <dt>(check-assert <em>e</em>)</dt>
       <dd>The expression is true.</dd>
       <dt>(check-fail <em>e</em> <em>pattern</em>)</dt>
       <dd>It fails, with a failure matching the pattern: <code>(check-fail (ask-v) (Invalid _))</code>.</dd>
       <dt>(check-error <em>e</em>)</dt>
       <dd>It is a checked run-time error — the program is wrong, not the world.</dd>
+      <dt>(check-type-error <em>e</em>)</dt>
+      <dd>It is ill-typed, so the checker rejects it before it runs. Every other test fails if its expression is ill-typed.</dd>
       <dt>(check-within <em>e</em> ([cost <em>c</em>] [time <em>t</em>]))</dt>
       <dd>It spends at most <em>c</em> and takes at most <em>t</em>, <em>whatever its result</em>. That lets you measure failures as well as successes.</dd>
       <dt>(check-equiv <em>e₁</em> <em>e₂</em> <em>'grade</em>)</dt>
@@ -511,9 +513,8 @@
   (check-fail   (ask-v) (ToolError _))
   (check-expect (retry 1 ask-v) (Sell "Margins fell."))
   (check-within (retry 1 ask-v) ([cost $0.01] [time 3s]))
-  ;; Failures are values: catch one and look at it.
-  (check-expect (catch (ask-v) e (case e [(ToolError m) m] [_ "other"]))
-                "503 Service Unavailable"))</code></pre>
+  ;; Failures are values: a test can name the exact one it expects.
+  (check-expect (ask-v) (fail (ToolError "503 Service Unavailable"))))</code></pre>
       <div class="result"></div>
     </div>
 
@@ -554,7 +555,7 @@
       <code>val</code> <code>define</code> <code>datatype</code> <code>record</code> <code>use</code>
       <code>grant</code> <code>script</code> <code>under</code> <code>check-expect</code>
       <code>check-assert</code> <code>check-error</code> <code>check-fail</code>
-      <code>check-within</code> <code>check-equiv</code> <code>if</code> <code>let*</code>
+      <code>check-within</code> <code>check-equiv</code> <code>check-type-error</code> <code>if</code> <code>let*</code>
       <code>lambda</code> <code>case</code> <code>ask</code> <code>call</code> <code>consult</code> <code>fail</code>
       <code>catch</code> <code>budget</code> <code>workflow</code> <code>begin</code>
       <code>par</code> <code>and</code> <code>or</code> <code>_</code>

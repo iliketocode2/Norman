@@ -346,6 +346,8 @@ pub enum TestKind {
     Fail(ExpRef, Pattern),
     Within(ExpRef, Option<i64>, Option<i64>),
     Equiv(ExpRef, ExpRef, Grade),
+    /// `(check-type-error e)`: passes only when `e` is ill-typed (design/12, T8).
+    TypeError(ExpRef),
 }
 
 #[derive(Debug)]
