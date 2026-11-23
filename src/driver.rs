@@ -9,7 +9,7 @@ use crate::parser::Parser;
 use crate::types::TypeEnv;
 use crate::value::*;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -50,6 +50,12 @@ pub struct Interp {
     /// (`norman --no-check`), a program runs as it did before the checker,
     /// and WORKFLOWSHARED is checked when a workflow starts.
     pub check: bool,
+    /// Every file loaded so far, by canonical path. A file is loaded at most
+    /// once per interpreter, as the checker reads it at most once: a second
+    /// `use` of it (a diamond, or a cycle back to a file still loading) does
+    /// nothing. Without this, a `use` cycle recursed until the stack
+    /// overflowed, and a diamond ran a file's definitions and tests twice.
+    loaded: HashSet<PathBuf>,
 }
 
 impl Interp {
@@ -136,6 +142,7 @@ impl Interp {
             checker: crate::check::Checker::new(),
             verdicts: HashMap::new(),
             check: true,
+            loaded: HashSet::new(),
         };
         for p in Prim::ALL {
             i.globals.insert(Rc::from(p.name()), Value::Prim(p));
@@ -180,6 +187,13 @@ impl Interp {
     }
 
     fn load_file_unchecked(&mut self, path: &Path) -> Result<Summary, String> {
+        // The same key the checker uses, so the two agree on what "the same
+        // file" means. A file that can't be canonicalized doesn't exist, and
+        // reading it below reports that.
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if !self.loaded.insert(key) {
+            return Ok(Summary::default());
+        }
         let src = std::fs::read_to_string(path).map_err(|e| format!("can't read {}: {}", path.display(), e))?;
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();

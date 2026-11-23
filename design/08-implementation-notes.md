@@ -153,7 +153,12 @@ Each item is deliberate and listed here so it isn't mistaken for a bug.
    `check-equiv`, so evaluating the expected value can't consume the tested
    expression's script.
 9. **`use` runs the used file's tests,** following Ramsey's convention. So
-   loading `step6-laws.nrm` also reports `step5-examples.nrm`.
+   loading `step6-laws.nrm` also reports `step5-examples.nrm`. **A file is
+   loaded at most once per run,** as the checker reads it at most once; a
+   second `use` of it does nothing. Until this was fixed (`13`, Phase 0), a
+   `use` cycle passed the checker and then recursed until the stack
+   overflowed, and a diamond loaded the shared file twice, running its
+   definitions and tests twice.
 10. **Pure computation is bounded by a step limit** (20 million steps), which
     is a checked run-time error (`07` §7).
 11. **The live person is at the terminal, answering one line at a time**

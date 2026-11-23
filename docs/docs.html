@@ -86,8 +86,7 @@
       <span class="label">Money and time are not numbers</span>
       <p>
         They are distinct kinds of value. You may add money to money, and a duration to a duration,
-        but never money to seconds. That rules out an entire class of budget bug at the level of
-        values rather than by convention.
+        but never money to seconds, and never either to a <code>Num</code>.
       </p>
     </div>
 
@@ -117,7 +116,7 @@
 
     <dl class="forms">
       <dt>(define <em>name</em> (<em>formals</em>) <em>body</em>)</dt>
-      <dd>A function. The formals must be distinct. Top-level names are mutually recursive.</dd>
+      <dd>A function. The formals must be distinct. Top-level names are mutually recursive, and each is defined <strong>once</strong>, including the names the <a href="#basis-functions">basis</a> defines.</dd>
 
       <dt>(val <em>name</em> <em>exp</em>)</dt>
       <dd>Evaluate once and bind the result. If it fails, nothing is bound and the failure is reported.</dd>
@@ -127,6 +126,16 @@
 
       <dt>(record <em>Record</em> (<em>field</em> <em>ty</em>)…)</dt>
       <dd>A product type: a value has <em>all</em> of its fields.</dd>
+
+      <dt>(use <em>file</em>)</dt>
+      <dd>
+        Load another file here, as if its definitions were written at this point. The path is
+        relative to the file that says <code>use</code>. Its definitions, grants and scripts join one
+        global namespace (there are no modules), its top-level expressions run, and its own unit tests
+        run; anything that goes wrong there counts against this file. A file is loaded <strong>at
+        most once</strong> per run, so a second <code>use</code> of it, including a cycle, does
+        nothing. The whole tree of used files is type-checked before any of it runs.
+      </dd>
     </dl>
 
     <p>
@@ -178,9 +187,8 @@
 
     <p>
       <strong>Patterns are flat.</strong> A constructor applies to variables or <code>_</code>, never
-      to another pattern, and no variable may repeat within one pattern. This keeps matching a
-      single step, which keeps every proof about <code>case</code> to a single step too. Nested
-      patterns could be added later as sugar.
+      to another pattern, and no variable may repeat within one pattern. To match nested data, nest
+      <code>case</code>s.
     </p>
 
     <h3 id="exp-build" data-short="Building values">Building values</h3>
@@ -350,17 +358,11 @@
       400-byte reasons reserves far less than the same type with unbounded text, so it fits budgets
       the unbounded one is refused by.
     </p>
-    <div class="note">
-      <span class="label">Measured, not assumed</span>
-      <p>
-        The type is also <em>sent</em> with every ask, as a JSON schema, and billed as input. The
-        project's first real API call spent 538 input tokens on a 175-character prompt, 478 of them
-        on the schema. So bounding an <em>answer</em> shrinks the reservation, while adding a
-        constructor or a field makes every ask dearer on input for as long as the program runs. No
-        bound on the text inside those fields helps, because what is sent is the schema, not the
-        answer.
-      </p>
-    </div>
+    <p>
+      The type is also <strong>sent</strong> with every ask, as a JSON schema billed as input, and
+      it is usually most of the input. So every constructor and field makes every ask dearer, and no
+      bound on the text inside them helps. In a loop, use <a href="#hosts">prompt caching</a>.
+    </p>
 
     <h3 id="json" data-short="JSON encoding">How a type maps to JSON</h3>
     <table>
@@ -465,6 +467,11 @@
       <dt>(window <em>n</em> <em>ctx</em>)</dt>
       <dd>A context policy: every <code>System</code> message, then the last <em>n</em> others. Note that it moves system messages to the front.</dd>
     </dl>
+    <p>
+      These use helpers that are also top-level names, so a program can't define them again:
+      <code>attempt</code>, <code>best-of*</code>, <code>correction</code>,
+      <code>first-some</code>, <code>last-n</code> and <code>system?</code>.
+    </p>
 
     <h2 id="hosts">Hosts and capabilities</h2>
     <pre class="syntax">(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">model</span> [<span class="lit">id</span> <span class="meta">"…"</span>] [<span class="lit">in</span> <span class="meta">p</span>] [<span class="lit">out</span> <span class="meta">p</span>] [<span class="lit">cache</span> <span class="meta">5min|1h</span>] [<span class="lit">cache-read</span> <span class="meta">p</span>] [<span class="lit">ceiling</span> <span class="meta">n</span>] [<span class="lit">think</span> <span class="meta">n</span>]))
@@ -483,8 +490,7 @@
     <h3 id="tool-types" data-short="What a tool answers with">What a tool answers with</h3>
     <p>
       A grant declares each operation's result type, so a tool's answer is typed the same way a
-      model's is. The declaration lives at the grant rather than the call site because the grant is
-      already the host–program contract, and because a capability should carry its own interface.
+      model's is. The call site names no type.
     </p>
     <pre class="syntax">(<span class="lit">grant</span> py (<span class="lit">kernel</span> [exec (<span class="lit">Text</span> 4000)] [count <span class="lit">Num</span>] [solve Outcome]))
 (<span class="lit">call</span> py count <span class="meta">"wc -l"</span>)        <span class="meta">; a Num, not the text "7"</span></pre>
@@ -494,15 +500,10 @@
       <li><strong>A declared <code>Text</code> takes the result verbatim,</strong> and only its bound is checked.</li>
       <li><strong>Any other type reads the result as JSON</strong> and validates it, exactly as a model's reply is validated. Failure is <code>Invalid</code>, so <code>retry</code> handles a malformed tool result for free.</li>
     </ol>
-    <div class="note">
-      <span class="label">Why 3 and 4 differ</span>
-      <p>
-        An <code>ask</code> that wants <code>Text</code> receives a JSON string; a <code>call</code>
-        that wants <code>Text</code> receives raw bytes. The channels really are different — a model
-        emits JSON because a schema told it to, while a tool emits bytes, and the grant is what says
-        what those bytes mean.
-      </p>
-    </div>
+    <p>
+      Note the difference from <code>ask</code>: there, <code>Text</code> is a JSON string; here, it
+      is the tool's raw output.
+    </p>
     <p>
       Every model field is optional and falls back to a default. Prices are dollars per million
       tokens, with up to three decimals: <code>[in 3]</code> is $3 per million input tokens,
@@ -655,10 +656,10 @@
       <code>par</code> <code>and</code> <code>or</code> <code>_</code>
     </p>
     <p>
-      <code>cost</code> and <code>time</code> are <strong>not</strong> reserved. They appear only in
-      fixed bracket positions, and they are the field names of <code>Resources</code>. An earlier
-      draft did reserve them, which made <code>(. (remaining) cost)</code> a syntax error in the
-      language's own basis. Running the tests caught it.
+      <code>cost</code>, <code>time</code>, <code>propose</code> and <code>price</code> are
+      <strong>not</strong> reserved: they appear only in fixed bracket positions, so they are free to
+      use as names. <code>cost</code> and <code>time</code> are the fields of
+      <code>Resources</code>.
     </p>
 
     <h2 id="deeper">Going deeper</h2>

@@ -27,7 +27,7 @@ A **semicolon** begins a comment that runs to the end of the line. Each bracket 
 
 > **Money and time are not numbers**
 >
-> They are distinct kinds of value. You may add money to money, and a duration to a duration, but never money to seconds. That rules out an entire class of budget bug at the level of values rather than by convention.
+> They are distinct kinds of value. You may add money to money, and a duration to a duration, but never money to seconds, and never either to a `Num`.
 
 ## Program structure
 
@@ -52,7 +52,7 @@ xdef ::= (use file)
 
 - `(define name (formals) body)`
 
-  A function. The formals must be distinct. Top-level names are mutually recursive.
+  A function. The formals must be distinct. Top-level names are mutually recursive, and each is defined **once**, including the names the [basis](https://norman-docs.vercel.app/docs#basis-functions) defines.
 
 - `(val name exp)`
 
@@ -65,6 +65,10 @@ xdef ::= (use file)
 - `(record Record (field ty)…)`
 
   A product type: a value has *all* of its fields.
+
+- `(use file)`
+
+  Load another file here, as if its definitions were written at this point. The path is relative to the file that says `use`. Its definitions, grants and scripts join one global namespace (there are no modules), its top-level expressions run, and its own unit tests run; anything that goes wrong there counts against this file. A file is loaded **at most once** per run, so a second `use` of it, including a cycle, does nothing. The whole tree of used files is type-checked before any of it runs.
 
 The difference matters when you write code over them. A datatype is consumed with `case`, one branch per constructor. A record is consumed with `(. r field)`. It also shows up in how you build them:
 
@@ -117,7 +121,7 @@ pattern ::= Con                        ; a constructor with no fields
           | _                          ; anything
 ```
 
-**Patterns are flat.** A constructor applies to variables or `_`, never to another pattern, and no variable may repeat within one pattern. This keeps matching a single step, which keeps every proof about `case` to a single step too. Nested patterns could be added later as sugar.
+**Patterns are flat.** A constructor applies to variables or `_`, never to another pattern, and no variable may repeat within one pattern. To match nested data, nest `case`s.
 
 ### Building values
 
@@ -253,9 +257,7 @@ That one rule is what keeps authority unforgeable: a capability is not an askabl
 
 A bound caps the answer's size, which caps the reservation. A `Verdict` with 400-byte reasons reserves far less than the same type with unbounded text, so it fits budgets the unbounded one is refused by.
 
-> **Measured, not assumed**
->
-> The type is also *sent* with every ask, as a JSON schema, and billed as input. The project's first real API call spent 538 input tokens on a 175-character prompt, 478 of them on the schema. So bounding an *answer* shrinks the reservation, while adding a constructor or a field makes every ask dearer on input for as long as the program runs. No bound on the text inside those fields helps, because what is sent is the schema, not the answer.
+The type is also **sent** with every ask, as a JSON schema billed as input, and it is usually most of the input. So every constructor and field makes every ask dearer, and no bound on the text inside them helps. In a loop, use [prompt caching](https://norman-docs.vercel.app/docs#hosts).
 
 ### How a type maps to JSON
 
@@ -357,6 +359,8 @@ These are written in µNorman itself, and each is defined by algebraic laws.
 
   A context policy: every `System` message, then the last *n* others. Note that it moves system messages to the front.
 
+These use helpers that are also top-level names, so a program can't define them again: `attempt`, `best-of*`, `correction`, `first-some`, `last-n` and `system?`.
+
 ## Hosts and capabilities
 
 ```
@@ -371,7 +375,7 @@ Live, only `model` and `kernel` (with `--python`) have real hosts so far; `files
 
 ### What a tool answers with
 
-A grant declares each operation's result type, so a tool's answer is typed the same way a model's is. The declaration lives at the grant rather than the call site because the grant is already the host–program contract, and because a capability should carry its own interface.
+A grant declares each operation's result type, so a tool's answer is typed the same way a model's is. The call site names no type.
 
 ```
 (grant py (kernel [exec (Text 4000)] [count Num] [solve Outcome]))
@@ -383,9 +387,7 @@ A grant declares each operation's result type, so a tool's answer is typed the s
 3. **A declared `Text` takes the result verbatim,** and only its bound is checked.
 4. **Any other type reads the result as JSON** and validates it, exactly as a model's reply is validated. Failure is `Invalid`, so `retry` handles a malformed tool result for free.
 
-> **Why 3 and 4 differ**
->
-> An `ask` that wants `Text` receives a JSON string; a `call` that wants `Text` receives raw bytes. The channels really are different — a model emits JSON because a schema told it to, while a tool emits bytes, and the grant is what says what those bytes mean.
+Note the difference from `ask`: there, `Text` is a JSON string; here, it is the tool's raw output.
 
 Every model field is optional and falls back to a default. Prices are dollars per million tokens, with up to three decimals: `[in 3]` is $3 per million input tokens, `[in 0.1]` is ten cents. **Prices are stated here, not looked up** — the API does not report them, so a grant is where the program says what it believes a token costs. If they are wrong, the budget arithmetic is wrong.
 
@@ -522,7 +524,7 @@ Some things stay run-time errors by design: division by zero and overflow, a `su
 
 `val` `define` `datatype` `record` `use` `grant` `script` `under` `check-expect` `check-assert` `check-error` `check-fail` `check-within` `check-equiv` `check-type-error` `if` `let*` `lambda` `case` `ask` `call` `consult` `fail` `catch` `budget` `workflow` `begin` `par` `and` `or` `_`
 
-`cost` and `time` are **not** reserved. They appear only in fixed bracket positions, and they are the field names of `Resources`. An earlier draft did reserve them, which made `(. (remaining) cost)` a syntax error in the language's own basis. Running the tests caught it.
+`cost`, `time`, `propose` and `price` are **not** reserved: they appear only in fixed bracket positions, so they are free to use as names. `cost` and `time` are the fields of `Resources`.
 
 ## Going deeper
 

@@ -78,15 +78,20 @@ as context, so a false statement there becomes a wrong program.
 **Done when:** the reference and guide describe 0.4.0 exactly, and CI fails
 on the known stale phrases.
 
-> **Progress.** Items 1 and 2 are done. The site, the generated reference and
-> the guide now say what the checker checks; `docs/verify.mjs` has a `STALE`
-> list that fails CI if a known-false claim returns. It caught all ten in the
-> files as they were. Item 3 is partly done: `consult`, `human` grants and
-> the script entries that answer a consult were missing from the reference
-> entirely, and are now there, with a runnable example `verify.mjs` checks.
-> Still to do for item 3: document `(use file)`, and shorten the page by
-> moving rationale (the "Why 3 and 4 differ" box, the reserved-words
-> history) into the design documents.
+> **Done.** The site, the generated reference and the guide say what the
+> checker checks, and `docs/verify.mjs` has a `STALE` list that fails CI if a
+> known-false claim returns; it caught all ten in the files as they were.
+> The reference gained what it was missing: `consult`, `human` grants and the
+> script entries that answer a consult (with a runnable example), `(use
+> file)`, the rule that a top-level name is defined once, and the prelude's
+> helper names, which that rule makes unusable. Rationale that already lived
+> in the design documents (`04`, `09`, `10`) was cut from the reference, so
+> it grew by under 3 KB for all of that.
+>
+> Documenting `use` found a bug: a `use` cycle passed the checker and then
+> crashed the interpreter with a stack overflow, and a diamond loaded the
+> shared file twice. A file now loads at most once per run (`08`, deviation
+> 9), with regression tests in `tests/examples.rs`.
 
 ---
 
