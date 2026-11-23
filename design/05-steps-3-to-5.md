@@ -98,7 +98,11 @@ one meaning.
 3. **Concurrent requests to the same site** are served in virtual-time order,
    with ties broken by workflow binding order (`03` Q3).
 4. **Input tokens are computed,** by a fixed test tokenizer: ⌈bytes ÷ 4⌉ of the
-   serialized context. Scripts give only replies, output tokens and latency.
+   serialized context, plus the answer type's JSON schema at 478 tokens per
+   521 bytes (added in `09` §7a, after the first real call showed the schema
+   is most of an ask's input). Scripts give only replies, output tokens and
+   latency. A grant with `[cache …]` is charged through a simulated prompt
+   cache (`09` §7a).
 5. **An exhausted script is a checked run-time error,** tested with
    `check-error`, not a failure. A test that needs more replies than the
    script provides is a bug in the test.

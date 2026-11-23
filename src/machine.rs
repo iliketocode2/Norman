@@ -10,7 +10,7 @@
 //! Rule names in comments refer to 04 §6 and 07 §4.
 
 use crate::ast::*;
-use crate::host::{AskReq, Completion, CountError, Oracle, ScriptedOracle};
+use crate::host::{AskReq, Completion, CountError, Oracle, ScriptedOracle, Usage};
 use crate::types::TypeEnv;
 use crate::value::*;
 use std::collections::{HashMap, HashSet};
@@ -60,8 +60,13 @@ pub struct TraceEntry {
     pub site: String,
     pub path: Vec<u32>,
     pub kind: &'static str,
+    /// Every input token, however it was priced.
     pub in_tokens: i64,
     pub out_tokens: i64,
+    /// Of `in_tokens`, how many were read from the prompt cache, and how many
+    /// written to it (design/09 §7a).
+    pub cache_read: i64,
+    pub cache_write: i64,
     pub cost: i64,
     pub start: i64,
     pub end: i64,
@@ -1099,7 +1104,16 @@ impl<'a> Machine<'a> {
             .bound(ty)
             .map_or(model.ceiling, |b| (b + self.theta.wrap_overhead(ty) + model.think).min(model.ceiling))
             as i64;
-        let req = AskReq { site: site.to_string(), model: model.clone(), ty: ty.clone(), messages, max_tokens };
+        // The schema is input too, and usually most of it (design/09 §6a).
+        let schema = crate::anthropic::output_schema(self.theta, ty).map(|(s, _)| s.to_string()).unwrap_or_default();
+        let req = AskReq {
+            site: site.to_string(),
+            model: model.clone(),
+            ty: ty.clone(),
+            messages,
+            max_tokens,
+            schema: Rc::from(schema),
+        };
         let count = match self.oracle.count(&req) {
             Ok(c) => c,
             Err(CountError::Transient(msg)) => {
@@ -1121,7 +1135,7 @@ impl<'a> Machine<'a> {
             use crate::defaults::{COUNT_MARGIN_ABS, COUNT_MARGIN_PCT};
             (count.tokens * (100 + COUNT_MARGIN_PCT) + 99) / 100 + COUNT_MARGIN_ABS
         };
-        let reservation = in_tokens * model.in_price + max_tokens * model.out_price;
+        let reservation = crate::host::reservation(&model, in_tokens, max_tokens);
         if reservation > self.available(s) {
             self.raise_con(tid, "OverBudget", vec![]);
             return Ok(());
@@ -1249,7 +1263,7 @@ impl<'a> Machine<'a> {
         self.oracle.cancel(r.rid);
         let charge = Self::abandon_charge(&r);
         self.settle(r.scope, r.reserve, charge);
-        self.log(&r, 0, 0, charge, "past-deadline".into(), None);
+        self.log(&r, Usage::default(), charge, "past-deadline".into(), None);
         let t = &mut self.threads[r.tid];
         t.ctl = Ctl::Raise(failure("PastDeadline", vec![]));
         t.status = Status::Runnable;
@@ -1257,15 +1271,7 @@ impl<'a> Machine<'a> {
 
     /// `said` is what a person submitted or why they declined; it is recorded
     /// only for a consult.
-    fn log(
-        &mut self,
-        r: &Request,
-        in_tokens: i64,
-        out_tokens: i64,
-        cost: i64,
-        mut outcome: String,
-        said: Option<String>,
-    ) {
+    fn log(&mut self, r: &Request, usage: Usage, cost: i64, mut outcome: String, said: Option<String>) {
         if cost > r.reserve {
             // The reservation's one assumption (09 §3) failed: say so where it happened.
             outcome.push_str(" over-reservation");
@@ -1279,8 +1285,10 @@ impl<'a> Machine<'a> {
             site: r.site.clone(),
             path: self.threads[r.tid].path.clone(),
             kind,
-            in_tokens,
-            out_tokens,
+            in_tokens: usage.input_total(),
+            out_tokens: usage.output,
+            cache_read: usage.cache_read,
+            cache_write: usage.cache_write(),
             cost,
             start: r.start,
             end: self.now,
@@ -1291,10 +1299,11 @@ impl<'a> Machine<'a> {
 
     /// M-TIME, for one request: settle its money, log it, resume its thread.
     fn complete(&mut self, r: Request, c: Completion) -> Rt<()> {
-        let (price_in, price_out, ty) = match &r.kind {
-            ReqKind::Ask { model, ty } => (model.in_price, model.out_price, Some(ty.clone())),
-            ReqKind::Call { ty } | ReqKind::Consult { ty, .. } => (0, 0, Some(ty.clone())),
+        let ty = match &r.kind {
+            ReqKind::Ask { ty, .. } | ReqKind::Call { ty } | ReqKind::Consult { ty, .. } => Some(ty.clone()),
         };
+        // What a model reply billed; nothing, for a call or a consult.
+        let mut usage = Usage::default();
         let raise = |name: &str, fields: Vec<Value>| Ctl::Raise(failure(name, fields));
         let mut said = None;
         let (in_tokens, out_tokens, ctl, outcome) = match c {
@@ -1317,7 +1326,9 @@ impl<'a> Machine<'a> {
                 said = Some(reason);
                 done
             }
-            Completion::Answer { json, input_tokens, output_tokens, truncated } => {
+            Completion::Answer { json, usage: u, truncated } => {
+                usage = u;
+                let (input_tokens, output_tokens) = (u.input_total(), u.output);
                 let parsed = if truncated {
                     None // stopped at max_tokens, so the JSON is incomplete
                 } else {
@@ -1331,12 +1342,14 @@ impl<'a> Machine<'a> {
                     }
                 }
             }
-            Completion::Refusal { category, input_tokens, output_tokens } => {
+            Completion::Refusal { category, usage: u } => {
+                usage = u;
                 let ctl = raise("Refused", vec![Value::Sym(Rc::from(category.as_str()))]);
-                (input_tokens, output_tokens, ctl, format!("refused: {}", category))
+                (u.input_total(), u.output, ctl, format!("refused: {}", category))
             }
-            Completion::ProviderError { msg, input_tokens } => {
-                (input_tokens, 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg))
+            Completion::ProviderError { msg, usage: u } => {
+                usage = u;
+                (u.input_total(), 0, raise("ToolError", vec![Value::str(&msg)]), format!("error: {}", msg))
             }
             Completion::ToolResult { text } => {
                 // A tool answers with bytes, not with a schema, so a declared
@@ -1362,12 +1375,14 @@ impl<'a> Machine<'a> {
         };
         // A consult that reached the person is charged its price whatever
         // they said: their time was spent (CONSULTOK, -DECLINED, -INVALID).
-        let charge = match r.kind {
+        let charge = match &r.kind {
             ReqKind::Consult { .. } => r.reserve,
-            _ => in_tokens * price_in + out_tokens * price_out,
+            ReqKind::Ask { model, .. } => crate::host::charge(model, &usage),
+            ReqKind::Call { .. } => 0, // cost_κ(op) = 0 for every host so far
         };
+        debug_assert_eq!((in_tokens, out_tokens), (usage.input_total(), usage.output));
         self.settle(r.scope, r.reserve, charge);
-        self.log(&r, in_tokens, out_tokens, charge, outcome, said);
+        self.log(&r, usage, charge, outcome, said);
         let t = &mut self.threads[r.tid];
         t.ctl = ctl;
         t.status = Status::Runnable;
@@ -1559,7 +1574,7 @@ impl<'a> Machine<'a> {
                     self.oracle.cancel(r.rid);
                     let charge = Self::abandon_charge(&r);
                     self.settle(r.scope, r.reserve, charge);
-                    self.log(&r, 0, 0, charge, "cancelled".into(), None);
+                    self.log(&r, Usage::default(), charge, "cancelled".into(), None);
                 }
             }
             Status::Waiting => {

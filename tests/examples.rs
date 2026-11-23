@@ -66,6 +66,49 @@ fn consult_tests_all_pass() {
 }
 
 #[test]
+fn caching_tests_all_pass() {
+    let s = load("examples/caching.nrm");
+    assert!(s.total >= 13, "expected at least 13 tests, found {}", s.total);
+    assert!(s.clean(), "{} of {} caching tests passed, {} errors", s.passed, s.total, s.errors);
+}
+
+/// The grant syntax for prices and caching (design/09 §7a): prices are
+/// dollars per million tokens, with up to three decimals; a cache lasts
+/// 5min or 1h; and a read price needs a cache to read from.
+#[test]
+fn model_grant_prices_and_cache_options() {
+    let ok = |src: &str| {
+        let mut i = Interp::new();
+        i.verbose = false;
+        let s = i.load_str(src, "grant.nrm", Path::new(".")).unwrap();
+        assert!(s.clean(), "{} should load: {}", src, i.transcript());
+        match i.globals.get("m") {
+            Some(munorman::value::Value::Model(m)) => (**m).clone(),
+            other => panic!("{:?}", other),
+        }
+    };
+    let bad = |src: &str, says: &str| {
+        let mut i = Interp::new();
+        i.verbose = false;
+        let s = i.load_str(src, "grant.nrm", Path::new(".")).unwrap();
+        assert!(!s.clean(), "{} should be rejected", src);
+        assert!(i.transcript().contains(says), "{}: expected {:?} in {}", src, says, i.transcript());
+    };
+    let m = ok("(grant m (model))");
+    assert_eq!((m.in_nano, m.out_nano, m.read_nano, m.cache_ttl), (2000, 10_000, 200, None));
+    let m = ok("(grant m (model [in 0.1] [out 0.5] [cache 5min]))");
+    assert_eq!((m.in_nano, m.out_nano, m.read_nano, m.cache_ttl), (100, 500, 10, Some(300_000)));
+    let m = ok("(grant m (model [id \"claude-opus-5-5\"] [in 4] [out 20] [cache 1h] [cache-read 0.2]))");
+    assert_eq!((m.in_nano, m.read_nano, m.cache_ttl), (4000, 200, Some(3_600_000)));
+    assert_eq!(ok("(grant m (model [cache 5min] [cache-read 0.025]))").read_nano, 25);
+    bad("(grant m (model [cache 10min]))", "5min or 1h");
+    bad("(grant m (model [cache-read 0.2]))", "needs [cache 5min] or [cache 1h]");
+    bad("(grant m (model [in 0.0001]))", "dollars per million tokens");
+    bad("(grant m (model [in 2.]))", "dollars per million tokens");
+    bad("(grant m (model [in -1]))", "dollars per million tokens");
+}
+
+#[test]
 fn type_parameter_tests_all_pass() {
     let s = load("examples/type-parameters.nrm");
     assert!(s.total >= 19, "expected at least 19 tests, found {}", s.total);

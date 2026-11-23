@@ -317,7 +317,7 @@ These are written in µNorman itself, and each is defined by algebraic laws.
 ## Hosts and capabilities
 
 ```
-(grant name (model [id "…"] [in n] [out n] [ceiling n] [think n]))
+(grant name (model [id "…"] [in p] [out p] [cache 5min|1h] [cache-read p] [ceiling n] [think n]))
 (grant name (kernel {[op ty]}))        ; stateful
 (grant name (filesystem {[op ty]}))    ; stateful
 (grant name (http {[op ty]}))          ; stateless
@@ -341,7 +341,9 @@ A grant declares each operation's result type, so a tool's answer is typed the s
 >
 > An `ask` that wants `Text` receives a JSON string; a `call` that wants `Text` receives raw bytes. The channels really are different — a model emits JSON because a schema told it to, while a tool emits bytes, and the grant is what says what those bytes mean.
 
-Every model field is optional and falls back to a default. Prices are in micro-dollars per token: `[in 3]` is $3 per million input tokens. **Prices are stated here, not looked up** — the API does not report them, so a grant is where the program says what it believes a token costs. If they are wrong, the budget arithmetic is wrong.
+Every model field is optional and falls back to a default. Prices are dollars per million tokens, with up to three decimals: `[in 3]` is $3 per million input tokens, `[in 0.1]` is ten cents. **Prices are stated here, not looked up** — the API does not report them, so a grant is where the program says what it believes a token costs. If they are wrong, the budget arithmetic is wrong.
+
+**`[cache 5min]` or `[cache 1h]` turns on prompt caching.** An answer type's schema is sent as input with every ask and is usually most of it, so a loop that asks again and again pays for it again and again. With caching, a repeated prefix is read back at `[cache-read]`, a tenth of `[in]` unless the grant says otherwise. Writing the cache costs a quarter more than plain input (twice as much for the hour), so a one-off ask costs more with caching, not less, and a caching grant reserves input at the write price. Use it where asks repeat: an agent loop, `retry`, `repair`. Scripted runs simulate the cache, so a test's costs are what a live run would pay.
 
 ## Scripts and tests
 

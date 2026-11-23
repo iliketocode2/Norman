@@ -92,8 +92,8 @@
   (check-expect (elapsed (lambda () (best-of 2 ask-analyst accept-all))) 3s)   ; max(3 s, 1 s)
   (check-expect (best-of 3 ask-analyst buy?) (Buy "Three."))          ; check rejects Sell
   (check-expect (elapsed (lambda () (best-of 3 ask-analyst buy?))) 5s)
-  (check-expect (spent (lambda () (best-of 3 ask-analyst buy?)))      ; 75 in × 3 µ$ + 23 out × 15 µ$
-                $0.00057))
+  (check-expect (spent (lambda () (best-of 3 ask-analyst buy?)))      ; (75 + 3 × 478 schema) in × 3 µ$ + 23 out × 15 µ$
+                $0.004872))
 
 (script two-buys
   [analyst (reply "{\"tag\":\"Buy\",\"reason\":\"One.\"}") (out 10) (latency 4s)

@@ -230,13 +230,15 @@ impl Interp {
                 },
                 Top::Grant(x, spec) => {
                     let v = match spec {
-                        HostSpec::Model { id, in_price, out_price, ceiling, think } => {
+                        HostSpec::Model { id, in_nano, out_nano, read_nano, cache, ceiling, think } => {
                             Value::Model(Rc::new(ModelSpec {
                                 name: x.clone(),
                                 id,
                                 think,
-                                in_price,
-                                out_price,
+                                in_nano,
+                                out_nano,
+                                read_nano,
+                                cache_ttl: cache,
                                 ceiling,
                             }))
                         }
@@ -590,8 +592,13 @@ fn human_grants(
 fn trace_lines(o: &Outcome) -> Vec<String> {
     let mut lines = vec![];
     for t in &o.trace {
+        // How much of the input came from the prompt cache, or went into it.
+        let cached = match (t.cache_read, t.cache_write) {
+            (0, 0) => String::new(),
+            (r, w) => format!(" (cache: read {}, wrote {})", r, w),
+        };
         lines.push(format!(
-            "  trace: {} {:<12} in {:>6}  out {:>6}  {:>10}  {:>7} → {:<7} {}",
+            "  trace: {} {:<12} in {:>6}  out {:>6}  {:>10}  {:>7} → {:<7} {}{}",
             t.kind,
             t.site,
             t.in_tokens,
@@ -599,7 +606,8 @@ fn trace_lines(o: &Outcome) -> Vec<String> {
             fmt_money(t.cost),
             fmt_dur(t.start),
             fmt_dur(t.end),
-            t.outcome
+            t.outcome,
+            cached
         ));
     }
     if !o.trace.is_empty() {

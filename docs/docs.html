@@ -414,7 +414,7 @@
     </dl>
 
     <h2 id="hosts">Hosts and capabilities</h2>
-    <pre class="syntax">(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">model</span> [<span class="lit">id</span> <span class="meta">"…"</span>] [<span class="lit">in</span> <span class="meta">n</span>] [<span class="lit">out</span> <span class="meta">n</span>] [<span class="lit">ceiling</span> <span class="meta">n</span>] [<span class="lit">think</span> <span class="meta">n</span>]))
+    <pre class="syntax">(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">model</span> [<span class="lit">id</span> <span class="meta">"…"</span>] [<span class="lit">in</span> <span class="meta">p</span>] [<span class="lit">out</span> <span class="meta">p</span>] [<span class="lit">cache</span> <span class="meta">5min|1h</span>] [<span class="lit">cache-read</span> <span class="meta">p</span>] [<span class="lit">ceiling</span> <span class="meta">n</span>] [<span class="lit">think</span> <span class="meta">n</span>]))
 (<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">kernel</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))        <span class="meta">; stateful</span>
 (<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">filesystem</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))    <span class="meta">; stateful</span>
 (<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">http</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))          <span class="meta">; stateless</span></pre>
@@ -443,10 +443,21 @@
       </p>
     </div>
     <p>
-      Every model field is optional and falls back to a default. Prices are in micro-dollars per
-      token: <code>[in 3]</code> is $3 per million input tokens. <strong>Prices are stated here, not
-      looked up</strong> — the API does not report them, so a grant is where the program says what it
-      believes a token costs. If they are wrong, the budget arithmetic is wrong.
+      Every model field is optional and falls back to a default. Prices are dollars per million
+      tokens, with up to three decimals: <code>[in 3]</code> is $3 per million input tokens,
+      <code>[in 0.1]</code> is ten cents. <strong>Prices are stated here, not looked up</strong> — the
+      API does not report them, so a grant is where the program says what it believes a token costs.
+      If they are wrong, the budget arithmetic is wrong.
+    </p>
+    <p>
+      <strong><code>[cache 5min]</code> or <code>[cache 1h]</code> turns on prompt caching.</strong>
+      An answer type's schema is sent as input with every ask and is usually most of it, so a loop
+      that asks again and again pays for it again and again. With caching, a repeated prefix is read
+      back at <code>[cache-read]</code>, a tenth of <code>[in]</code> unless the grant says otherwise.
+      Writing the cache costs a quarter more than plain input (twice as much for the hour), so a
+      one-off ask costs more with caching, not less, and a caching grant reserves input at the write
+      price. Use it where asks repeat: an agent loop, <code>retry</code>, <code>repair</code>.
+      Scripted runs simulate the cache, so a test's costs are what a live run would pay.
     </p>
 
     <h2 id="testing">Scripts and tests</h2>

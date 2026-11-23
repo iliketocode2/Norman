@@ -109,17 +109,22 @@ impl Prim {
     ];
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModelSpec {
     pub name: Name,
     /// The provider's model ID, e.g. "claude-sonnet-5".
     pub id: String,
     /// Thinking allowance in tokens, added to max_tokens and the reservation (09, decision A).
     pub think: u64,
-    /// Micro-dollars per input token.
-    pub in_price: i64,
-    /// Micro-dollars per output token.
-    pub out_price: i64,
+    /// Nano-dollars per input token.
+    pub in_nano: i64,
+    /// Nano-dollars per output token.
+    pub out_nano: i64,
+    /// Nano-dollars per input token read from the prompt cache.
+    pub read_nano: i64,
+    /// The prompt cache's lifetime in ms (5 minutes or an hour), if the
+    /// grant caches; `None` sends no `cache_control` (design/09 §7a).
+    pub cache_ttl: Option<i64>,
     /// The model's maximum output, in tokens.
     pub ceiling: u64,
 }

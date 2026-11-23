@@ -295,10 +295,95 @@ consequences:
 
 ---
 
+## 7a. Prompt caching, and a tokenizer that counts the schema
+
+§6a found that the answer type's schema is most of an ask's input and is
+re-sent every time. This section is how µNorman stops paying full price for
+it, and how scripted runs learned to count it. Three decisions were made with
+the user:
+
+| # | Question | Decision |
+|---|---|---|
+| P1 | When does an ask use the cache? | **Opt-in, per model grant:** `(model [cache 5min])` or `[cache 1h]`. A cache write costs 1.25× the input price (2× for the hour), so a one-off ask on a caching grant pays more, not less. Loops like CP-Agent, `retry` and `repair` are where it pays, and their author opts in. A grant without `[cache]` behaves exactly as before. |
+| P2 | Do scripted runs simulate the cache? | **Yes,** deterministically, so a scripted run is charged what a live one would be, and `check-within` on cost means the same thing in both. |
+| P3 | How is the read price stated? | **`[cache-read p]`, in dollars per million tokens,** like `[in]` and `[out]`, which now also accept up to three decimals (`[in 0.1]`). It defaults to a tenth of `[in]`, the rate for most models; Claude Opus 5.5 and Sonnet 5.5 read at a twentieth, and Claude Fable 5.1 and 5.2 at a fortieth, so a grant for one of those states it. Writes need no field: they are always 1.25× or 2× `[in]`. |
+
+**The request.** A caching grant sends two breakpoints, both with the
+grant's lifetime: an explicit `cache_control` on the system prompt, and a
+top-level `cache_control`, which is automatic caching. The API puts the
+automatic breakpoint on the last block and moves it forward as a
+conversation grows, so an agent loop reads everything the previous turn
+wrote. The explicit one lets asks that share a system prompt and an answer
+type but differ after it share that prefix. `count_tokens` is sent without
+either, since caching doesn't change what is counted.
+
+**Charging.** The response's `usage` splits input three ways, and the
+machine prices them separately: `input_tokens` (the uncached remainder) at
+`[in]`, `cache_creation_input_tokens` at 1.25× or 2× `[in]` (broken down by
+lifetime when the API gives `usage.cache_creation`, and otherwise at the
+grant's), and `cache_read_input_tokens` at `[cache-read]`. Prices are kept in
+nano-dollars per token and the charge is summed in quarter nano-dollars,
+where all of these are whole, then rounded up to a micro-dollar once per ask.
+The trace records how many input tokens were read and written; `--trace`
+prints them.
+
+**The reservation (Theorem 1′).** Before a cached ask is sent, nobody knows
+how much of it will be read and how much written. Every input token might be
+a write, so a caching grant reserves input at the write price: 1.25× (or 2×)
+the counted input, plus output as before. Any mix of reads and writes is then
+within the reservation, which `host.rs` tests exhaustively over the mixes. The
+cost is that a caching grant's reservations are a quarter larger, so a budget
+that just affords an uncached ask can refuse the same ask cached
+(`examples/caching.nrm` tests both sides).
+
+**The scripted tokenizer counts the schema.** `05` convention 4 counted only
+the messages, which understated a real ask about thirteen-fold (§6a). An
+ask's count now adds the schema at 478 tokens per 521 bytes of JSON, the
+first real call's measurement, which `src/defaults.rs` holds as
+`SCHEMA_TOKENS` / `SCHEMA_BYTES`. The rate includes the instructions the API
+wraps around a schema, which is why it is nearly a token per byte. It rests
+on one data point; `the_schema_is_most_of_the_input` in `tests/live_real.rs`
+prints the real count beside the estimate for anyone with a key to refine
+it. A recursive type has no schema (it can't be asked live), so it adds
+nothing.
+
+**The simulated cache** keeps, per model, the prefixes the breakpoints
+wrote, each with an expiry on the scripted clock. Its rules are the API's:
+
+- A prompt shorter than the model's minimum (`min_cacheable` in
+  `src/defaults.rs`: 1 024 tokens for Claude Sonnet 5, 512 for the newest
+  models) isn't cached at all, and costs what it would without `[cache]`.
+- Otherwise a request reads the longest live cached prefix and writes
+  everything after it.
+- An entry lasts its lifetime from the *start* of the request that wrote or
+  last read it; a read refreshes it.
+- An entry can be read only by a request that starts after the one that wrote
+  it, since it exists only once that one's answer begins. So two asks in a
+  `par` both write: concurrent requests can't share a cache.
+
+Two simplifications, both of which make scripted costs err high rather than
+low: the API's 20-block lookback isn't modelled (a µNorman context is a
+handful of messages), and neither is an entry becoming readable partway
+through the request that writes it. One assumption is about the API rather
+than the simulation: that the schema is cached as part of the prefix, with
+the system prompt. `a_cached_grant_reads_its_cache_on_the_second_ask` checks
+it live and prints the share of input read from the cache.
+
+**What caching does to the laws (`06`).** With an uncached grant, nothing
+changes. With a caching grant, an ask's cost depends on what was asked
+before it in the same world, so two programs that make the same asks in a
+different order, or concurrently instead of in sequence, can differ in cost.
+The laws stated `≡v` (same value) are unaffected; those stated up to
+resources hold for caching grants only when both sides make the same asks in
+the same order. W1 already relates a workflow to its sequential form only up
+to value, and caching is one more reason why: the sequential form can read
+what the first ask wrote, and the workflow can't.
+
 ## 7. What this doesn't do yet
 
-- **No prompt caching.** `cache_control` isn't sent, and cache-read discounts
-  aren't modelled in charges.
+- **No cache pre-warming or keep-alive.** A long pause between asks lets a
+  5-minute entry expire; the fix is the hour's lifetime, or (not yet) a
+  `max_tokens: 0` request that refreshes the entry.
 - **No streaming.** Requests whose `max_tokens` is large (unbounded `Text`
   answers) should stream to avoid HTTP timeouts. That's part of step 3.
 - **No effort control.** A future `[effort low]` grant field would map to

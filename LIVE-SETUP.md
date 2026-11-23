@@ -108,6 +108,17 @@ cargo run -- --live --trace FILE.nrm
 `cargo test` never calls the real API. The live tests all go through a stub
 server bound to `127.0.0.1`.
 
+### Prompt caching
+
+A grant with `[cache 5min]` (or `[cache 1h]`) asks the API to cache each
+ask's prompt, so an agent loop pays a tenth of the input price for whatever it
+already sent. `--trace` shows how many input tokens each ask read from the
+cache and wrote to it. It pays only where asks repeat: writing the cache costs
+a quarter more than plain input. See
+[`design/09-live-oracle.md`](design/09-live-oracle.md) §7a, and run
+`cargo test --test live_real -- --ignored --nocapture` to check that caching
+hits against the real API.
+
 ### Keeping the spend small
 
 Live mode still enforces the budget, so an `under` or `budget` limit is a real
