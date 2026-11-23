@@ -157,10 +157,12 @@ fn ill_typed_programs_are_rejected_before_they_run() {
     }
 }
 
+/// `Any` is gone (design/12, Q decisions): type parameters replaced it.
 #[test]
-fn any_has_no_static_meaning() {
-    let err = rejected("(datatype Box [B (x Any)])\n(define f () (B 1))");
-    assert!(err.contains("Any has no static meaning"), "{}", err);
+fn any_is_no_longer_a_type() {
+    let (_, r) = check("(datatype Box [B (x Any)])\n(define f () (B 1))");
+    assert!(!r.ok());
+    assert!(r.errors.iter().any(|e| e.contains("Any")), "{:?}", r.errors);
 }
 
 // ------------------------------------------------------------------ the agentic forms
@@ -242,7 +244,7 @@ fn the_agentic_forms_reject_what_used_to_fail_at_run_time() {
     for (src, says) in [
         ("(define f () (call py frobnicate \"x\"))", "py does not offer frobnicate; it offers exec, count"),
         ("(define f () (ask claude Money (list) 'q))", "not askable"),
-        ("(define f () (ask claude Any (list) 'q))", "Any is not askable"),
+        ("(define f () (ask claude Dur (list) 'q))", "Dur is not askable"),
         ("(define f () (ask claude Option (list) 'q))", "Option takes 1 type argument"),
         ("(define f () (ask claude Num \"hi\" 'q))", "an ask's context is a list of messages"),
         ("(define f () (ask reviewer Num (list) 'q))", "ask needs a model"),
@@ -549,6 +551,24 @@ fn two_capability_parameters_must_differ_when_run_at_once() {
     assert!(check(&ok).1.ok(), "{:?}", check(&ok).1.errors);
 }
 
+/// A second `val` bound to the first is the same kernel, not a new name: a
+/// later definition mustn't generalize a name an earlier one left
+/// monomorphic. With the run-time check skipped for checked programs (Q-1),
+/// this would otherwise be a race nobody catches.
+#[test]
+fn another_name_for_a_forked_kernel_is_the_same_kernel() {
+    let err = rejected(&with_grants(
+        "(val k1 (call py fork))\n(val k2 k1)\n(define f () (par (call k1 exec \"1\") (call k2 exec \"2\")))",
+    ));
+    assert!(err.contains("the same stateful capability"), "{}", err);
+    // The type says so: one name, used twice.
+    let got = schemes(
+        &with_grants("(val k1 (call py fork))\n(val k2 k1)\n(define mixed () (Pair [fst k1] [snd k2]))"),
+        &["mixed"],
+    );
+    assert_eq!(got[0], "(-> (Pair (Kernel a py) (Kernel a py)))");
+}
+
 /// A `val` bound to a fork is one kernel (§4.1): using it in two nodes is
 /// sharing, although each *use* of a function that forks is a new kernel.
 #[test]
@@ -560,6 +580,79 @@ fn a_val_bound_to_a_fork_is_one_kernel() {
         "(define f () (let* ([k (call py fork)]) (par (call k exec \"1\") (call k exec \"2\"))))",
     ));
     assert!(err.contains("the same stateful capability"), "{}", err);
+}
+
+// ------------------------------------------------------------------ warnings and Q-3
+
+/// Check `GRANTS` and `src`, insist it's accepted, and return its warnings.
+fn warnings(src: &str) -> Vec<String> {
+    let (_, r) = check(&format!("{}{}", GRANTS, src));
+    assert!(r.ok(), "rejected: {:?}", r.errors);
+    r.warnings
+}
+
+/// Law W1 needs its premises (`06` §4); a workflow outside them is legal,
+/// and gets a warning (design/12, T2).
+#[test]
+fn workflows_outside_law_w1_get_warnings() {
+    let w = warnings("(define f () (par (remaining) 1))");
+    assert_eq!(w.len(), 1, "{:?}", w);
+    assert!(w[0].contains("in the definition of f") && w[0].contains("premise ii"), "{:?}", w);
+    let w = warnings("(define f () (par (consult reviewer Bool \"a?\" 'a) (consult reviewer Bool \"b?\" 'b)))");
+    assert_eq!(w.len(), 1, "{:?}", w);
+    assert!(w[0].contains("both consult reviewer") && w[0].contains("premise iv"), "{:?}", w);
+    // Different people, asks, and reading (remaining) outside the nodes: no warning.
+    let src = "(grant other (human))\n\
+               (define f () (par (consult reviewer Bool \"a?\" 'a) (consult other Bool \"b?\" 'b)))\n\
+               (define g () (par (ask claude Num (list) 'a) (ask claude Num (list) 'b)))\n\
+               (define h () (let* ([r (remaining)]) (par 1 2)))";
+    assert!(warnings(src).is_empty(), "{:?}", warnings(src));
+}
+
+/// A generic function that runs its argument in a node warns where it is
+/// used with an argument that breaks the premise, once per definition, and
+/// names the function it came through (design/12 §5.1).
+#[test]
+fn a_warning_inside_a_generic_function_is_reported_where_it_is_used() {
+    let src = "(define twice-at-once (g) (par (g) (g)))\n\
+               (define fine () (twice-at-once (lambda () 1)))\n\
+               (define peeks () (begin (twice-at-once (lambda () (remaining))) (twice-at-once (lambda () (remaining)))))";
+    let w = warnings(src);
+    assert_eq!(w.len(), 1, "once per definition: {:?}", w);
+    assert!(w[0].contains("in the definition of peeks") && w[0].contains("through twice-at-once"), "{:?}", w);
+}
+
+/// Q-4: a consult whose answer is never used is warned about, syntactically.
+#[test]
+fn an_unused_consult_answer_is_warned_about() {
+    let w = warnings("(define f () (begin (consult reviewer Bool \"ok?\" 'x) 1))");
+    assert!(w.len() == 1 && w[0].contains("never used"), "{:?}", w);
+    let w = warnings("(define f () (let* ([ok (consult reviewer Bool \"ok?\" 'x)]) 1))");
+    assert!(w.len() == 1 && w[0].contains("never used"), "{:?}", w);
+    assert!(warnings("(define f () (let* ([ok (consult reviewer Bool \"ok?\" 'x)]) (if ok 1 2)))").is_empty());
+}
+
+/// Q-3: a `case` that misses a constructor is an error on an answer from
+/// `ask` or `consult`, followed through `let`-bound names, and otherwise a
+/// warning. It still type-checks: the miss is a run-time error that remains.
+#[test]
+fn a_case_that_misses_a_constructor() {
+    let w = warnings("(define f (o) (case o [(Some x) x]))\n(define g (xs) (case xs [(cons x _) x]))");
+    assert_eq!(w.len(), 2, "{:?}", w);
+    assert!(w[0].contains("doesn't cover None"), "{:?}", w);
+    assert!(w[1].contains("doesn't cover '()"), "{:?}", w);
+    assert!(warnings("(define f (o) (case o [(Some x) x] [None 0]))\n(define g (o) (case o [_ 0]))").is_empty());
+    for src in [
+        "(define f () (case (ask claude (Option Num) (list) 'q) [(Some x) x]))",
+        "(define f () (let* ([a (ask claude (Option Num) (list) 'q)]) (case a [(Some x) x])))",
+        "(define f () (case (budget ([time 1min]) (consult reviewer (Option Num) \"n?\" 'q)) [None 0]))",
+    ] {
+        let err = rejected(&format!("{}{}", GRANTS, src));
+        assert!(err.contains("Q-3") && err.contains("doesn't cover"), "for {}\ngot {}", src, err);
+    }
+    // A name that shadows the answer is not the answer.
+    let w = warnings("(define f () (let* ([a (ask claude (Option Num) (list) 'q)] [a None]) (case a [(Some x) x])))");
+    assert_eq!(w.len(), 1, "{:?}", w);
 }
 
 // ------------------------------------------------------------------ the examples
@@ -580,6 +673,13 @@ fn every_example_checks() {
         let r = c.check_file(&path);
         for e in r.errors.iter().chain(&r.test_errors) {
             failures.push(format!("{}: {}", path.display(), e));
+        }
+        // The only warnings are consult.nrm's deliberate concurrent consults
+        // of one person, which its tests measure.
+        for w in &r.warnings {
+            if !(path.ends_with("consult.nrm") && w.contains("both consult")) {
+                failures.push(format!("{}: unexpected {}", path.display(), w));
+            }
         }
     }
     assert!(failures.is_empty(), "{} problem(s):\n{}", failures.len(), failures.join("\n"));

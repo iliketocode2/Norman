@@ -123,6 +123,23 @@ pub struct Foot {
     evs: Vec<EV>,
 }
 
+/// One workflow node's atoms and effect variables, for the law warnings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Side {
+    atoms: Vec<Atom>,
+    evs: Vec<EV>,
+}
+
+/// A program that is legal but falls outside a law's premise gets a
+/// warning, not an error (design/12, T2; law W1 in `06` §4).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Warning {
+    /// A node reads `(remaining)`: W1's premise (ii).
+    Observe,
+    /// Two concurrent nodes consult one person: W1's premise (iv).
+    SamePerson,
+}
+
 /// Whether a capability of this kind is stateful, if the kind is known.
 fn stateful(kind: &Ty) -> Option<bool> {
     match kind {
@@ -168,6 +185,10 @@ pub enum Pred {
     /// capability (§5.1). When both footprints include the same effect
     /// variable this is `Stateless(φ)`, and it prints that way.
     Disjoint(Foot, Foot),
+    /// A law warning, checked like `#` and reported where it can be
+    /// decided: at once, or where a generic function's scheme is used. The
+    /// name is that function's, for the message.
+    Warn(Warning, Side, Side, Option<Name>),
 }
 
 /// `∀ tvs evs. preds ⇒ ty`. Quantified effect variables carry their lower
@@ -273,6 +294,21 @@ impl State {
         }
         names.dedup();
         Foot { names, evs: evs.into_iter().collect() }
+    }
+
+    /// A node's atoms with its effect variables opened up, and every
+    /// variable they reach.
+    fn expand_side(&mut self, s: &Side) -> Side {
+        let mut atoms: Vec<Atom> = s.atoms.iter().map(|a| self.norm_atom(a)).collect();
+        let mut evs = BTreeSet::new();
+        for &e in &s.evs {
+            let (found, reached) = self.closure(e);
+            atoms.extend(found);
+            evs.extend(reached);
+        }
+        atoms.sort();
+        atoms.dedup();
+        Side { atoms, evs: evs.into_iter().collect() }
     }
 
     /// `F₁ # F₂`, as far as it can be decided now: an error if both use one
@@ -499,6 +535,22 @@ impl State {
                     self.ftv(k, out);
                 }
             }
+            Pred::Warn(_, l, r, _) => {
+                for a in l.atoms.iter().chain(&r.atoms) {
+                    for n in a.names() {
+                        if let Nm::Var(v) = self.norm_nm(n) {
+                            out.insert(v);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn norm_nm(&self, n: &Nm) -> Nm {
+        match n {
+            Nm::Var(v) => self.nm(&Ty::Var(*v)),
+            g => g.clone(),
         }
     }
 
@@ -528,6 +580,10 @@ impl State {
                 let (l, r) = (self.expand(l), self.expand(r));
                 l.evs.iter().chain(&r.evs).any(|e| evs.contains(e))
             }
+            Pred::Warn(_, l, r, _) => {
+                let (l, r) = (self.expand_side(l), self.expand_side(r));
+                l.evs.iter().chain(&r.evs).any(|e| evs.contains(e))
+            }
             _ => false,
         }
     }
@@ -547,6 +603,14 @@ impl State {
                     evs: f.evs.iter().map(|&e| self.find(e)).collect(),
                 };
                 Pred::Disjoint(z(l), z(r))
+            }
+            Pred::Warn(w, l, r, o) => {
+                let z = |st: &mut State, s: &Side| Side {
+                    atoms: s.atoms.iter().map(|a| st.norm_atom(a)).collect(),
+                    evs: s.evs.iter().map(|&e| st.find(e)).collect(),
+                };
+                let (l, r) = (z(self, l), z(self, r));
+                Pred::Warn(*w, l, r, o.clone())
             }
         }
     }
@@ -724,6 +788,7 @@ impl Printer {
             Pred::Div(a, b, c) => format!("Div {} {} {}", t(st, a), t(st, b), t(st, c)),
             Pred::Has(a, f, b) => format!("Has {} {} {}", t(st, a), f, t(st, b)),
             Pred::Offers(a, op, b) => format!("Offers {} {} {}", t(st, a), op, t(st, b)),
+            Pred::Warn(..) => String::new(),
             Pred::Disjoint(l, r) => {
                 // Shown by what a reader can see: the capabilities, and the
                 // effect variables named in the type.
@@ -770,6 +835,9 @@ pub struct Report {
     /// the checker has nothing against it (for a `check-type-error`, that
     /// it passes), and otherwise why it fails.
     pub verdicts: HashMap<String, Result<(), String>>,
+    /// Programs that are legal but fall outside a law (design/12, T2), and
+    /// `case`s that may not match.
+    pub warnings: Vec<String>,
 }
 
 impl Report {
@@ -787,6 +855,11 @@ pub struct Checker {
     /// The operations each capability grant declares; none means an open
     /// interface, every operation answering Text (`10` §2.1).
     ops: HashMap<Name, Vec<(Name, Type)>>,
+    /// Warnings found while checking the current form.
+    pending: Vec<String>,
+    /// The positions in the environment of names bound to an answer from
+    /// `ask` or `consult`, for Q-3.
+    answers: Vec<usize>,
     st: State,
     used: HashSet<PathBuf>,
 }
@@ -817,6 +890,8 @@ impl Checker {
             globals,
             defined_in: HashMap::new(),
             ops: HashMap::new(),
+            pending: vec![],
+            answers: vec![],
             st: State::default(),
             used: HashSet::new(),
         }
@@ -836,7 +911,7 @@ impl Checker {
         let mut p = Printer::default();
         p.collect(&mut self.st, &ty, false);
         let shown = p.ty(&mut self.st, &ty, false);
-        let preds: Vec<String> = preds.iter().map(|q| p.pred(&mut self.st, q)).collect();
+        let preds: Vec<String> = preds.iter().map(|q| p.pred(&mut self.st, q)).filter(|q| !q.is_empty()).collect();
         Some(if preds.is_empty() { shown } else { format!("{} => {}", preds.join(", "), shown) })
     }
 
@@ -897,6 +972,7 @@ impl Checker {
                     report.errors.extend(used.errors);
                     report.test_errors.extend(used.test_errors);
                     report.verdicts.extend(used.verdicts);
+                    report.warnings.extend(used.warnings);
                 }
                 Top::Grant(x, spec) => {
                     // A grant's type carries its name (design/12 §1).
@@ -924,6 +1000,7 @@ impl Checker {
         self.check_items(file, items, &mut report);
         for t in &tests {
             let mut verdict = self.check_test(t);
+            self.flush_warnings(&format!("{}: ", t.loc), &mut report);
             // A type error proves nothing in a file that doesn't check: the
             // name the test uses may be the one whose definition was wrong.
             if matches!(t.kind, TestKind::TypeError(_))
@@ -1047,6 +1124,7 @@ impl Checker {
                 if let Err(err) = result {
                     report.errors.push(format!("{}: {}", loc, err));
                 }
+                self.flush_warnings(&format!("{}: ", loc), report);
             }
         }
     }
@@ -1065,6 +1143,9 @@ impl Checker {
     /// Check one binding group: monomorphic inside, generalized together.
     fn check_group(&mut self, items: &[(Loc, Item)], group: &[usize], report: &mut Report) {
         let mark = self.st.preds.len();
+        // What earlier definitions left monomorphic, before this group's own
+        // names are placed in the globals.
+        let outer = self.global_tvs();
         let mut mono: Vec<(Name, Ty)> = vec![];
         for &i in group {
             let name = match &items[i].1 {
@@ -1102,7 +1183,7 @@ impl Checker {
             self.st.ftv(t, &mut gen_tvs);
             self.st.fev(t, &mut gen_evs);
         }
-        if let Err(e) = self.settle(mark, &BTreeSet::new(), &gen_tvs, &gen_evs) {
+        if let Err(e) = self.settle(mark, &outer, &gen_tvs, &gen_evs) {
             let names: Vec<&str> = mono.iter().map(|(n, _)| &**n).collect();
             report.errors.push(format!("{}: in the definition of {}: {}", items[group[0]].0, names.join(" and "), e));
             failed = true;
@@ -1114,13 +1195,13 @@ impl Checker {
             Item::Val(_, e) => is_value(e),
             Item::Expr(_) => unreachable!(),
         });
+        let names: Vec<String> = mono.iter().map(|(n, _)| n.to_string()).collect();
+        let prefix = format!("{}: in the definition of {}: ", items[group[0]].0, names.join(" and "));
+        self.flush_warnings(&prefix, report);
         for (name, t) in mono {
             let loc = &items[group[mono_index(group, items, &name)]].0;
-            let sc = if failed {
-                Scheme::mono(t)
-            } else {
-                self.generalize(&t, &preds, &BTreeSet::new(), &BTreeSet::new(), values).0
-            };
+            let sc =
+                if failed { Scheme::mono(t) } else { self.generalize(&t, &preds, &outer, &BTreeSet::new(), values).0 };
             self.globals.insert(name.clone(), Global::Scheme(sc));
             self.defined_in.insert(name, loc.to_string());
         }
@@ -1183,6 +1264,14 @@ impl Checker {
                         f
                     };
                     Pred::Disjoint(flat(&l), flat(&r))
+                }
+                Pred::Warn(w, l, r, o) => {
+                    let mut flat = |s: &Side| {
+                        let mut s = self.st.expand_side(s);
+                        s.evs.retain(|e| quantified.contains(e) || env_evs.contains(e));
+                        s
+                    };
+                    Pred::Warn(w, flat(&l), flat(&r), o)
                 }
                 other => other,
             });
@@ -1279,7 +1368,7 @@ impl Checker {
                     return Err(format!("can't tell which record's field {} this is; several records have it", f));
                 }
                 // Checked as far as it ever can be: nothing can extend it.
-                Pred::Disjoint(..) => {
+                Pred::Disjoint(..) | Pred::Warn(..) => {
                     self.st.preds.remove(i);
                 }
                 _ => i += 1,
@@ -1423,6 +1512,7 @@ impl Checker {
                 }
                 _ => unreachable!("Offers holds a name"),
             },
+            Pred::Warn(w, l, r, origin) => Ok(self.law_warning(*w, l, r, origin)),
             Pred::Disjoint(l, r) => {
                 if self.st.disjoint(l, r)? {
                     Ok(Step::Keep)
@@ -1473,6 +1563,60 @@ impl Checker {
         }
     }
 
+    /// Decide a law warning if it can be decided, and report it once.
+    fn law_warning(&mut self, w: Warning, l: &Side, r: &Side, origin: &Option<Name>) -> Step {
+        let (l, r) = (self.st.expand_side(l), self.st.expand_side(r));
+        let via = origin.as_ref().map(|o| format!(", through {}", o)).unwrap_or_default();
+        let open = !l.evs.is_empty() || !r.evs.is_empty();
+        match w {
+            Warning::Observe => {
+                if l.atoms.contains(&Atom::Observe) {
+                    self.pending.push(format!(
+                        "a workflow node reads (remaining){}, so the workflow may not behave like its nodes run \
+                         one after another (law W1, premise ii)",
+                        via
+                    ));
+                    return Step::Done;
+                }
+            }
+            Warning::SamePerson => {
+                let people = |s: &Side| -> Vec<Nm> {
+                    s.atoms
+                        .iter()
+                        .filter_map(|a| if let Atom::Consult(n) = a { Some(n.clone()) } else { None })
+                        .collect()
+                };
+                let (lp, rp) = (people(&l), people(&r));
+                if let Some(n) = lp.iter().find(|n| rp.contains(n)) {
+                    let who = match n {
+                        Nm::Grant(g) => g.to_string(),
+                        Nm::Var(_) => "the same person".to_string(),
+                    };
+                    self.pending.push(format!(
+                        "two concurrent workflow nodes both consult {}{}: an answer may depend on which question \
+                         the person saw first (law W1, premise iv)",
+                        who, via
+                    ));
+                    return Step::Done;
+                }
+                if lp.iter().chain(&rp).any(|n| matches!(n, Nm::Var(_))) && !lp.is_empty() && !rp.is_empty() {
+                    return Step::Keep;
+                }
+            }
+        }
+        if open { Step::Keep } else { Step::Done }
+    }
+
+    /// Report the warnings found while checking one form, once each.
+    fn flush_warnings(&mut self, prefix: &str, report: &mut Report) {
+        let mut seen = HashSet::new();
+        for w in std::mem::take(&mut self.pending) {
+            if seen.insert(w.clone()) {
+                report.warnings.push(format!("{}warning: {}", prefix, w));
+            }
+        }
+    }
+
     // ------------------------------------------------------------ Θ
 
     fn convert(&mut self, t: &Type, params: &HashMap<Name, Ty>) -> R<Ty> {
@@ -1489,7 +1633,6 @@ impl Checker {
                 Ty::Con(n.clone(), args)
             }
             Type::Var(v) => params.get(v).cloned().ok_or_else(|| format!("unknown type variable {}", v))?,
-            Type::Any => return Err("Any has no static meaning (design/12, T5)".into()),
         })
     }
 
@@ -1552,7 +1695,16 @@ impl Checker {
             return Ok(self.instantiate(&sc));
         }
         match self.globals.get(x).cloned() {
-            Some(Global::Scheme(sc)) => Ok(self.instantiate(&sc)),
+            Some(Global::Scheme(sc)) => {
+                let before = self.st.preds.len();
+                let t = self.instantiate(&sc);
+                for p in &mut self.st.preds[before..] {
+                    if let Pred::Warn(_, _, _, origin @ None) = p {
+                        *origin = Some(x.clone());
+                    }
+                }
+                Ok(t)
+            }
             Some(Global::Prim(p)) => match prim_type(p, &mut self.st) {
                 Some(t) => Ok(t),
                 None => Err(format!("{} takes any number of arguments, so it can only be applied", p)),
@@ -1562,11 +1714,27 @@ impl Checker {
     }
 
     fn env_tvs(&self, env: &[(Name, Scheme)]) -> BTreeSet<TV> {
-        let mut out = BTreeSet::new();
+        let mut out = self.global_tvs();
         for (_, sc) in env {
             let mut vs = BTreeSet::new();
             self.st.ftv(&sc.ty, &mut vs);
             out.extend(vs.into_iter().filter(|v| !sc.tvs.contains(v)));
+        }
+        out
+    }
+
+    /// The variables free in a global's scheme: a `val` bound to a fork
+    /// keeps its capability's name monomorphic (§4.1), and whatever is
+    /// defined later must not generalize it. Without this, `(val k2 k1)`
+    /// would give one kernel two names.
+    fn global_tvs(&self) -> BTreeSet<TV> {
+        let mut out = BTreeSet::new();
+        for g in self.globals.values() {
+            if let Global::Scheme(sc) = g {
+                let mut vs = BTreeSet::new();
+                self.st.ftv(&sc.ty, &mut vs);
+                out.extend(vs.into_iter().filter(|v| !sc.tvs.contains(v)));
+            }
         }
         out
     }
@@ -1689,9 +1857,26 @@ impl Checker {
                 let (sc, rest) = self.generalize(&rt, &preds, &env_tvs, &env_evs, is_value(rhs));
                 // Predicates the scheme didn't take stay pending outside it.
                 self.st.preds.extend(rest);
+                // Q-4: a consult whose answer is never used, as in a `begin`,
+                // is almost always a mistake: an approval is carried out only
+                // if the program uses the answer (`11` §8).
+                if matches!(&**rhs, Exp::Consult { .. }) && !free_vars(body).contains(x) {
+                    self.pending.push(
+                        "the answer of this consult is never used, so whatever the person approves or edits \
+                         is ignored (design/11 §8)"
+                            .into(),
+                    );
+                }
+                let answer = is_answer(rhs);
+                if answer {
+                    self.answers.push(env.len());
+                }
                 env.push((x.clone(), sc));
                 let result = self.infer(env, body);
                 env.pop();
+                if answer {
+                    self.answers.pop();
+                }
                 let (bt, be) = result?;
                 Ok((bt, re.union(&be)))
             }
@@ -1738,6 +1923,23 @@ impl Checker {
                     let (bt, be) = r?;
                     self.st.unify(&bt, &result).map_err(|m| format!("the branches of a case differ: {}", m))?;
                     eff = eff.union(&be);
+                }
+                let missing = self.missing(&st_ty, branches);
+                if !missing.is_empty() {
+                    // Q-3: an error on an answer from a model or a person,
+                    // which may be any constructor; a warning otherwise.
+                    let answer = match &**scrutinee {
+                        Exp::Var(x) => env.iter().rposition(|(y, _)| y == x).is_some_and(|i| self.answers.contains(&i)),
+                        e => is_answer(e),
+                    };
+                    let what = format!("this case doesn't cover {}", missing.join(", "));
+                    if answer {
+                        return Err(format!(
+                            "{}, and it's on an answer from ask or consult, which may be any of them (design/12, Q-3)",
+                            what
+                        ));
+                    }
+                    self.pending.push(format!("{}, so it is stuck if one of them arrives", what));
                 }
                 Ok((result, eff))
             }
@@ -1836,6 +2038,7 @@ impl Checker {
                 let n = env.len();
                 let mut types: Vec<Option<Ty>> = vec![None; w.nodes.len()];
                 let mut feet: Vec<Foot> = vec![Foot::default(); w.nodes.len()];
+                let mut sides: Vec<Side> = vec![Side::default(); w.nodes.len()];
                 let mut eff = Eff::default();
                 let mut remaining: Vec<usize> = (0..w.nodes.len()).collect();
                 while !remaining.is_empty() {
@@ -1852,13 +2055,16 @@ impl Checker {
                     env.truncate(n);
                     let (t, e) = r?;
                     feet[i] = self.footprint(env, w, node, &e);
+                    sides[i] = Side { atoms: e.atoms.iter().cloned().collect(), evs: e.vars.iter().copied().collect() };
                     types[i] = Some(t);
                     eff = eff.union(&e);
                 }
                 for i in 0..feet.len() {
                     for j in i + 1..feet.len() {
                         self.st.preds.push(Pred::Disjoint(feet[i].clone(), feet[j].clone()));
+                        self.st.preds.push(Pred::Warn(Warning::SamePerson, sides[i].clone(), sides[j].clone(), None));
                     }
+                    self.st.preds.push(Pred::Warn(Warning::Observe, sides[i].clone(), Side::default(), None));
                 }
                 for (node, t) in w.nodes.iter().zip(&types) {
                     env.push((node.name.clone(), Scheme::mono(t.clone().unwrap())));
@@ -1912,6 +2118,34 @@ impl Checker {
             }
             Ty::Con(_, args) => args.iter().for_each(|a| self.held(a, quantified, out)),
             Ty::Var(_) | Ty::Grant(_) | Ty::Fun(..) => {}
+        }
+    }
+
+    /// The constructors of the scrutinee's type that no branch covers.
+    fn missing(&mut self, t: &Ty, branches: &[(Pattern, ExpRef)]) -> Vec<String> {
+        if branches.iter().any(|(p, _)| matches!(p, Pattern::Wild)) {
+            return vec![];
+        }
+        match self.st.prune(t) {
+            Ty::Con(n, _) if &*n == "List" => {
+                let mut out = vec![];
+                if !branches.iter().any(|(p, _)| matches!(p, Pattern::Nil)) {
+                    out.push("'()".to_string());
+                }
+                if !branches.iter().any(|(p, _)| matches!(p, Pattern::Cons(..))) {
+                    out.push("cons".to_string());
+                }
+                out
+            }
+            Ty::Con(n, _) => match self.theta.datatypes.get(&n) {
+                Some(cons) => cons
+                    .iter()
+                    .filter(|c| !branches.iter().any(|(p, _)| matches!(p, Pattern::Con(k, _) if *k == c.name)))
+                    .map(|c| c.name.to_string())
+                    .collect(),
+                None => vec![],
+            },
+            _ => vec![],
         }
     }
 
@@ -2020,6 +2254,15 @@ fn mono_index(group: &[usize], items: &[(Loc, Item)], name: &Name) -> usize {
         .expect("every group member has a name")
 }
 
+/// An answer from a model or a person, possibly with a budget around it.
+fn is_answer(e: &Exp) -> bool {
+    match e {
+        Exp::Ask { .. } | Exp::Consult { .. } => true,
+        Exp::Budget { body, .. } => is_answer(body),
+        _ => false,
+    }
+}
+
 /// A syntactic value (design/12 §4.1): evaluating it creates no capability.
 fn is_value(e: &Exp) -> bool {
     match e {
@@ -2070,6 +2313,13 @@ fn subst_pred(p: &Pred, tm: &HashMap<TV, Ty>, em: &HashMap<EV, EV>) -> Pred {
                 evs: x.evs.iter().map(|e| *em.get(e).unwrap_or(e)).collect(),
             };
             Pred::Disjoint(f(l), f(r))
+        }
+        Pred::Warn(w, l, r, o) => {
+            let f = |x: &Side| Side {
+                atoms: x.atoms.iter().map(|a| subst_atom(a, tm)).collect(),
+                evs: x.evs.iter().map(|e| *em.get(e).unwrap_or(e)).collect(),
+            };
+            Pred::Warn(*w, f(l), f(r), o.clone())
         }
     }
 }

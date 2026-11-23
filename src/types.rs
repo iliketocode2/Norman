@@ -197,7 +197,7 @@ impl TypeEnv {
         Ok(())
     }
 
-    /// Askable types are first order: no functions, capabilities, models or `Any`.
+    /// Askable types are first order: no functions, capabilities or models.
     /// So validation can never produce a capability (Theorem 2).
     pub fn askable(&self, ty: &Type) -> Result<(), String> {
         self.askable_in(ty, &mut HashSet::new())
@@ -206,7 +206,7 @@ impl TypeEnv {
     // The three walks below guard against recursive types with a set of the
     // applied types being visited, keyed by the *whole* type, `(Option Num)`,
     // not the name `Option`. By name, `(Option (Option Num))` would look
-    // recursive, and in `(Pair (Option Num) (Option Any))` the second Option
+    // recursive, and in `(Pair (Option Num) (Option Dur))` the second Option
     // would be skipped as already seen. Regular recursion (`check_type`)
     // means a recursive type always recurs at the same key, so they end.
 
@@ -214,7 +214,6 @@ impl TypeEnv {
         match ty {
             Type::Text(_) | Type::Num | Type::Bool | Type::Sym => Ok(()),
             Type::List(t, _) => self.askable_in(t, visiting),
-            Type::Any => Err("type Any is not askable".into()),
             Type::Money | Type::Dur => Err(format!("{} is not askable: JSON has no amounts of money or time", ty)),
             Type::Var(v) => Err(format!("the type variable {} is not askable", v)),
             Type::Named(n, args) => {
@@ -252,7 +251,7 @@ impl TypeEnv {
     fn bound_in(&self, ty: &Type, visiting: &mut HashSet<String>) -> Option<u64> {
         match ty {
             Type::Text(Some(n)) => Some(n + 2),
-            Type::Text(None) | Type::Sym | Type::Any | Type::Money | Type::Dur | Type::Var(_) => None,
+            Type::Text(None) | Type::Sym | Type::Money | Type::Dur | Type::Var(_) => None,
             Type::Num => Some(20),
             Type::Bool => Some(5),
             Type::List(t, Some(n)) => Some(2 + n * (self.bound_in(t, visiting)? + 1)),
@@ -312,7 +311,6 @@ impl TypeEnv {
             Type::Num => json!({"type": "integer"}),
             Type::Bool => json!({"type": "boolean"}),
             Type::List(t, _) => json!({"type": "array", "items": self.schema_in(t, visiting)?}),
-            Type::Any => return Err("type Any is not askable".into()),
             Type::Money | Type::Dur | Type::Var(_) => return Err(format!("{} is not askable", ty)),
             Type::Named(n, args) => {
                 let key = ty.to_string();
@@ -472,7 +470,7 @@ impl TypeEnv {
                 let vals = items.iter().map(|x| self.validate(x, t)).collect::<Option<Vec<_>>>()?;
                 Some(Value::list(vals))
             }
-            Type::Any | Type::Money | Type::Dur | Type::Var(_) => None,
+            Type::Money | Type::Dur | Type::Var(_) => None,
             Type::Named(n, args) => {
                 let obj = j.as_object()?;
                 match self.instance(n, args).ok()? {
@@ -740,12 +738,11 @@ mod parameter_tests {
         let t = theta();
         let opt = |a| app("Option", vec![a]);
         assert!(t.askable(&opt(Type::Num)).is_ok(), "(Option Num) is askable now that Option has a parameter");
-        assert!(t.askable(&opt(Type::Any)).is_err());
         assert!(t.askable(&opt(Type::Money)).is_err());
         assert!(t.askable(&Type::named("Resources")).is_err(), "money and durations are not askable");
         // The visited set is keyed by the whole type. Keyed by name, the second
         // Option would be skipped as already seen, and this would be askable.
-        assert!(t.askable(&app("Pair", vec![opt(Type::Num), opt(Type::Any)])).is_err());
+        assert!(t.askable(&app("Pair", vec![opt(Type::Num), opt(Type::Money)])).is_err());
         assert!(t.askable(&app("Tree", vec![Type::Num])).is_ok(), "regular recursion terminates");
     }
 

@@ -56,8 +56,8 @@
 (under ([script answers] [cost $1.00] [time 1min])
   (check-type-error (ask claude Option (ctx) 'count))             ; Option needs an argument
   (check-type-error (ask claude (Option Num Num) (ctx) 'count))   ; and only one
-  (check-type-error (ask claude (Option Any) (ctx) 'count))       ; Any is never askable
-  (check-type-error (ask claude (Pair (Option Num) (Option Any)) (ctx) 'pairs))
+  (check-type-error (ask claude (Option Dur) (ctx) 'count))       ; nor is a duration inside one
+  (check-type-error (ask claude (Pair (Option Num) (Option Dur)) (ctx) 'pairs))
   (check-type-error (ask claude Resources (ctx) 'count)))         ; money and time aren't askable
 
 ;;; ==================================================================

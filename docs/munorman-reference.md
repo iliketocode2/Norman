@@ -179,7 +179,7 @@ Everything inside gets at most that much money and time. Either limit may be omi
 
 A set of named steps. **Dependencies come from the names each step mentions**: a step whose inputs are ready starts immediately, alongside the others. The graph must be acyclic, and the names must be distinct — both are checked before the program runs.
 
-Steps may not share a stateful tool, because the outcome would depend on timing. Such a workflow is rejected before any step starts. To work in parallel on a kernel, fork it first. (A scripted kernel forks freely; a live Python kernel can’t copy its state, so there `fork` fails with `ToolError`.) `par` is sugar for a two-step workflow and answers with a `Pair`.
+Steps may not share a stateful tool, because the outcome would depend on timing. Such a workflow is a type error, so the program never starts. To work in parallel on a kernel, fork it first, before the workflow. (A scripted kernel forks freely; a live Python kernel can’t copy its state, so there `fork` fails with `ToolError`.) `par` is sugar for a two-step workflow and answers with a `Pair`.
 
 ## Types
 
@@ -189,7 +189,6 @@ ty ::= Text | (Text numeral)        ; optionally bounded, in bytes
      | (List ty) | (List ty numeral)
      | Type | Record              ; anything you defined
      | (Type ty …)                   ; one with type parameters, applied
-     | Any                          ; a placeholder; never askable
 ```
 
 A datatype or record can take **type parameters**, and is then given that many arguments wherever it’s used:
@@ -203,7 +202,7 @@ A type variable may appear only inside the definition that declares it, and insi
 
 ### Which types can be asked for
 
-A type is **askable** when it is built only from `Text`, `Num`, `Bool`, `Sym`, `List`, and datatypes or records whose fields are all askable, at the arguments given: `(Option Num)` is askable and `(Option Any)` isn’t. `Any`, `Money` and `Dur` are not askable; JSON has no amounts of money or time.
+A type is **askable** when it is built only from `Text`, `Num`, `Bool`, `Sym`, `List`, and datatypes or records whose fields are all askable, at the arguments given: `(Option Num)` is askable and `(Option Dur)` isn’t. `Money` and `Dur` are not askable; JSON has no amounts of money or time.
 
 That one rule is what keeps authority unforgeable: a capability is not an askable type, so no model answer can ever contain a tool. Authority comes only from the host.
 

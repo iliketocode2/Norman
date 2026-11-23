@@ -284,16 +284,13 @@ These are stated as theorems in [`04`](04-formal-definition.md) §8 and
 
 ## What it doesn't do (yet)
 
-- **No static types yet.** Types appear only where `ask` needs them. A full
-  type and effect checker is planned. Today, these mistakes are caught only
-  when the program runs:
-  - asking for a type that can't be asked for;
-  - two concurrent steps sharing a stateful tool (rejected before either step
-    starts, but at run time).
-
-  One isn't caught at all: a concurrent step that reads its remaining budget.
-  That's allowed by design; such a step just falls outside guarantee 4. The
-  checker will catch all three before the program runs.
+- **Types are inferred, never written,** except where `ask` and `consult`
+  need an answer type. The checker ([`12`](12-types-and-effects.md)) catches
+  type mistakes, unaskable types and two concurrent steps sharing a stateful
+  tool before the program runs. A step that reads its remaining budget, or
+  two steps that consult one person, get a warning: they're allowed, but
+  fall outside guarantee 4. Some mistakes stay run-time errors by design:
+  division by zero, a string index out of range, a size bound exceeded.
 - **One real tool, with no sandbox.** With `--live --python python3`, every
   `kernel` grant is a real Python process. It runs model-written code with
   your permissions, so use it only in a throwaway container or VM. A deadline

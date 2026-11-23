@@ -144,7 +144,7 @@
   (check-type-error (consult reviewer (Text 20) "Approve?" (propose 'potency) 'p))
   (check-type-error (catch (consult reviewer Num "Approve?" (propose "seven") 'n) e 0))
   (check-type-error (budget ([time 0s]) (consult reviewer Num "Approve?" (propose "seven") 'n)))
-  (check-type-error (consult reviewer Any "Anything?" 'any))      ; τ must be askable (§1.3)
+  (check-type-error (consult reviewer Dur "How long?" 'any))      ; τ must be askable (§1.3)
   (check-type-error (consult claude (Text 10) "Hi?" 'hi))         ; a model is not a person
   (check-type-error (consult reviewer (Text 10) 'not-text 'hi))   ; the prompt is Text
   (check-type-error (show reviewer)))                             ; a human can't be shown

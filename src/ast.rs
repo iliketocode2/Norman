@@ -37,7 +37,6 @@ pub enum Type {
     Named(Name, Vec<Type>),
     /// A type parameter, inside the definition that declares it.
     Var(Name),
-    Any,
 }
 
 impl Type {
@@ -68,7 +67,6 @@ impl fmt::Display for Type {
                 write!(f, ")")
             }
             Type::Var(v) => write!(f, "{}", v),
-            Type::Any => write!(f, "Any"),
         }
     }
 }
