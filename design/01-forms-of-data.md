@@ -286,6 +286,29 @@ That proof is also what makes `PAR` safe to reorder.
 
 A human is just another capability. No new form is needed.
 
+> **Corrected by [`10`](10-saga.md) §2.2 and [`11`](11-consult.md).** This
+> turned out to be wrong, and writing SAGA's loop is what showed it. A `call`
+> returns an untyped result that a host produced, so nothing ties the
+> person's answer to a type, a deadline that waits for them, or what they
+> were shown. And `(fail 'declined)` is an ordinary `Raised` failure, which a
+> missing person would produce just as well as a person saying no. µNorman
+> now has a seventeenth form, `consult`, in which a granted human answers a
+> typed question, possibly approving a proposal, and refusing is its own
+> failure, `Declined`. P4 becomes:
+>
+> ```scheme
+> (define guarded-write (human fs path text)
+>   (if (consult human Bool (string-append "Write " path "?") 'confirm-write)
+>       (call fs write path text)
+>       (fail 'not-confirmed)))
+> ```
+>
+> The answer must decide whether the write happens. Wrapping the consult in a
+> `begin` and writing afterwards would ignore an answer of `#f`, which is the
+> mistake `11` §3 warns about. Declining is `Declined`, which `retry` leaves
+> alone, and a person who isn't there stops the run rather than looking like
+> a "no".
+
 ---
 
 ## Step 6 preview: why `BUDGET` earns its place

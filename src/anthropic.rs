@@ -216,19 +216,16 @@ mod tests {
             .iter()
             .map(|k| ConDef { name: Rc::from(*k), fields: vec![(Rc::from("reason"), text400.clone())] })
             .collect();
-        t.add_datatype(Rc::from("Verdict"), verdict).unwrap();
-        t.add_record(Rc::from("Point"), vec![(Rc::from("x"), Type::Num), (Rc::from("y"), Type::Num)]).unwrap();
+        t.add_datatype(Rc::from("Verdict"), vec![], verdict).unwrap();
+        t.add_record(Rc::from("Point"), vec![], vec![(Rc::from("x"), Type::Num), (Rc::from("y"), Type::Num)]).unwrap();
         let tree = vec![
             ConDef { name: Rc::from("Leaf"), fields: vec![] },
             ConDef {
                 name: Rc::from("Node"),
-                fields: vec![
-                    (Rc::from("left"), Type::Named(Rc::from("Tree"))),
-                    (Rc::from("right"), Type::Named(Rc::from("Tree"))),
-                ],
+                fields: vec![(Rc::from("left"), Type::named("Tree")), (Rc::from("right"), Type::named("Tree"))],
             },
         ];
-        t.add_datatype(Rc::from("Tree"), tree).unwrap();
+        t.add_datatype(Rc::from("Tree"), vec![], tree).unwrap();
         t
     }
 
@@ -239,7 +236,7 @@ mod tests {
             .iter()
             .map(|k| ConDef { name: Rc::from(*k), fields: vec![(Rc::from("v"), Type::Text(Some(1)))] })
             .collect();
-        t.add_datatype(Rc::from("Wide"), cons).unwrap();
+        t.add_datatype(Rc::from("Wide"), vec![], cons).unwrap();
     }
 
     fn req(messages: &[(&str, &str)], ty: Type) -> AskReq {
@@ -263,7 +260,7 @@ mod tests {
 
     #[test]
     fn datatype_schema_is_any_of_tagged_objects() {
-        let s = theta().json_schema(&Type::Named(Rc::from("Verdict"))).unwrap();
+        let s = theta().json_schema(&Type::named("Verdict")).unwrap();
         let alternatives = s["anyOf"].as_array().unwrap();
         assert_eq!(alternatives.len(), 3);
         assert_eq!(
@@ -280,15 +277,15 @@ mod tests {
     #[test]
     fn records_are_object_roots_and_everything_else_is_wrapped() {
         let t = theta();
-        let (point, wrapped) = output_schema(&t, &Type::Named(Rc::from("Point"))).unwrap();
+        let (point, wrapped) = output_schema(&t, &Type::named("Point")).unwrap();
         assert!(!wrapped);
         assert_eq!(point["required"], json!(["x", "y"]));
         let (text, wrapped) = output_schema(&t, &Type::Text(Some(20))).unwrap();
         assert!(wrapped);
         assert_eq!(text["properties"]["value"], json!({"type": "string"}));
-        assert!(output_schema(&t, &Type::Named(Rc::from("Verdict"))).unwrap().1, "anyOf is not an object root");
+        assert!(output_schema(&t, &Type::named("Verdict")).unwrap().1, "anyOf is not an object root");
         assert_eq!(t.wrap_overhead(&Type::Text(None)), 10);
-        assert_eq!(t.wrap_overhead(&Type::Named(Rc::from("Point"))), 0);
+        assert_eq!(t.wrap_overhead(&Type::named("Point")), 0);
     }
 
     #[test]
@@ -297,9 +294,42 @@ mod tests {
         assert_eq!(s, json!({"type": "array", "items": {"type": "string"}}));
     }
 
+    /// A parameterized type's schema is its definition with the arguments
+    /// substituted, and the root rule looks at the definition's shape: a
+    /// two-constructor `Option` is wrapped, a record `Pair` isn't.
+    #[test]
+    fn parameterized_types_are_asked_with_their_arguments() {
+        let mut t = theta();
+        let a = || Type::Var(Rc::from("a"));
+        let b = || Type::Var(Rc::from("b"));
+        let option = vec![
+            ConDef { name: Rc::from("None"), fields: vec![] },
+            ConDef { name: Rc::from("Some"), fields: vec![(Rc::from("value"), a())] },
+        ];
+        t.add_datatype(Rc::from("Option"), vec![Rc::from("a")], option).unwrap();
+        t.add_record(
+            Rc::from("Pair"),
+            vec![Rc::from("a"), Rc::from("b")],
+            vec![(Rc::from("fst"), a()), (Rc::from("snd"), b())],
+        )
+        .unwrap();
+
+        let opt_num = Type::Named(Rc::from("Option"), vec![Type::Num]);
+        let (schema, wrapped) = output_schema(&t, &opt_num).unwrap();
+        assert!(wrapped, "anyOf is not an object root");
+        let some = &schema["properties"]["value"]["anyOf"][1];
+        assert_eq!(some["properties"]["value"], json!({"type": "integer"}), "{schema}");
+
+        let pair = Type::Named(Rc::from("Pair"), vec![Type::Text(Some(9)), Type::Bool]);
+        let (schema, wrapped) = output_schema(&t, &pair).unwrap();
+        assert!(!wrapped);
+        assert_eq!(schema["properties"]["fst"], json!({"type": "string"}));
+        assert_eq!(schema["properties"]["snd"], json!({"type": "boolean"}));
+    }
+
     #[test]
     fn recursive_types_cannot_be_asked_live() {
-        let err = theta().json_schema(&Type::Named(Rc::from("Tree"))).unwrap_err();
+        let err = theta().json_schema(&Type::named("Tree")).unwrap_err();
         assert!(err.contains("recursive"), "{}", err);
         assert!(theta().json_schema(&Type::Any).is_err());
     }
@@ -308,7 +338,7 @@ mod tests {
 
     #[test]
     fn request_body_for_the_analyst() {
-        let r = req(&[("System", "You are an analyst."), ("User", "FY2025 10-K")], Type::Named(Rc::from("Verdict")));
+        let r = req(&[("System", "You are an analyst."), ("User", "FY2025 10-K")], Type::named("Verdict"));
         let (body, wrapped) = request_body(&theta(), &r).unwrap();
         assert!(wrapped);
         assert_eq!(body["model"], "claude-sonnet-5");
@@ -437,7 +467,7 @@ mod tests {
     fn a_smaller_output_bound_can_cost_more_input() {
         let mut t = theta();
         wide(&mut t);
-        let narrow = Type::Named(Rc::from("Wide"));
+        let narrow = Type::named("Wide");
         let broad = Type::Text(Some(4000));
 
         let bound_narrow = t.bound(&narrow).expect("bounded");

@@ -128,9 +128,17 @@ export function highlight(src) {
 /* ------------------------------------------------------------ runnable code */
 
 function verdict(result) {
-  if (result.total === 0) return result.ok ? 'Loaded.' : 'Did not load.';
-  if (result.ok) return result.total === 1 ? 'The only test passed.' : `All ${result.total} tests passed.`;
-  return `${result.passed} of ${result.total} tests passed.`;
+  if (result.loaded === false) return 'Did not load.';
+  const errors = result.errors ?? 0;
+  // Errors outside the tests (a top-level form that failed, say) fail the
+  // run even when every test passes, so they are said alongside the tests.
+  const also = errors === 0 ? '' : errors === 1 ? ', but there was 1 error' : `, but there were ${errors} errors`;
+  if (result.total === 0) return errors === 0 ? 'Loaded.' : `Loaded${also}.`;
+  const tests =
+    result.passed === result.total
+      ? result.total === 1 ? 'The only test passed' : `All ${result.total} tests passed`
+      : `${result.passed} of ${result.total} tests passed`;
+  return `${tests}${also}.`;
 }
 
 /** Show a result in `box`, an element with class `result` or `out-body`. */

@@ -15,19 +15,28 @@ cargo test                                    # Steps 5, 6, 9, the laws, and the
 cargo run -- --live --python python3 FILE.nrm # a real model and a real (unsandboxed) Python
 ```
 
+`norman` exits 0 only if every unit test passed **and** nothing else went
+wrong: a syntax error, a top-level form that failed or got stuck (such as a
+live consult with nobody there), or a file that couldn't be used. Problems in
+a `use`d file count against the file that uses it. (Until this was fixed, a
+top-level error was printed but the command still exited 0.) The playground
+reports the same verdict.
+
 Current results:
 
 | Suite | Result |
 |---|---|
 | Step 5 example results | 35 of 35 pass |
 | Step 6 law instances and non-law counterexamples | 26 of 26 pass |
-| Step 9 tests of the initial basis ([`../examples/step9-revisit.nrm`](../examples/step9-revisit.nrm)) | 39 of 39 pass |
+| Step 9 tests of the initial basis ([`../examples/step9-revisit.nrm`](../examples/step9-revisit.nrm)) | 50 of 50 pass |
 | Scripted-oracle tests ([`../examples/oracle-scripted.nrm`](../examples/oracle-scripted.nrm)) | 11 of 11 pass |
 | SAGA's bi-level loop, at all three autonomy levels ([`../examples/saga-loop.nrm`](../examples/saga-loop.nrm)) | 15 of 15 pass |
 | Strings and `show` ([`../examples/strings.nrm`](../examples/strings.nrm)) | 45 of 45 pass |
 | Typed grants ([`../examples/typed-tools.nrm`](../examples/typed-tools.nrm)) | 18 of 18 pass |
 | CP-Agent, scripted ([`../examples/cp-agent.nrm`](../examples/cp-agent.nrm)) | 6 of 6 pass |
 | `consult`, scripted ([`../examples/consult.nrm`](../examples/consult.nrm)) | 52 of 52 pass |
+| Type parameters ([`../examples/type-parameters.nrm`](../examples/type-parameters.nrm)) | 19 of 19 pass |
+| The type checker, steps 1–2 of `12` ([`../tests/check.rs`](../tests/check.rs)): the prelude's inferred types, effects, rejections, load order, polymorphism, overloading | 16 of 16 pass; not yet run on programs (`12` §9, step 5) |
 | `consult`'s trace record, the terminal host driven by a simulated person, and the start-up check ([`../tests/consult.rs`](../tests/consult.rs)) | 18 of 18 pass |
 | Live client against a local stub server ([`../tests/live_stub.rs`](../tests/live_stub.rs)) | 9 of 9 pass |
 | Live `call` against real hosts, including Python ([`../tests/live_tools.rs`](../tests/live_tools.rs)) | 12 of 12 pass |
@@ -79,7 +88,7 @@ the event-by-event semantics implementable exactly.
 | cancellation, charged the reservation (07 §5), except for a consult | `cancel` |
 | scheduler policy (least path; run until blocked) | `run_main` |
 | `reach(v)` via free variables | `Machine::reach`, using each closure's precomputed `fv` |
-| `validate_Θ`, `bound`, `askable` | [`src/types.rs`](../src/types.rs) |
+| `validate_Θ`, `bound`, `askable` | [`src/types.rs`](../src/types.rs); a parameterized type goes through `TypeEnv::instance`, which checks the arity and substitutes the arguments |
 | sugar of 04 §7.1 | [`src/parser.rs`](../src/parser.rs): `let*`, `begin`, `par`, `and`, `or`, `(fail 'sym)`, the default `ask` site |
 | initial basis of 04 §7.2 | [`src/prelude.nrm`](../src/prelude.nrm), written in µNorman |
 
@@ -246,6 +255,14 @@ they catch it, and the case the gap was hiding (a `Sym` proposed as `Text`,
 which validates but doesn't read back as itself) is now tested. The other,
 Theorem 4's premise about humans (premise (iv) of law W1), was found by reviewing the design before any code
 was written.
+
+**Reviewing the type design found a bug in the interpreter.** Comparing
+against an unlimited budget, `(> (. (remaining) cost) $0.10)`, was a
+run-time error ("can't compare ∞"), so `02`'s own budget-aware idiom crashed
+whenever no limit was set, which is the case for every top-level form. ∞ now
+compares above every amount of money or time and equal only to itself;
+arithmetic on it is still an error. The tests are in
+[`step9-revisit.nrm`](../examples/step9-revisit.nrm).
 
 This is the arc Ramsey's process promises. Laws and tests written *before* the
 code found five design mistakes (`06` §7) and one flawed ownership rule (`05`).

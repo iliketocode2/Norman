@@ -26,6 +26,24 @@
 (check-expect (system? sys) #t)
 (check-expect (system? u1)  #f)
 
+;;; Comparing against an unlimited budget. A test with no `under` has no
+;;; limits, so (remaining) reports ∞ for both money and time, and 02's
+;;; budget-aware choice must still work: ∞ is more than any amount, and
+;;; equal only to itself. (These were run-time errors; reviewing the type
+;;; design, design/12, found it.)
+(check-expect (> (. (remaining) cost) $0.10) #t)
+(check-expect (< (. (remaining) cost) $1000000.00) #f)
+(check-expect (> (. (remaining) time) 24h) #t)
+(check-expect (< 1s (. (remaining) time)) #t)
+(check-expect (<= $5.00 (. (remaining) cost)) #t)
+(check-expect (>= $5.00 (. (remaining) cost)) #f)
+(check-expect (= (. (remaining) cost) (. (remaining) cost)) #t)
+(check-expect (< (. (remaining) cost) (. (remaining) cost)) #f)
+(check-error  (- (. (remaining) cost) $1.00))   ; arithmetic on ∞ is still an error
+(under ([cost $1.00] [time 1min])                ; and a limited budget is finite
+  (check-expect (> (. (remaining) cost) $0.10) #t)
+  (check-expect (> (. (remaining) cost) $2.00) #f))
+
 ;;; ------------------------------------------------------------------
 ;;; Lists: one test per form of input ('() and cons), and per law
 

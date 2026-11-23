@@ -75,14 +75,18 @@ fn evaluate(source: &str) -> serde_json::Value {
             "transcript": interp.transcript(),
             "passed": summary.passed,
             "total": summary.total,
-            "ok": summary.all_passed(),
+            "errors": summary.errors,
+            "ok": summary.clean(),
+            "loaded": true,
         }),
         // A file that can't be read at all: the lexer failed, so nothing ran.
         Err(msg) => serde_json::json!({
             "transcript": format!("{}\n{}", interp.transcript(), msg),
             "passed": 0,
             "total": 0,
+            "errors": 1,
             "ok": false,
+            "loaded": false,
         }),
     }
 }

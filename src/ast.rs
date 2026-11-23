@@ -20,16 +20,31 @@ impl fmt::Display for Loc {
     }
 }
 
-/// Types, as they appear in `ask`, `datatype`, and `record`.
+/// Types, as they appear in `ask`, `consult`, grants, `datatype` and `record`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Text(Option<u64>),
     Num,
     Bool,
     Sym,
+    /// Amounts of money and time. Not askable, since JSON has neither; they
+    /// exist so that `Resources` can say what it holds (design/12, T5).
+    Money,
+    Dur,
     List(Box<Type>, Option<u64>),
-    Named(Name),
+    /// A datatype or record, applied to its type arguments: `Verdict`, or
+    /// `(Option Num)`.
+    Named(Name, Vec<Type>),
+    /// A type parameter, inside the definition that declares it.
+    Var(Name),
     Any,
+}
+
+impl Type {
+    /// A datatype or record with no type arguments.
+    pub fn named(n: &str) -> Type {
+        Type::Named(Rc::from(n), vec![])
+    }
 }
 
 impl fmt::Display for Type {
@@ -40,9 +55,19 @@ impl fmt::Display for Type {
             Type::Num => write!(f, "Num"),
             Type::Bool => write!(f, "Bool"),
             Type::Sym => write!(f, "Sym"),
+            Type::Money => write!(f, "Money"),
+            Type::Dur => write!(f, "Dur"),
             Type::List(t, None) => write!(f, "(List {})", t),
             Type::List(t, Some(n)) => write!(f, "(List {} {})", t, n),
-            Type::Named(n) => write!(f, "{}", n),
+            Type::Named(n, args) if args.is_empty() => write!(f, "{}", n),
+            Type::Named(n, args) => {
+                write!(f, "({}", n)?;
+                for a in args {
+                    write!(f, " {}", a)?;
+                }
+                write!(f, ")")
+            }
+            Type::Var(v) => write!(f, "{}", v),
             Type::Any => write!(f, "Any"),
         }
     }
@@ -212,8 +237,10 @@ pub enum Def {
     Val(Name, ExpRef),
     Exp(ExpRef),
     Define(Name, Rc<Lambda>),
-    Datatype(Name, Vec<ConDef>),
-    Record(Name, Vec<(Name, Type)>),
+    /// A datatype, its type parameters, and its constructors.
+    Datatype(Name, Vec<Name>, Vec<ConDef>),
+    /// A record, its type parameters, and its fields.
+    Record(Name, Vec<Name>, Vec<(Name, Type)>),
 }
 
 /// A capability's interface: the operations it offers and what each answers

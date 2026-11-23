@@ -113,7 +113,9 @@ fn main() -> ExitCode {
     let mut ok = true;
     for f in &files {
         match interp.load_file(Path::new(f)) {
-            Ok(summary) => ok &= summary.all_passed(),
+            // A failed test, or any error outside the tests, fails the run,
+            // so a script can tell (say) a refused live consult from success.
+            Ok(summary) => ok &= summary.clean(),
             Err(msg) => {
                 eprintln!("{}", msg);
                 ok = false;

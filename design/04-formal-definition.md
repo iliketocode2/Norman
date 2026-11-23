@@ -78,8 +78,11 @@ This is in the EBNF of Ramsey's Figure 1.1: `{ x }` means zero or more, and
 def       ::= (val variable-name exp)
             | exp
             | (define function-name (formals) exp)
-            | (datatype Type-name {[Con-name {(field-name ty)}]})
-            | (record Record-name {(field-name ty)})
+            | (datatype type-head {[Con-name {(field-name ty)}]})
+            | (record record-head {(field-name ty)})
+
+type-head   ::= Type-name   | (Type-name type-var {type-var})       ; type parameters (12, T5)
+record-head ::= Record-name | (Record-name type-var {type-var})
             | xdef
 
 xdef      ::= (use file-name)
@@ -125,9 +128,11 @@ exp       ::= literal
 
 pattern   ::= Con-name | (Con-name {variable-name | _}) | '() | (cons variable-name variable-name) | _
 
-ty        ::= Text | (Text numeral) | Num | Bool | Sym
+ty        ::= Text | (Text numeral) | Num | Bool | Sym | Money | Dur
             | (List ty) | (List ty numeral)
-            | Type-name | Record-name | Any
+            | Type-name | Record-name | (Type-name ty {ty}) | (Record-name ty {ty})
+            | type-var                     ; only inside the datatype or record that declares it
+            | Any
 
 formals   ::= {variable-name}
 literal   ::= numeral | string | money | duration | #t | #f | quoted-symbol | '()
@@ -144,6 +149,19 @@ reserved either, for the same reason (`[propose e]` in `consult`, `[price $…]`
 in a `human` grant). An earlier draft reserved
 them, which made `(. (remaining) cost)` a syntax error. Running the Step 5
 tests caught this.
+
+**Type parameters** ([`12`](12-types-and-effects.md), T5). A datatype or
+record may declare lowercase type parameters, `(datatype (Option a) [None]
+[Some (value a)])`, and is then applied to that many arguments wherever it's
+used: `(Option Num)`. Three rules, checked when the type is defined or used:
+a parameterized type always gets exactly its arguments; a type variable
+appears only inside the definition that declares it; and inside its own
+definition a type is applied to exactly its own parameters, `(Tree a)` and
+never `(Tree (List a))`. That last rule, *regular* recursion, keeps
+`askable`, `bound`, `validate` and the schema of `09` §2 finite. Values don't
+carry their type arguments: `(Some 3)` is the same value whatever it is
+asked for as. `Money` and `Dur` exist so that `Resources` can say what it
+holds; JSON has neither, so neither is askable.
 
 **Patterns are flat:** a constructor applied to variables or `_`. Nested
 patterns can come later as sugar. Flat patterns keep the CASE rule, and every
@@ -767,14 +785,16 @@ already proved about the core, with no new cases.
 (datatype Failure [Invalid (raw Text)] [ToolError (message Text)] [Refused (category Sym)]
                   [Declined (reason Text)]                               ; Refused: 09, decision B
                   [OverBudget] [PastDeadline] [Raised (reason Sym)])     ; Declined: 11, H4
-(datatype Option  [None] [Some (value Any)])
-(record   Pair    (fst Any) (snd Any))
-(record   Resources (cost Any) (time Any))
+(datatype (Option a) [None] [Some (value a)])
+(record   (Pair a b) (fst a) (snd b))
+(record   Resources (cost Money) (time Dur))
 ```
 
-`Any` is a placeholder until types exist. It makes `Option`, `Pair` and
-`Resources` unaskable, which is correct: nothing should ask a model for a
-`Pair` of arbitrary things.
+These held `Any` until type parameters existed, which made them unaskable
+whatever they contained. Now `(Option Num)` and `(Pair (Text 20) Num)` are
+askable, while `(Option Any)` and `Resources` are not. `Any` remains in the
+language, still never askable, until the type checker of `12` decides its
+fate.
 
 **Primitives** (implemented by the interpreter):
 

@@ -83,13 +83,16 @@ that matter here:
 | `(List τ)`, `(List τ n)` | `{"type": "array", "items": S(τ)}`; `n` enforced by `validate` |
 | record `R` | `{"type": "object", "properties": {f: S(τ_f)…}, "required": [all fields], "additionalProperties": false}` |
 | datatype `D` | `{"anyOf": [one object per constructor, with "tag": {"const": "K"} plus its fields]}` |
+| `(D τ₁ …)`, `(R τ₁ …)` | the schema of `D` or `R` with each type parameter replaced by its argument's schema ([`12`](12-types-and-effects.md), T5). Root wrapping depends only on the definition's shape, so `(Option Num)` is wrapped and `(Pair τ₁ τ₂)` isn't |
 
 **Root wrapping.** If `S(τ)` isn't an object schema (for example `(Text 20)`, or
 a datatype's `anyOf`), the request asks for `{"value": S(τ)}` and the reply is
 unwrapped before `validate`. `bound(τ)` accounts for the wrapper's 10 bytes (`{"value":` and `}`).
 
 **Recursive datatypes** can't be asked of a live model. That's a checked
-run-time error naming the type. Scripts can still produce them.
+run-time error naming the type. Scripts can still produce them. A type that
+merely *nests* itself at different arguments, such as
+`(Option (Option Num))`, isn't recursive and is asked for normally.
 
 Where the API can't enforce part of a type (string and list bounds),
 `validate` does. So **the guarantee a program sees is the same in scripted and

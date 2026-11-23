@@ -138,6 +138,10 @@ fn parse_duration(a: &str) -> Option<i64> {
     n.checked_mul(scale)
 }
 
+fn names(xs: &[Name]) -> String {
+    xs.iter().map(|x| &**x).collect::<Vec<_>>().join(", ")
+}
+
 fn lit(v: Value) -> ExpRef {
     Rc::new(Exp::Literal(v))
 }
@@ -219,9 +223,9 @@ impl<'a> Parser<'a> {
                     if args.is_empty() {
                         return perr(sx, "record needs a name");
                     }
-                    let r = self.upper(&args[0], "a record name")?;
-                    let fields = args[1..].iter().map(|f| self.field(f)).collect::<P<Vec<_>>>()?;
-                    return Ok(Top::Def(Def::Record(r, fields)));
+                    let (r, params) = self.type_head(&args[0], "a record name")?;
+                    let fields = args[1..].iter().map(|f| self.field(f, &params)).collect::<P<Vec<_>>>()?;
+                    return Ok(Top::Def(Def::Record(r, params, fields)));
                 }
                 "use" => {
                     self.arity(sx, "use", args, 1)?;
@@ -240,11 +244,27 @@ impl<'a> Parser<'a> {
         Ok(Top::Def(Def::Exp(self.exp(sx)?)))
     }
 
-    /// `(f τ)`: a named field, in a record or a constructor.
-    fn field(&self, sx: &Sx) -> P<(Name, Type)> {
+    /// `(f τ)`: a named field, in a record or a constructor, whose type may
+    /// mention the definition's parameters.
+    fn field(&self, sx: &Sx, params: &[Name]) -> P<(Name, Type)> {
         match sx.list() {
-            Some([f, t]) => Ok((self.lower(f, "a field name")?, self.ty(t)?)),
+            Some([f, t]) => Ok((self.lower(f, "a field name")?, self.ty_in(t, params)?)),
             _ => perr(sx, format!("expected a field (name type), found {}", sx)),
+        }
+    }
+
+    /// A definition's head: `Name`, or `(Name a …)` with type parameters.
+    fn type_head(&self, sx: &Sx, what: &str) -> P<(Name, Vec<Name>)> {
+        match sx {
+            Sx::List(xs, _) if !xs.is_empty() => {
+                let name = self.upper(&xs[0], what)?;
+                if xs.len() == 1 {
+                    return perr(sx, format!("({}) declares no parameters; write {} without parentheses", name, name));
+                }
+                let params = xs[1..].iter().map(|p| self.lower(p, "a type parameter")).collect::<P<Vec<_>>>()?;
+                Ok((name, params))
+            }
+            _ => Ok((self.upper(sx, what)?, vec![])),
         }
     }
 
@@ -252,21 +272,21 @@ impl<'a> Parser<'a> {
         if args.is_empty() {
             return perr(sx, "datatype needs a name");
         }
-        let t = self.upper(&args[0], "a type name")?;
+        let (t, params) = self.type_head(&args[0], "a type name")?;
         let mut cons = vec![];
         for c in &args[1..] {
             let (k, fields) = match c {
                 Sx::Atom(..) => (self.upper(c, "a constructor")?, vec![]),
                 Sx::List(items, _) if !items.is_empty() => {
                     let k = self.upper(&items[0], "a constructor")?;
-                    let fields = items[1..].iter().map(|f| self.field(f)).collect::<P<Vec<_>>>()?;
+                    let fields = items[1..].iter().map(|f| self.field(f, &params)).collect::<P<Vec<_>>>()?;
                     (k, fields)
                 }
                 _ => return perr(c, "expected [Constructor (field type) …]"),
             };
             cons.push(ConDef { name: k, fields });
         }
-        Ok(Top::Def(Def::Datatype(t, cons)))
+        Ok(Top::Def(Def::Datatype(t, params, cons)))
     }
 
     fn grant(&self, sx: &Sx, args: &[Sx]) -> P<Top> {
@@ -492,7 +512,14 @@ impl<'a> Parser<'a> {
 
     // ------------------------------------------------------ types, patterns
 
+    /// A type outside any definition: in `ask`, `consult` or a grant. It can't
+    /// mention type variables, so it is always a complete, ground type.
     pub fn ty(&self, sx: &Sx) -> P<Type> {
+        self.ty_in(sx, &[])
+    }
+
+    /// A type that may mention the type parameters `params`.
+    fn ty_in(&self, sx: &Sx, params: &[Name]) -> P<Type> {
         let bound = |n: &Sx| match n.atom().map(classify) {
             Some(Ok(Atom::Num(k))) if k >= 0 => Ok(k as u64),
             _ => perr(n, "expected a non-negative size bound"),
@@ -503,13 +530,39 @@ impl<'a> Parser<'a> {
                 "Num" => Ok(Type::Num),
                 "Bool" => Ok(Type::Bool),
                 "Sym" => Ok(Type::Sym),
+                "Money" => Ok(Type::Money),
+                "Dur" => Ok(Type::Dur),
                 "Any" => Ok(Type::Any),
-                _ => Ok(Type::Named(self.upper(sx, "a type")?)),
+                v if v.starts_with(|c: char| c.is_ascii_lowercase()) => {
+                    if params.iter().any(|p| &**p == v) {
+                        Ok(Type::Var(Rc::from(v)))
+                    } else if params.is_empty() {
+                        perr(
+                            sx,
+                            format!(
+                                "{} is a type variable, which can appear only inside a datatype or record that declares it",
+                                v
+                            ),
+                        )
+                    } else {
+                        perr(sx, format!("unknown type variable {}; this definition declares {}", v, names(params)))
+                    }
+                }
+                _ => Ok(Type::Named(self.upper(sx, "a type")?, vec![])),
             },
             Sx::List(xs, _) => match xs.first().and_then(Sx::atom) {
                 Some("Text") if xs.len() == 2 => Ok(Type::Text(Some(bound(&xs[1])?))),
-                Some("List") if xs.len() == 2 => Ok(Type::List(Box::new(self.ty(&xs[1])?), None)),
-                Some("List") if xs.len() == 3 => Ok(Type::List(Box::new(self.ty(&xs[1])?), Some(bound(&xs[2])?))),
+                Some("List") if xs.len() == 2 => Ok(Type::List(Box::new(self.ty_in(&xs[1], params)?), None)),
+                Some("List") if xs.len() == 3 => {
+                    Ok(Type::List(Box::new(self.ty_in(&xs[1], params)?), Some(bound(&xs[2])?)))
+                }
+                // A datatype or record applied to type arguments: (Option Num).
+                // Arity is checked against Θ when the type is used, because the
+                // type may be defined later in the file.
+                Some(h) if h.starts_with(|c: char| c.is_ascii_uppercase()) && xs.len() >= 2 => {
+                    let args = xs[1..].iter().map(|a| self.ty_in(a, params)).collect::<P<Vec<_>>>()?;
+                    Ok(Type::Named(Rc::from(h), args))
+                }
                 _ => perr(sx, format!("not a type: {}", sx)),
             },
             Sx::Str(..) => perr(sx, "not a type"),
