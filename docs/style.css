@@ -406,3 +406,101 @@ details.run > summary::before { content: "▸ "; color: var(--fg-faint); }
 details.run[open] > summary::before { content: "▾ "; }
 details.run > :last-child { margin-bottom: 1rem; }
 details.run .trace { margin-top: 0; font-size: 0.8rem; }
+
+/* ---------------------------------------------------------------- search */
+/* The header holds a button that looks like a search box; it opens a modal
+   <dialog> with the real input and the results. Built by norman.js. */
+button.search-open {
+  display: flex; align-items: center; gap: 0.45rem; height: 2rem; min-width: 9.5rem;
+  padding: 0 0.4rem 0 0.6rem; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg-soft); color: var(--fg-faint); font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+button.search-open:hover { border-color: var(--accent); color: var(--accent); }
+button.search-open svg { flex: none; }
+button.search-open kbd, dialog.search kbd {
+  margin-left: auto; font-family: var(--mono); font-size: 0.72rem; line-height: 1.35;
+  padding: 0 0.35rem; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--fg-soft);
+}
+
+dialog.search {
+  width: min(40rem, calc(100vw - 32px)); max-height: calc(100dvh - 9rem);
+  margin: 4.5rem auto auto; padding: 0;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg); color: var(--fg);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 0.28); overflow: hidden;
+}
+dialog.search[open] { display: flex; flex-direction: column; }
+dialog.search::backdrop { background: rgb(0 0 0 / 0.35); }
+.search-box {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--line); color: var(--fg-faint);
+}
+.search-box input {
+  flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+  color: var(--fg); font: inherit; font-size: 1.05rem;
+}
+.search-box input::-webkit-search-cancel-button { display: none; }
+.search-status { margin: 0; padding: 0.9rem 1rem; color: var(--fg-soft); font-size: 0.9rem; }
+.search-status:empty { display: none; }
+.search-results { list-style: none; margin: 0; padding: 0.4rem; overflow-y: auto; overscroll-behavior: contain; }
+.search-results:empty { display: none; }
+.search-results li { margin: 0; }
+.search-results a {
+  display: block; padding: 0.5rem 0.7rem; border-radius: 7px;
+  color: var(--fg); text-decoration: none; line-height: 1.4;
+}
+.search-results li[aria-selected="true"] a { background: var(--accent-soft); }
+.search-results li[aria-selected="true"] .sr-title { color: var(--accent); }
+.sr-where { display: block; font-size: 0.76rem; font-weight: 600; color: var(--fg-faint); }
+.sr-title { display: block; font-weight: 620; }
+.sr-text { display: block; font-size: 0.84rem; color: var(--fg-soft); overflow-wrap: anywhere; }
+.search-results mark { background: none; color: var(--accent); font-weight: 650; }
+
+/* ------------------------------------------------------- Markdown export */
+/* Sits beside the floating GitHub link, which it matches. */
+.md-export {
+  position: fixed; z-index: 30;
+  right: calc(max(16px, env(safe-area-inset-right)) + 3.6rem);
+  bottom: max(16px, env(safe-area-inset-bottom));
+}
+button.md-float {
+  width: 3rem; height: 3rem; border-radius: 50%; padding: 0;
+  display: grid; place-items: center; cursor: pointer;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.15);
+  font-family: var(--mono); font-size: 0.82rem; font-weight: 650;
+  transition: color 0.15s, border-color 0.15s, transform 0.15s;
+}
+button.md-float:hover, button.md-float[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+button.md-float:hover { transform: translateY(-2px); }
+.md-menu {
+  position: absolute; right: 0; bottom: calc(100% + 0.6rem); width: 16.5rem;
+  max-width: calc(100vw - 32px); padding: 0.4rem;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 10px 32px rgb(0 0 0 / 0.2);
+}
+.md-menu[hidden] { display: none; }
+.md-menu p { margin: 0.3rem 0.6rem 0.45rem; font-size: 0.8rem; line-height: 1.45; color: var(--fg-soft); }
+.md-menu a, .md-menu button {
+  display: block; width: 100%; padding: 0.45rem 0.6rem; border: 0; border-radius: 6px;
+  background: none; color: var(--fg); font: inherit; font-size: 0.9rem; text-align: left;
+  text-decoration: none; cursor: pointer;
+}
+.md-menu a:hover, .md-menu button:hover { background: var(--accent-soft); color: var(--accent); }
+
+/* ------------------------------------------------------- narrow header */
+/* On a phone the links get a row of their own, below the brand, search and
+   theme buttons; on one row they would run off the side of the screen. */
+@media (max-width: 40rem) {
+  html { scroll-padding-top: 6.5rem; }
+  .doc-body h2, .doc-body h3 { scroll-margin-top: 6.5rem; }
+  .bar .wrap { flex-wrap: wrap; height: auto; column-gap: 1rem; row-gap: 0.15rem; padding-top: 0.5rem; padding-bottom: 0.4rem; }
+  .bar nav { display: contents; }
+  .bar .wrap::after { content: ""; order: 2; flex-basis: 100%; }
+  .bar nav a { order: 3; }
+  .bar nav button { order: 1; }
+  button.search-open { margin-left: auto; min-width: 0; }
+  button.search-open kbd { display: none; }
+  dialog.search { margin-top: 1rem; max-height: calc(100dvh - 2rem); }
+}

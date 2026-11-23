@@ -351,6 +351,279 @@ export function activateChrome() {
     a.setAttribute('aria-label', 'Link to this section');
     h.append(a);
   }
+
+  activateSearch();
+  activateExport();
+}
+
+/* ------------------------------------------------------------------ search */
+
+/**
+ * The search box in the header. The index is docs/search-index.js, generated
+ * from the pages by scripts/docs-assets.mjs (docs/verify.mjs fails if it is
+ * stale), and loaded the first time the box opens.
+ */
+function activateSearch() {
+  const opener = document.querySelector('button.search-open');
+  if (!opener) return;
+
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  opener.title = `Search the docs (/ or ${mac ? '⌘' : 'Ctrl+'}K)`;
+
+  let index = null;
+  const load = () => (index ??= import('./search-index.js').then(({ SEARCH_INDEX }) => SEARCH_INDEX.map((e) => ({
+    ...e, tl: e.t.toLowerCase(), kl: (e.k ?? '').toLowerCase(), sl: (e.s ?? '').toLowerCase(), xl: e.x.toLowerCase(),
+  }))).catch((err) => { index = null; throw err; }));
+
+  let dialog = null;
+  let input = null;
+  let list = null;
+  let status = null;
+  let results = [];
+  let active = -1;
+
+  const build = () => {
+    dialog = document.createElement('dialog');
+    dialog.className = 'search';
+    dialog.setAttribute('aria-label', 'Search the documentation');
+    dialog.innerHTML = `
+      <div class="search-box">
+        <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M7 12.2A5.2 5.2 0 1 0 7 1.8a5.2 5.2 0 0 0 0 10.4zM10.9 10.9l3.6 3.6"/></svg>
+        <input type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false"
+               role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list"
+               aria-label="Search the docs">
+        <kbd>Esc</kbd>
+      </div>
+      <p class="search-status" role="status"></p>
+      <ul class="search-results" id="search-results" role="listbox" aria-label="Results"></ul>`;
+    document.body.append(dialog);
+    input = dialog.querySelector('input');
+    list = dialog.querySelector('ul');
+    status = dialog.querySelector('.search-status');
+
+    input.addEventListener('input', update);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (results.length) select((active + (e.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length);
+      } else if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        if (results.length) go(results[Math.max(active, 0)]);
+      }
+    });
+    // Escape always closes, even with text in the box: a search input would
+    // otherwise spend the first press clearing itself.
+    dialog.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); dialog.close(); }
+    });
+    // A click on the backdrop lands on the dialog itself.
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+    list.addEventListener('mousemove', (e) => {
+      const li = e.target.closest('li[data-i]');
+      if (li && +li.dataset.i !== active) select(+li.dataset.i);
+    });
+    list.addEventListener('click', (e) => {
+      const li = e.target.closest('li[data-i]');
+      if (!li || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      go(results[+li.dataset.i]);
+    });
+  };
+
+  const open = () => {
+    if (!dialog) build();
+    if (!dialog.open) dialog.showModal();
+    input.focus();
+    input.select();
+    if (!index) {
+      status.textContent = 'Loading…';
+      load().then(update, () => { status.textContent = 'The search index could not be loaded.'; });
+    }
+  };
+
+  opener.addEventListener('click', open);
+  document.addEventListener('keydown', (e) => {
+    const editable = e.target.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
+    if ((e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      open();
+    } else if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !editable) {
+      e.preventDefault();
+      open();
+    }
+  });
+
+  function select(i) {
+    const items = list.children;
+    if (items[active]) items[active].setAttribute('aria-selected', 'false');
+    active = i;
+    if (items[i]) {
+      items[i].setAttribute('aria-selected', 'true');
+      items[i].scrollIntoView({ block: 'nearest' });
+      input.setAttribute('aria-activedescendant', items[i].id);
+    } else {
+      input.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  async function update() {
+    const query = input.value.trim().toLowerCase();
+    const terms = query.split(/\s+/).filter(Boolean);
+    const entries = await load().catch(() => null);
+    if (!entries || input.value.trim().toLowerCase() !== query) return;   // a newer keystroke wins
+    results = terms.length ? rank(entries, query, terms) : [];
+    list.innerHTML = results.map((e, i) => `
+      <li role="option" id="search-result-${i}" data-i="${i}" aria-selected="false">
+        <a href="${escape(e.u)}" tabindex="-1">
+          <span class="sr-where">${escape(e.p + (e.s ? ' › ' + e.s : ''))}</span>
+          <span class="sr-title">${mark(e.t, terms)}</span>
+          ${e.x ? `<span class="sr-text">${snippet(e.x, terms)}</span>` : ''}
+        </a>
+      </li>`).join('');
+    input.setAttribute('aria-expanded', String(results.length > 0));
+    status.textContent = !terms.length ? 'Search every heading and section on the site.'
+      : results.length ? '' : `Nothing matches “${input.value.trim()}”.`;
+    active = -1;
+    select(results.length ? 0 : -1);
+  }
+
+  /** Go to a result. On the page already open, that is just a scroll. */
+  function go(entry) {
+    dialog.close();
+    const url = new URL(entry.u, location.href);
+    const page = (p) => p.replace(/(\/index)?(\.html)?$/, '').replace(/\/$/, '') || '/';
+    if (page(url.pathname) !== page(location.pathname)) { location.href = url.href; return; }
+    const target = url.hash && document.getElementById(decodeURIComponent(url.hash.slice(1)));
+    if (url.hash && url.hash !== location.hash) location.hash = url.hash;
+    else if (target) target.scrollIntoView();
+    else if (!url.hash) { history.pushState(null, '', location.pathname); window.scrollTo(0, 0); }
+    // On a phone the docs sidebar is a dropdown above the content; don't leave it open.
+    const toc = document.querySelector('details.toc');
+    if (toc && window.innerWidth < 992) toc.open = false;
+  }
+}
+
+/** Every term must appear somewhere; headings count far more than body text. */
+function rank(entries, query, terms) {
+  const scored = [];
+  for (const e of entries) {
+    let score = 0;
+    let all = true;
+    for (const t of terms) {
+      const inTitle = e.tl.includes(t);
+      const inShort = e.kl.includes(t);
+      const inSection = e.sl.includes(t);
+      const hits = count(e.xl, t);
+      if (!inTitle && !inShort && !inSection && !hits) { all = false; break; }
+      if (e.tl === t) score += 30;
+      else if (startsWord(e.tl, t)) score += 12;
+      else if (inTitle) score += 3;
+      if (inShort) score += startsWord(e.kl, t) ? 10 : 5;
+      if (inSection) score += 2;
+      score += Math.min(hits, 6) * (startsWord(e.xl, t) ? 1 : 0.5);
+    }
+    if (!all) continue;
+    if (terms.length > 1 && e.tl.includes(query)) score += 15;
+    if (e.p === 'Docs') score += 1.5;     // the reference is what people search for
+    if (e.l === 1) score -= 3;            // a whole page is rarely the best answer
+    scored.push({ e, score });
+  }
+  return scored.sort((a, b) => b.score - a.score).slice(0, 12).map((s) => s.e);
+}
+
+function count(hay, t) {
+  let n = 0;
+  for (let i = hay.indexOf(t); i !== -1; i = hay.indexOf(t, i + t.length)) n += 1;
+  return n;
+}
+
+/** Does `t` occur in `hay` at the start of a word? */
+function startsWord(hay, t) {
+  for (let i = hay.indexOf(t); i !== -1; i = hay.indexOf(t, i + 1)) {
+    if (i === 0 || !/[\p{L}\p{N}]/u.test(hay[i - 1])) return true;
+  }
+  return false;
+}
+
+/** Escaped HTML for `text`, with every term wrapped in <mark>. */
+function mark(text, terms) {
+  const re = new RegExp(terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi');
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    out += escape(text.slice(last, m.index)) + `<mark>${escape(m[0])}</mark>`;
+    last = m.index + m[0].length;
+  }
+  return out + escape(text.slice(last));
+}
+
+/** About two lines of the section, around the first term found in it. */
+function snippet(text, terms) {
+  const lower = text.toLowerCase();
+  const hits = terms.map((t) => lower.indexOf(t)).filter((i) => i >= 0);
+  const at = hits.length ? Math.min(...hits) : 0;
+  let start = Math.max(0, at - 50);
+  if (start > 0) start = text.indexOf(' ', start) + 1 || start;
+  let end = Math.min(text.length, start + 170);
+  if (end < text.length) end = text.lastIndexOf(' ', end) > start ? text.lastIndexOf(' ', end) : end;
+  return (start > 0 ? '… ' : '') + mark(text.slice(start, end), terms) + (end < text.length ? ' …' : '');
+}
+
+/* ---------------------------------------------------------- Markdown export */
+
+/**
+ * The ".md" button beside the GitHub link: the language reference as
+ * Markdown (docs/munorman-reference.md, generated from docs.html), to
+ * download or copy into an agent's context.
+ */
+function activateExport() {
+  const box = document.querySelector('.md-export');
+  if (!box) return;
+  const toggle = box.querySelector('button.md-float');
+  const menu = box.querySelector('.md-menu');
+  const link = menu.querySelector('a[download]');
+  const copy = menu.querySelector('button.md-copy');
+
+  let text = null;     // a promise of the file
+  let ready = null;    // the file, once it has arrived
+  const fetchText = () => (text ??= fetch(link.href)
+    .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
+    .then((t) => (ready = t))
+    .catch((err) => { text = null; throw err; }));
+
+  const setOpen = (open) => {
+    menu.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    // Fetch now, so that Copy can write to the clipboard straight away:
+    // some browsers refuse once the click is a network round trip old.
+    if (open) fetchText().catch(() => {});
+  };
+
+  toggle.addEventListener('click', () => setOpen(menu.hidden));
+  document.addEventListener('click', (e) => { if (!menu.hidden && !box.contains(e.target)) setOpen(false); });
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !menu.hidden) { setOpen(false); toggle.focus(); }
+  });
+  link.addEventListener('click', () => setTimeout(() => setOpen(false), 0));
+
+  const label = copy.textContent;
+  copy.addEventListener('click', async () => {
+    try {
+      if (ready !== null) {
+        await navigator.clipboard.writeText(ready);
+      } else if (window.ClipboardItem && navigator.clipboard.write) {
+        // Hand the clipboard a promise, which keeps the click's permission.
+        const blob = fetchText().then((t) => new Blob([t], { type: 'text/plain' }));
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      } else {
+        await navigator.clipboard.writeText(await fetchText());
+      }
+      copy.textContent = 'Copied';
+    } catch {
+      copy.textContent = 'Could not copy; use Download';
+    }
+    setTimeout(() => { copy.textContent = label; }, 1800);
+  });
 }
 
 /* ------------------------------------------------------------ reference TOC */

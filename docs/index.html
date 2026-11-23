@@ -57,6 +57,7 @@
       <a href="demo.html">Demo</a>
       <a href="docs.html">Docs</a>
       <a href="playground.html">Playground</a>
+      <button class="search-open" type="button" aria-label="Search the docs" aria-keyshortcuts="/ Control+K Meta+K" title="Search the docs (/ or Ctrl+K)"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M7 12.2A5.2 5.2 0 1 0 7 1.8a5.2 5.2 0 0 0 0 10.4zM10.9 10.9l3.6 3.6"/></svg><span class="search-hint">Search</span><kbd>/</kbd></button>
       <button class="theme" type="button" aria-label="Switch between light and dark">☾</button>
     </nav>
   </div>
@@ -92,7 +93,7 @@
 
   <h2 id="tour">An overview of the main capabilities of µNorman:</h2>
 
-  <h3>1. Ask</h3>
+  <h3 id="tour-ask">1. Ask</h3>
   <p>
     You give <code>ask</code> a model and the context it should see. You also name the
     <strong>type</strong> of answer you want. If the reply fits that type, you get a real value back.
@@ -127,7 +128,7 @@
     <div class="result"></div>
   </div>
 
-  <h3>2. Handling Failure</h3>
+  <h3 id="tour-failure">2. Handling Failure</h3>
   <p>
     Agents fail a lot. The reply might not fit the type. The provider might be down. You might run
     out of money or time. In each case <code>ask</code> gives back a <strong>failure</strong> instead
@@ -162,7 +163,7 @@
     <div class="result"></div>
   </div>
 
-  <h3>3. The budget can never be overspent</h3>
+  <h3 id="tour-budget">3. The budget can never be overspent</h3>
   <p>
     Before it calls the model, <code>ask</code> <strong>reserves</strong> the worst case. That means
     the full prompt plus the longest answer the type allows. If that doesn&rsquo;t fit in the budget,
@@ -195,7 +196,7 @@
     <div class="result"></div>
   </div>
 
-  <h3>4. Agent Loop</h3>
+  <h3 id="tour-loop">4. Agent Loop</h3>
   <p>
     This is the CP-Agent design. The model picks the next step. If it writes code, we run it and
     show it the output. When it says it&rsquo;s done, we stop. The answer is a <em>choice</em>, so
@@ -241,7 +242,7 @@
     <div class="result"></div>
   </div>
 
-  <h3>5. Concurrency</h3>
+  <h3 id="tour-concurrency">5. Concurrency</h3>
   <p>
     A <code>workflow</code> is a set of named steps. <strong>A step waits only on the steps it
     mentions by name.</strong> As soon as its inputs are ready, it runs. In the example below, four
@@ -290,7 +291,7 @@
     <div class="result"></div>
   </div>
 
-  <h3>6. Laws</h3>
+  <h3 id="tour-laws">6. Laws</h3>
   <p>
     Every construct comes with algebraic laws. They tell you which rewrites are safe. The
     <strong>non-laws</strong> matter just as much. A compiler might merge two identical
@@ -395,6 +396,14 @@
 </footer>
 
 <a class="gh-float" href="https://github.com/iliketocode2/Norman" aria-label="µNorman on GitHub" title="µNorman on GitHub"><svg viewBox="0 0 16 16" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+<div class="md-export">
+  <button class="md-float" type="button" aria-expanded="false" aria-controls="md-menu" aria-label="Export the language reference as Markdown" title="Export the language reference as Markdown">.md</button>
+  <div class="md-menu" id="md-menu" hidden>
+    <p>The language reference as Markdown, to give an AI agent as context.</p>
+    <a href="munorman-reference.md" download="munorman-reference.md">Download munorman-reference.md</a>
+    <button class="md-copy" type="button">Copy to clipboard</button>
+  </div>
+</div>
 
 <script type="module">
   import { activateExamples, activateChrome } from './norman.js';
