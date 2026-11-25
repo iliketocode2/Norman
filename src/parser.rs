@@ -73,6 +73,13 @@ fn per_million(a: &str) -> Option<i64> {
     whole.parse::<i64>().ok()?.checked_mul(1000)?.checked_add(frac)
 }
 
+/// Every model in the authoring eval's baseline first wrote a helper that
+/// takes the site as an argument, so the message says what to do instead.
+const NOT_A_SITE: &str = "a site is a quoted symbol written in the ask or consult itself, such as 'summary; \
+     it can't be a variable or an expression, so a helper can't take a site as an argument. \
+     Factor out what the asks share (their context, what's done with the answer), \
+     and write each ask with its own site";
+
 fn perr<T>(sx: &Sx, msg: impl AsRef<str>) -> P<T> {
     Err(format!("{}: {}", sx.loc(), msg.as_ref()))
 }
@@ -710,7 +717,7 @@ impl<'a> Parser<'a> {
                 let site: Name = match args.get(3) {
                     Some(s) => match s.atom().map(classify) {
                         Some(Ok(Atom::Sym(site))) => site,
-                        _ => return perr(s, "the site of an ask is a quoted symbol"),
+                        _ => return perr(s, NOT_A_SITE),
                     },
                     None => Rc::from(sx.loc().to_string().as_str()),
                 };
@@ -746,7 +753,8 @@ impl<'a> Parser<'a> {
                         }
                         _ => match item.atom().map(classify) {
                             Some(Ok(Atom::Sym(s))) => site = Some(s),
-                            _ => return perr(item, "expected [propose e] or the consult's 'site"),
+                            Some(_) => return perr(item, NOT_A_SITE),
+                            None => return perr(item, "expected [propose e] or the consult's 'site"),
                         },
                     }
                 }

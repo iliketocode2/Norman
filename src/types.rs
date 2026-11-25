@@ -157,8 +157,8 @@ impl TypeEnv {
 
     /// DEFINEDATATYPE: constructor names fresh, field types well formed.
     pub fn add_datatype(&mut self, name: Name, params: Vec<Name>, cons: Vec<ConDef>) -> Result<(), String> {
-        if self.records.contains_key(&name) {
-            return Err(format!("{} is already a record", name));
+        if self.records.contains_key(&name) || self.datatypes.contains_key(&name) {
+            return Err(format!("the type {} is already defined (a name is defined once: design/12, Q-2)", name));
         }
         Self::check_params(&name, &params)?;
         let mut seen = HashSet::new();
@@ -166,17 +166,10 @@ impl TypeEnv {
             if !seen.insert(c.name.clone()) {
                 return Err(format!("constructor {} appears twice in {}", c.name, name));
             }
-            if let Some((owner, _)) = self.con_owner.get(&c.name)
-                && *owner != name
-            {
+            if let Some((owner, _)) = self.con_owner.get(&c.name) {
                 return Err(format!("constructor {} already belongs to {}", c.name, owner));
             }
             self.check_fields(&c.fields, &name, &params, &c.name)?;
-        }
-        if let Some(old) = self.datatypes.get(&name) {
-            for c in old.iter() {
-                self.con_owner.remove(&c.name);
-            }
         }
         for (i, c) in cons.iter().enumerate() {
             self.con_owner.insert(c.name.clone(), (name.clone(), i));
@@ -187,8 +180,8 @@ impl TypeEnv {
     }
 
     pub fn add_record(&mut self, name: Name, params: Vec<Name>, fields: Vec<(Name, Type)>) -> Result<(), String> {
-        if self.datatypes.contains_key(&name) {
-            return Err(format!("{} is already a datatype", name));
+        if self.records.contains_key(&name) || self.datatypes.contains_key(&name) {
+            return Err(format!("the type {} is already defined (a name is defined once: design/12, Q-2)", name));
         }
         Self::check_params(&name, &params)?;
         self.check_fields(&fields, &name, &params, &name)?;

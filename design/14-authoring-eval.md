@@ -258,6 +258,7 @@ output:
 | run-time error | `run-time error` otherwise |
 | wrong site | `no reply left for ask site '…'` naming a site the task didn't specify |
 | hidden tests fail | the program checks and runs, but `tests.nrm` reports failures |
+| grading error | the program checks, but `tests.nrm` doesn't check against it, so nothing was graded. This is a fault in the task or the language, not the model; the first draft of `13` step 3 caused it, by making script names global and defined-once. |
 | refused | the model refused (`stop_reason: refusal`) |
 | other | none of these. The summary lists each one's first line, so an unexpected kind of mistake, or a fault in the harness, is seen rather than counted. |
 
@@ -267,8 +268,9 @@ it **accepts a second `datatype` or `record` of an existing name**, which
 silently replaces the first. A solution that redefines an interface's
 `Triage` checks cleanly, and the hidden tests then fail with "unknown
 constructor Bug", far from the cause. The rule that a top-level name is
-defined once (`12`, Q-2) should cover type names too. Until it does, the
-harness looks for the redefinition itself. The fix belongs to `13` step 3.
+defined once (`12`, Q-2) should cover type names too. **Fixed in `13`
+step 3:** the checker now rejects it. The harness still looks for the
+redefinition itself, so runs against older builds classify the same way.
 
 The harness also retries `norman` when it exits with a code `norman` never
 uses (anything but 0, 1 or 2). On Windows, `wsl -e` occasionally fails to

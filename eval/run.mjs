@@ -233,9 +233,10 @@ function interfaceNames(iface) {
 
 // design/14 §3: one primary category per failing round, from the first error.
 function classify(task, s, program) {
-  // 0.4.0's checker rejects a second grant but silently lets a second
-  // datatype or record replace the first, so the hidden tests then fail on
-  // "unknown constructor". Look for it directly.
+  // Until `13` step 3, the checker let a second datatype or record silently
+  // replace the first, and the hidden tests then failed on "unknown
+  // constructor". It's rejected now, but looking for it directly keeps runs
+  // against older builds classified the same way.
   const redefined = interfaceNames(task.iface).find((n) =>
     new RegExp(`^\\((?:grant|datatype|record)\\s+\\(?${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s)]`, 'm').test(program ?? ''));
   if (redefined && !s.pass) return { category: 'redefinition', detail: redefined };
@@ -243,6 +244,11 @@ function classify(task, s, program) {
     if (s.pass) return { category: 'pass' };
     const site = s.gradeOut.match(/no reply left for (?:ask|call|consult) site '([^']+)'/);
     if (site && !task.sites.includes(site[1])) return { category: 'wrong site', detail: site[1] };
+    // The hidden tests didn't check against this solution (for example, a
+    // clash between their names and the solution's), so nothing was graded.
+    // That's a fault in the task or the language, not a wrong program.
+    const clash = s.gradeOut.split('\n').find((l) => /^type error: tests\.nrm:/.test(l));
+    if (clash) return { category: 'grading error', detail: clash.replace(/^type error: /, '').slice(0, 160) };
     return { category: 'hidden tests fail' };
   }
   const first = s.checkOut.split('\n').find((l) => l.trim() && !/^The program was not run/.test(l) && !/^solution\.nrm: /.test(l)) || '';
@@ -373,6 +379,7 @@ function summarize(meta, trials) {
   let md = `# Authoring eval: ${meta.who}, ${meta.condition}\n\n`;
   md += `Run ${meta.stamp}. Commit ${meta.commit}${meta.dirty ? ' (with uncommitted changes)' : ''}; ${meta.normanVersion}; reference sha256 ${meta.referenceHash.slice(0, 12)}. `;
   md += `${meta.trials} trials, up to ${meta.rounds} repair rounds, effort ${meta.effort}. Estimated spend $${meta.spent.toFixed(2)} of a $${meta.maxSpend} cap.\n\n`;
+  if (meta.stopped) md += `**Stopped early:** only ${done.length} trials finished, so tasks late in the order are missing or short. The error was: \`${String(meta.stopped).slice(0, 200)}\`\n\n`;
   const unfinished = trials.filter((t) => t.status !== 'done');
   if (unfinished.length) {
     md += `**${unfinished.length} of ${trials.length} trials didn't finish** (${[...new Set(unfinished.map((t) => t.status))].join(', ')}). `;
@@ -411,6 +418,8 @@ function summarize(meta, trials) {
   // so a new kind of mistake (or a harness fault) is seen, not counted.
   const others = count(failing.filter((r) => r.category === 'other').map((r) => r.detail));
   if (others.length) md += `\nUnrecognized first errors (category "other"):\n\n${others.map(([d, k]) => `- (${k}) \`${d}\``).join('\n')}\n`;
+  const grading = count(failing.filter((r) => r.category === 'grading error').map((r) => r.detail));
+  if (grading.length) md += `\n**Grading errors** (the hidden tests didn't check, so these rounds measure the task, not the model):\n\n${grading.map(([d, k]) => `- (${k}) \`${d}\``).join('\n')}\n`;
 
   const programs = allRounds.filter((r) => r.program);
   const withTests = programs.filter((r) => r.selfTests);
@@ -496,7 +505,9 @@ async function main() {
   if (spend.fatal) {
     meta.stopped = spend.fatal;
     fs.writeFileSync(path.join(outDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
-    console.error(`\nstopped: ${spend.fatal}\nNothing more was asked. What ran is in ${outDir}.`);
+    // Summarize what finished; the summary says the run stopped.
+    fs.writeFileSync(path.join(outDir, 'summary.md'), summarize(meta, trials.filter((t) => t.status !== 'api error')));
+    console.error(`\nstopped: ${spend.fatal}\nNothing more was asked. What ran is summarized in ${outDir}.`);
     process.exit(1);
   }
   fs.writeFileSync(path.join(outDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);

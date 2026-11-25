@@ -3,6 +3,11 @@
 One file per run worth keeping: the `summary.md` a run wrote, with a short
 hand-written reading on top (design/14 §4).
 
+**Latest:** [after `13` step 3's first fixes](2026-11-25-step3.md). Every
+baseline failure cause the fixes targeted is gone (0 of 457 trials), and the
+re-run found a checker bug, now fixed. The Haiku runs are partial: the
+account ran out of API credit.
+
 ## The baseline (2026-11-25)
 
 norman 0.4.0, the reference at sha256 `33481c07dc0e`, 20 tasks × 3 trials,

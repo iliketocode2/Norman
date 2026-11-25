@@ -29,7 +29,7 @@
 //! is one kernel, and every use of `k` must say so.
 
 use crate::ast::*;
-use crate::lexer::read_all;
+use crate::lexer::{Sx, read_all};
 use crate::parser::Parser;
 use crate::types::TypeEnv;
 use crate::value::Value;
@@ -852,6 +852,11 @@ pub struct Checker {
     globals: HashMap<Name, Global>,
     /// Where each global was defined, for the redefinition rule (Q-2).
     defined_in: HashMap<Name, String>,
+    /// Where each datatype and record was defined: the same rule for types.
+    types_defined_in: HashMap<Name, String>,
+    /// Every script defined so far, in any file: a test's `[script s]` must
+    /// name one of them.
+    scripts: HashMap<Name, String>,
     /// The operations each capability grant declares; none means an open
     /// interface, every operation answering Text (`10` §2.1).
     ops: HashMap<Name, Vec<(Name, Type)>>,
@@ -889,6 +894,8 @@ impl Checker {
             theta: TypeEnv::default(),
             globals,
             defined_in: HashMap::new(),
+            types_defined_in: HashMap::new(),
+            scripts: HashMap::new(),
             ops: HashMap::new(),
             pending: vec![],
             answers: vec![],
@@ -944,23 +951,31 @@ impl Checker {
         // later forms parse with the records they mention.
         let mut items: Vec<(Loc, Item)> = vec![];
         let mut tests: Vec<UnitTest> = vec![];
+        // Each `under`'s script, checked once the whole file has been read.
+        let mut wanted: Vec<(Loc, Name)> = vec![];
+        let mut own_scripts: HashMap<Name, Loc> = HashMap::new();
         for sx in &forms {
             let top = match Parser::new(&self.theta).top(sx) {
                 Ok(t) => t,
                 Err(e) => {
                     report.errors.push(format!("syntax error: {}", e));
+                    self.stand_in_for(sx, &mut report);
                     continue;
                 }
             };
             let loc = sx.loc().clone();
             match top {
                 Top::Def(Def::Datatype(t, ps, cons)) => {
-                    if let Err(e) = self.theta.add_datatype(t, ps, cons) {
+                    if self.type_is_new(&t, &loc, &mut report)
+                        && let Err(e) = self.theta.add_datatype(t, ps, cons)
+                    {
                         report.errors.push(format!("{}: {}", loc, e));
                     }
                 }
                 Top::Def(Def::Record(r, ps, fs)) => {
-                    if let Err(e) = self.theta.add_record(r, ps, fs) {
+                    if self.type_is_new(&r, &loc, &mut report)
+                        && let Err(e) = self.theta.add_record(r, ps, fs)
+                    {
                         report.errors.push(format!("{}: {}", loc, e));
                     }
                 }
@@ -992,9 +1007,39 @@ impl Checker {
                         self.ops.insert(x, (*ops).clone());
                     }
                 }
-                Top::Script(..) => {}
-                Top::Under(_, ts) => tests.extend(ts),
+                // Once per file. A file's tests run as soon as it's read, so a
+                // later file that reuses a script's name (as a task's hidden
+                // tests do, after `use`ing the solution) can't change what the
+                // earlier file's tests ran against. Within one file it would.
+                Top::Script(name, _) => match own_scripts.get(&name) {
+                    Some(prev) => report
+                        .errors
+                        .push(format!("{}: the script {} is already defined in this file, at {}", loc, name, prev)),
+                    None => {
+                        own_scripts.insert(name.clone(), loc.clone());
+                        self.scripts.insert(name, loc.to_string());
+                    }
+                },
+                Top::Under(cfg, ts) => {
+                    if let Some(s) = cfg.script {
+                        wanted.push((loc, s));
+                    }
+                    tests.extend(ts)
+                }
                 Top::Test(t) => tests.push(t),
+            }
+        }
+        // A file's tests run once the file is read, so a script defined
+        // anywhere in it, or in a file it uses, is in time.
+        for (loc, s) in wanted {
+            if !self.scripts.contains_key(&s) {
+                let mut known: Vec<&str> = self.scripts.keys().map(|k| &**k).collect();
+                known.sort();
+                let known = match known.as_slice() {
+                    [] => "no scripts are defined".to_string(),
+                    ks => format!("the scripts defined are {}", ks.join(", ")),
+                };
+                report.errors.push(format!("{}: there is no script named {}; {}", loc, s, known));
             }
         }
         self.check_items(file, items, &mut report);
@@ -1019,6 +1064,35 @@ impl Checker {
             report.verdicts.insert(t.loc.to_string(), verdict);
         }
         report
+    }
+
+    /// A datatype or record is defined once (Q-2), like any other name.
+    /// Without this, a second definition silently replaced the first.
+    fn type_is_new(&mut self, t: &Name, loc: &Loc, report: &mut Report) -> bool {
+        if let Some(prev) = self.types_defined_in.get(t) {
+            report.errors.push(format!(
+                "{}: the type {} is already defined, at {} (a name is defined once: design/12, Q-2)",
+                loc, t, prev
+            ));
+            return false;
+        }
+        self.types_defined_in.insert(t.clone(), loc.to_string());
+        true
+    }
+
+    /// A `define` or `val` that didn't parse still names something, and the
+    /// rest of the file uses it. Bind the name at the most general type,
+    /// ∀a. a, so each use doesn't add an "unbound name" to the syntax error
+    /// that is the real problem. The file still doesn't check, so nothing runs.
+    fn stand_in_for(&mut self, sx: &Sx, report: &mut Report) {
+        let Some([head, name, ..]) = sx.list() else { return };
+        if !matches!(head.atom(), Some("define" | "val")) {
+            return;
+        }
+        let Some(x) = name.atom() else { return };
+        let Ty::Var(v) = self.st.fresh() else { unreachable!("fresh makes a variable") };
+        let scheme = Scheme { tvs: vec![v], evs: vec![], preds: vec![], ty: Ty::Var(v) };
+        self.define_global(&Rc::from(x), Global::Scheme(scheme), &sx.loc().to_string(), report);
     }
 
     fn define_global(&mut self, x: &Name, g: Global, where_: &str, report: &mut Report) {
@@ -1303,13 +1377,32 @@ impl Checker {
 
     // ------------------------------------------------------------ predicates
 
+    /// The variables that `vs` stand for now: each one's free variables under
+    /// the current substitution.
+    fn through_subst(&mut self, vs: &BTreeSet<TV>) -> BTreeSet<TV> {
+        let mut out = BTreeSet::new();
+        for &v in vs {
+            let t = self.st.zonk(&Ty::Var(v));
+            self.st.ftv(&t, &mut out);
+        }
+        out
+    }
+
     /// Discharge the predicates added since `mark`: simplify to a fixed
     /// point, default the numeric ones on variables that `keep` doesn't
     /// mention and the environment doesn't hold, and report what can never
     /// hold. Predicates still on `keep`'s variables stay for the scheme.
     fn settle(&mut self, mark: usize, env_tvs: &BTreeSet<TV>, keep: &BTreeSet<TV>, live: &BTreeSet<EV>) -> R<()> {
+        let (mut keep, mut env_tvs) = (keep.clone(), env_tvs.clone());
         loop {
             self.simplify_from(mark)?;
+            // Simplifying can bind a kept variable to a new one: resolving
+            // `(. p fst)` makes p a `(Pair a b)` and the field's type `a`. The
+            // sets are followed through the substitution, or an `Ord` on `a`
+            // would look ambiguous and be defaulted to Num, though the type
+            // mentions it.
+            keep = self.through_subst(&keep);
+            env_tvs = self.through_subst(&env_tvs);
             // Default per binding group (design/12 §3).
             let mut defaulted = false;
             let pending: Vec<Pred> = self.st.preds[mark..].to_vec();
@@ -1353,7 +1446,7 @@ impl Checker {
                     return Err(format!("can't tell which record's field {} this is; several records have it", f));
                 }
             }
-            let held: BTreeSet<TV> = keep.union(env_tvs).copied().collect();
+            let held: BTreeSet<TV> = keep.union(&env_tvs).copied().collect();
             if self.st.pred_live(&p, &held, live) {
                 i += 1;
                 continue;

@@ -83,7 +83,7 @@ await test('the system prompt holds the reference, and examples only when asked'
 const cases = [
   ['syntax', '(define triage (model ticket)', 'syntax'],
   ['unbound name', '(define triage (model ticket) (map (lambda (x) x) (list ticket)))', 'unbound name', 'map'],
-  // 0.4.0's checker accepts this, so the harness has to catch it
+  // older checkers accepted this, so the harness catches it itself
   ['redefinition of a datatype', '(datatype Triage [Spam])\n(define triage (model ticket) Spam)', 'redefinition', 'Triage'],
   ['redefinition of a grant', `(grant claude (model))\n${reference}`, 'redefinition', 'claude'],
   ['redefinition of a basis name', `(define length (xs) 0)\n${reference}`, 'redefinition'],
@@ -154,6 +154,12 @@ await test('the summary has the tables design/14 §4 asks for', async () => {
   assert.match(md, /`map` \(1\)/);
 });
 
-fs.rmSync(out, { recursive: true, force: true });
+// On Windows a just-exited `wsl` can still hold the directory; leaving a temp
+// directory behind isn't a failure of the harness.
+try {
+  fs.rmSync(out, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+} catch (e) {
+  console.log(`(couldn't remove ${out}: ${e.code})`);
+}
 console.log(failures ? `\n${failures} failed` : '\nall passed');
 process.exit(failures ? 1 : 0);

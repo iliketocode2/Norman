@@ -122,7 +122,7 @@
       <dd>Evaluate once and bind the result. If it fails, nothing is bound and the failure is reported.</dd>
 
       <dt>(datatype <em>Type</em> [<em>Con</em> (<em>field</em> <em>ty</em>)…]…)</dt>
-      <dd>A sum type: a value is <em>one of</em> its constructors. Constructor names must be distinct, and they share one namespace across the program.</dd>
+      <dd>A sum type: a value is <em>one of</em> its constructors. Constructor names must be distinct, and they share one namespace across the program. A type, like any top-level name, is defined <strong>once</strong>: a second <code>datatype</code> or <code>record</code> of the same name is an error, including for the <a href="#basis-types">predefined types</a>.</dd>
 
       <dt>(record <em>Record</em> (<em>field</em> <em>ty</em>)…)</dt>
       <dd>A product type: a value has <em>all</em> of its fields.</dd>
@@ -214,6 +214,17 @@
       back. The site is a name for this place in the program; scripts and traces are keyed by it, and
       it defaults to the source location.
     </p>
+    <p>
+      A site is written <strong>literally</strong>, as a quoted symbol in the <code>ask</code>
+      itself. It can't be a variable or an expression, so a helper can't take a site as an
+      argument. When two asks share their shape, factor out what they share (the context, the
+      handling of the answer) and write each <code>ask</code>, with its own site, where it happens:
+    </p>
+    <pre><code>(define summary-ctx (doc)
+  (list (Message [role User] [content (string-append "Summarize: " doc)])))
+
+(par (ask model (Text 300) (summary-ctx left) 'left)
+     (ask model (Text 300) (summary-ctx right) 'right))</code></pre>
     <p>
       The answer is validated against <em>ty</em> before it is bound. If it doesn't fit, the ask
       produces <code>Invalid</code> rather than a value. Asking again is a separate, visible
@@ -537,7 +548,7 @@
     <p>Faults are injected the same way, which is what makes failure paths testable at all:</p>
     <table>
       <tbody>
-        <tr><td><code>(reply "…")</code></td><td>what the model says; pair with <code>(out n)</code> for output tokens</td></tr>
+        <tr><td><code>(reply "…")</code></td><td>what the model says, as JSON, validated against the ask's type: an answer of type <code>(Text n)</code> is a JSON string, <code>(reply "\"yes\"")</code>, and <code>(reply "yes")</code> is <code>Invalid</code>; pair with <code>(out n)</code> for output tokens</td></tr>
         <tr><td><code>(refusal "category")</code></td><td>the model declines</td></tr>
         <tr><td><code>(provider-error "503 …")</code></td><td>the provider fails</td></tr>
         <tr><td><code>(result "…")</code></td><td>a tool succeeds</td></tr>
@@ -551,6 +562,12 @@
 
     <h3 id="checks" data-short="Test forms">Test forms</h3>
     <pre class="syntax">(<span class="lit">under</span> ([<span class="lit">script</span> <span class="meta">Name</span>] [<span class="lit">cost</span> <span class="meta">$1.00</span>] [<span class="lit">time</span> <span class="meta">1min</span>]) {<span class="meta">unit-test</span>})</pre>
+    <p>
+      Each item is optional. A <code>[script Name]</code> must name a script defined in this file or
+      a file it uses, and a file defines each script name once; the checker enforces both before
+      anything runs. A file may reuse a script name from a file it uses: that file's tests have
+      already run, against its own script.
+    </p>
     <dl class="forms">
       <dt>(check-expect <em>e</em> <em>expected</em>)</dt>
       <dd>Both sides run in their own fresh world, so evaluating the expected value cannot consume the script. Two equal failures agree too, so <code>(check-expect (ask-v) (fail (Refused 'cyber)))</code> says exactly how it fails.</dd>

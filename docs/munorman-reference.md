@@ -60,7 +60,7 @@ xdef ::= (use file)
 
 - `(datatype Type [Con (field ty)…]…)`
 
-  A sum type: a value is *one of* its constructors. Constructor names must be distinct, and they share one namespace across the program.
+  A sum type: a value is *one of* its constructors. Constructor names must be distinct, and they share one namespace across the program. A type, like any top-level name, is defined **once**: a second `datatype` or `record` of the same name is an error, including for the [predefined types](https://norman-docs.vercel.app/docs#basis-types).
 
 - `(record Record (field ty)…)`
 
@@ -144,6 +144,16 @@ These are what the language adds. Everything a program can do to the outside wor
 ```
 
 Consult a model **once**, for an answer of type *ty*. The context is an ordinary list of `Message`s that you build and pass: nothing accumulates behind your back. The site is a name for this place in the program; scripts and traces are keyed by it, and it defaults to the source location.
+
+A site is written **literally**, as a quoted symbol in the `ask` itself. It can't be a variable or an expression, so a helper can't take a site as an argument. When two asks share their shape, factor out what they share (the context, the handling of the answer) and write each `ask`, with its own site, where it happens:
+
+```
+(define summary-ctx (doc)
+  (list (Message [role User] [content (string-append "Summarize: " doc)])))
+
+(par (ask model (Text 300) (summary-ctx left) 'left)
+     (ask model (Text 300) (summary-ctx right) 'right))
+```
 
 The answer is validated against *ty* before it is bound. If it doesn't fit, the ask produces `Invalid` rather than a value. Asking again is a separate, visible decision — see [`retry`](https://norman-docs.vercel.app/docs#basis-functions).
 
@@ -408,7 +418,7 @@ Faults are injected the same way, which is what makes failure paths testable at 
 
 |  |  |
 | --- | --- |
-| `(reply "…")` | what the model says; pair with `(out n)` for output tokens |
+| `(reply "…")` | what the model says, as JSON, validated against the ask's type: an answer of type `(Text n)` is a JSON string, `(reply "\"yes\"")`, and `(reply "yes")` is `Invalid`; pair with `(out n)` for output tokens |
 | `(refusal "category")` | the model declines |
 | `(provider-error "503 …")` | the provider fails |
 | `(result "…")` | a tool succeeds |
@@ -423,6 +433,8 @@ Faults are injected the same way, which is what makes failure paths testable at 
 ```
 (under ([script Name] [cost $1.00] [time 1min]) {unit-test})
 ```
+
+Each item is optional. A `[script Name]` must name a script defined in this file or a file it uses, and a file defines each script name once; the checker enforces both before anything runs. A file may reuse a script name from a file it uses: that file's tests have already run, against its own script.
 
 - `(check-expect e expected)`
 
