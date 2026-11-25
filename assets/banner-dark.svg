@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="380" viewBox="0 0 1280 380" role="img" aria-label="µNorman: a small language for AI agents">
+  <defs>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#2a2d37"/>
+    </pattern>
+    <linearGradient id="fade" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#121318" stop-opacity="1"/>
+      <stop offset="0.55" stop-color="#121318" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#121318" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="380" rx="18" fill="#121318"/>
+  <rect width="1280" height="380" rx="18" fill="url(#dots)"/>
+  <rect width="1280" height="380" rx="18" fill="url(#fade)"/>
+  <rect x="0.5" y="0.5" width="1279" height="379" rx="18" fill="none" stroke="#2a2d37"/>
+
+  <text x="72" y="166" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="104" font-weight="700" letter-spacing="-4" fill="#e6e7ec">µNorman</text>
+  <text x="76" y="238" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="32" font-weight="600" letter-spacing="-0.5" fill="#e6e7ec">A small language for AI agents</text>
+  <text x="76" y="282" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="19" fill="#a9adbd">Typed model calls, budgets in money and time,</text>
+  <text x="76" y="310" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="19" fill="#a9adbd">tools as capabilities, and concurrency.</text>
+
+  <rect x="704" y="52" width="520" height="276" rx="12" fill="#1a1c22" stroke="#2a2d37"/>
+  <path d="M704 96h520" stroke="#2a2d37"/>
+  <circle cx="728" cy="74" r="6" fill="#2a2d37"/>
+  <circle cx="748" cy="74" r="6" fill="#2a2d37"/>
+  <circle cx="768" cy="74" r="6" fill="#2a2d37"/>
+  <text x="1200" y="80" text-anchor="end" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#767b8d">verdict.nrm</text>
+  <text x="732" y="136" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" xml:space="preserve"><tspan fill="#767b8d">;; ask for a type, inside a budget</tspan></text>
+  <text x="732" y="164" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" xml:space="preserve"><tspan fill="#767b8d">(</tspan><tspan fill="#d79bf0">datatype</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#f0a28c">Verdict</tspan></text>
+  <text x="732" y="192" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" xml:space="preserve"><tspan fill="#e6e7ec">  </tspan><tspan fill="#767b8d">[</tspan><tspan fill="#f0a28c">Buy</tspan><tspan fill="#e6e7ec">  </tspan><tspan fill="#767b8d">(</tspan><tspan fill="#e6e7ec">reason</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#767b8d">(</tspan><tspan fill="#f0a28c">Text</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#e0a870">400</tspan><tspan fill="#767b8d">)</tspan><tspan fill="#767b8d">)</tspan><tspan fill="#767b8d">]</tspan></text>
+  <text x="732" y="220" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" xml:space="preserve"><tspan fill="#e6e7ec">  </tspan><tspan fill="#767b8d">[</tspan><tspan fill="#f0a28c">Sell</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#767b8d">(</tspan><tspan fill="#e6e7ec">reason</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#767b8d">(</tspan><tspan fill="#f0a28c">Text</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#e0a870">400</tspan><tspan fill="#767b8d">)</tspan><tspan fill="#767b8d">)</tspan><tspan fill="#767b8d">]</tspan><tspan fill="#767b8d">)</tspan></text>
+  <text x="732" y="248" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" xml:space="preserve"></text>
+  <text x="732" y="276" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" xml:space="preserve"><tspan fill="#767b8d">(</tspan><tspan fill="#d79bf0">under</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#767b8d">(</tspan><tspan fill="#767b8d">[</tspan><tspan fill="#e6e7ec">cost</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#e0a870">$0.05</tspan><tspan fill="#767b8d">]</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#767b8d">[</tspan><tspan fill="#e6e7ec">time</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#e0a870">30s</tspan><tspan fill="#767b8d">]</tspan><tspan fill="#767b8d">)</tspan></text>
+  <text x="732" y="304" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" xml:space="preserve"><tspan fill="#e6e7ec">  </tspan><tspan fill="#767b8d">(</tspan><tspan fill="#d79bf0">ask</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#e6e7ec">claude</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#f0a28c">Verdict</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#767b8d">(</tspan><tspan fill="#e6e7ec">ctx</tspan><tspan fill="#767b8d">)</tspan><tspan fill="#e6e7ec"> </tspan><tspan fill="#6fd0ae">'analyst</tspan><tspan fill="#767b8d">)</tspan><tspan fill="#767b8d">)</tspan></text>
+</svg>

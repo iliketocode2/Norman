@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo · µNorman</title>
+<meta name="description" content="Watch a µNorman (uNorman) agent solve problems with Claude and a real Python kernel. See the results, the full traces, and a budget that refuses to overspend.">
+<meta property="og:site_name" content="µNorman">
+<link rel="canonical" href="https://norman-docs.vercel.app/demo">
+<meta property="og:url" content="https://norman-docs.vercel.app/demo">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Demo · µNorman">
+<meta property="og:description" content="Watch a µNorman (uNorman) agent solve problems with Claude and a real Python kernel. See the results, the full traces, and a budget that refuses to overspend.">
+<meta name="twitter:card" content="summary">
+<meta name="application-name" content="µNorman">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="./">µNorman</a>
+    <nav>
+      <a href="./">About</a>
+      <a href="demo.html" aria-current="page">Demo</a>
+      <a href="docs.html">Docs</a>
+      <a href="playground.html">Playground</a>
+      <button class="search-open" type="button" aria-label="Search the docs" aria-keyshortcuts="/ Control+K Meta+K" title="Search the docs (/ or Ctrl+K)"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M7 12.2A5.2 5.2 0 1 0 7 1.8a5.2 5.2 0 0 0 0 10.4zM10.9 10.9l3.6 3.6"/></svg><span class="search-hint">Search</span><kbd>/</kbd></button>
+      <button class="theme" type="button" aria-label="Switch between light and dark">☾</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1 style="font-size:2.1rem">Demo</h1>
+  <p class="lede">
+    CP-Agent is a simple agent loop from Stefan Szeider&rsquo;s work on agentic constraint
+    programming. I wrote it in µNorman and ran it against <strong>Claude Sonnet&nbsp;5</strong> with
+    a <strong>Python process</strong>.
+  </p>
+
+  <div class="loop" aria-label="The CP-Agent loop">
+    <span>Ask the model</span><span class="arrow">→</span>
+    <span>Run its Python</span><span class="arrow">→</span>
+    <span>Show it the output</span><span class="arrow">↺</span>
+    <span class="end">Stop when it says Done</span>
+  </div>
+
+  <h2 id="results">Results</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Task</th><th>Budget</th><th>Spent</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#run-1">Sum of multiples</a></td><td>$0.50</td><td>$0.0027 in 4.7s</td><td><span class="badge good">233168</span></td></tr>
+      <tr><td><a href="#run-2">Chickens and cows</a></td><td>$0.50</td><td>$0.0041 in 4.9s</td><td><span class="badge good">23 chickens, 7 cows</span></td></tr>
+      <tr><td><a href="#run-3">Same task, tiny budget</a></td><td>$0.002</td><td>$0.00</td><td><span class="badge">OverBudget</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="traces">Traces</h2>
+  <p class="muted small">
+    µNorman logs every model call (<code>ask</code>) and tool call (<code>call</code>) with its
+    tokens, cost and timing.
+  </p>
+
+  <details class="run" id="run-1" open>
+    <summary>Sum of multiples <span class="muted small">· multiples of 3 or 5 below 1000</span></summary>
+    <pre class="syntax trace">┌─ sum of multiples of 3 or 5 below 1000
+│  ask   step     469 in    50 out   $0.001438    182ms → 2845ms   ok
+│  call  py/exec     0 in     0 out       $0.00   2845ms → 2916ms   ok
+│  ask   step     524 in    24 out   $0.001288   3037ms → 4695ms   ok
+│
+│  2 model calls, 1 kernel calls
+│  spent $0.002726 of the $0.50 budget in 4695ms
+└─ answer: <span class="lit">"233168"</span></pre>
+    <p>One piece of code, one run, then the answer. The second ask is bigger because it carries the code and its output.</p>
+  </details>
+
+  <details class="run" id="run-2">
+    <summary>Chickens and cows <span class="muted small">· 30 heads and 74 legs</span></summary>
+    <pre class="syntax trace">┌─ chickens and cows
+│  ask   step     489 in   130 out   $0.002278    150ms → 3336ms   ok
+│  call  py/exec     0 in     0 out       $0.00   3336ms → 3425ms   ok
+│  ask   step     598 in    65 out   $0.001846   3525ms → 4929ms   ok
+│
+│  2 model calls, 1 kernel calls
+│  spent $0.004124 of the $0.50 budget in 4929ms
+└─ answer: <span class="lit">"7 cows and 23 chickens (7*4+23*2=74 legs, 7+23=30 heads)."</span></pre>
+    <p>I asked it to check its work. It solved and checked in a single piece of code.</p>
+  </details>
+
+  <details class="run" id="run-3">
+    <summary>Same task, tiny budget <span class="muted small">· capped at $0.002</span></summary>
+    <pre class="syntax trace">┌─ the same task, capped at $0.002
+│
+│  0 model calls, 0 kernel calls
+│  spent $0.00 of the $0.50 budget in 188ms
+└─ failed: <span class="lit">OverBudget</span>
+
+   the cap held: spent $0.00 of $0.002</pre>
+    <p class="muted small">The &ldquo;$0.50 budget&rdquo; label in the summary line was a bug in my test report. The real cap was $0.002.</p>
+    <p>
+      <strong>The model was never called.</strong> Each step reserves its worst case first, which is
+      about $0.04 here. That doesn&rsquo;t fit in $0.002, so the run stops before sending anything.
+      The same check runs before every <code>ask</code> and <code>call</code>, so it can&rsquo;t be
+      skipped.
+    </p>
+  </details>
+
+  <h2 id="same-program">Try it in your browser</h2>
+  <p>
+    This is the program behind the traces. Here a script stands in for the model and Python, so it
+    runs free and offline. The last test shows a run that stops partway when the money runs low.
+  </p>
+  <div class="example">
+    <div class="head"><span class="title">cp-agent.nrm</span>
+      <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant claude (model))                       ; defaults: Claude Sonnet 5
+(grant py     (kernel [exec (Text 4000)]))   ; a real Python process in live mode
+
+(datatype Step
+  [Exec (code (Text 2000))]      ; "run this and show me the output"
+  [Done (answer (Text 500))])    ; "this is my final answer"
+
+(val cp-prompt
+  "You solve problems by writing Python. Reply with Exec to run code, and you
+will be shown its output. Reply with Done when you have the answer. Write
+small steps, and print what you want to see.")
+
+;; If the Python code fails, the error goes back to the model so it can fix
+;; its code. Running out of money or time doesn't go back to the model: it
+;; stops the program.
+(define observe (k code)
+  (catch (call k exec code) e
+    (case e [(ToolError m) m] [_ (fail e)])))
+
+(define react (model k ctx fuel)
+  (if (<= fuel 0)
+      (fail 'out-of-fuel)
+      (case (ask model Step ctx 'step)
+        [(Exec code)
+           (react model k
+                  (append ctx (list (Message [role Assistant] [content (show (Exec code))])
+                                    (Message [role Tool]      [content (observe k code)])))
+                  (- fuel 1))]
+        [(Done answer) answer])))
+
+(define cp-agent (model k task)
+  (budget ([cost $0.50] [time 5min])
+    (react model k
+           (list (Message [role System] [content cp-prompt])
+                 (Message [role User]   [content task]))
+           8)))
+
+;; Scripted, the model and kernel are canned, so this is exact and free.
+(script solving
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"print(sum(range(101)))\"}") (out 20) (latency 3s)
+           (reply "{\"tag\":\"Done\",\"answer\":\"5050\"}")                 (out 12) (latency 2s)]
+  [py/exec (result "5050") (latency 1s)])
+
+(under ([script solving] [cost $1.00] [time 5min])
+  (check-expect (cp-agent claude py "What is the sum of 0 to 100?") "5050")
+  (check-within (cp-agent claude py "What is the sum of 0 to 100?") ([time 6s])))
+
+;; The first piece of code fails, the model sees the error, and the second works.
+(script recovering
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"print(undefined_name)\"}") (out 20) (latency 2s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"print(42)\"}")             (out 18) (latency 2s)
+           (reply "{\"tag\":\"Done\",\"answer\":\"42\"}")                  (out 12) (latency 2s)]
+  [py/exec (error "NameError: name 'undefined_name' is not defined") (latency 1s)
+           (result "42") (latency 1s)])
+
+(under ([script recovering] [cost $1.00] [time 5min])
+  (check-expect (cp-agent claude py "Print 42.") "42"))
+
+;; Stopping partway: each model call sets aside about $0.04 for its worst case,
+;; so with a $0.041 limit two rounds run and the third call is refused unsent.
+(script grinding
+  [step    (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)
+           (reply "{\"tag\":\"Exec\",\"code\":\"x = 1\"}") (out 15) (latency 1s)]
+  [py/exec (result "") (latency 0s) (result "") (latency 0s) (result "") (latency 0s)])
+
+(define capped (cap)
+  (budget ([cost cap])
+    (react claude py
+           (list (Message [role System] [content cp-prompt])
+                 (Message [role User]   [content "Keep going."]))
+           8)))
+
+(under ([script grinding] [cost $1.00] [time 5min])
+  (check-fail   (capped $0.041) OverBudget)
+  (check-within (capped $0.041) ([cost $0.001] [time 2s])))</code></pre>
+    <div class="result"></div>
+  </div>
+
+  <h2 id="yourself">Run it yourself</h2>
+  <p>Scripted tests, free with no API key:</p>
+  <pre class="syntax">cargo run -- examples/cp-agent.nrm</pre>
+  <p>Live runs need <code>ANTHROPIC_API_KEY</code> and Python on your PATH. Each costs a few cents:</p>
+  <pre class="syntax">cargo test --test live_cp_agent -- --ignored --nocapture
+cargo run -- --live --python python3 --trace examples/cp-agent.nrm</pre>
+  <div class="note">
+    <span class="label">No sandbox</span>
+    <p>
+      The kernel runs whatever code the model writes, on your machine. Use a container or VM.
+      <a href="https://github.com/iliketocode2/Norman/blob/main/LIVE-SETUP.md">LIVE-SETUP.md</a>
+      covers API keys and spending caps.
+    </p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>µNorman — dual-licensed MIT or Apache-2.0.</span>
+    <span>Selected for the <a href="https://hub.xerj.org/contributors/iliketocode2">XERJ Corpus Hub</a>, from <a href="https://github.com/xerj-org/xerj">XERJ</a>, a search engine for AI agents.</span>
+    <span>Traces captured 2026-10-08 against claude-sonnet-5.</span>
+  </div>
+</footer>
+
+<a class="gh-float" href="https://github.com/iliketocode2/Norman" aria-label="µNorman on GitHub" title="µNorman on GitHub"><svg viewBox="0 0 16 16" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+<div class="md-export">
+  <button class="md-float" type="button" aria-expanded="false" aria-controls="md-menu" aria-label="Export the language reference as Markdown" title="Export the language reference as Markdown">.md</button>
+  <div class="md-menu" id="md-menu" hidden>
+    <p>The language reference as Markdown, to give an AI agent as context.</p>
+    <a href="munorman-reference.md" download="munorman-reference.md">Download munorman-reference.md</a>
+    <button class="md-copy" type="button">Copy to clipboard</button>
+  </div>
+</div>
+
+<script type="module">
+  import { activateExamples, activateChrome } from './norman.js';
+  activateChrome();
+  activateExamples();
+</script>
+<script src="../../versions.js" data-version="0.4.0"></script>
+</body>
+</html>

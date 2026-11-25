@@ -150,6 +150,33 @@ function checkStale() {
 
 checkStale();
 
+/* The version switcher (docs/versions.js) lists the release in Cargo.toml
+ * first, and every older release it lists has its site under docs/v/. Both
+ * are written by scripts/docs-versions.mjs; run it after a release. */
+function checkVersions() {
+  const root = path.join(here, '..');
+  const problems = [];
+  const cargo = /^version\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(root, 'Cargo.toml'), 'utf8'))[1];
+  const js = fs.readFileSync(path.join(here, 'versions.js'), 'utf8');
+  const listed = [...js.matchAll(/\{"version":"([^"]+)"/g)].map((m) => m[1]);
+  if (listed[0] !== cargo) {
+    problems.push(`docs/versions.js lists ${listed[0]} first, but Cargo.toml says ${cargo}: run node scripts/docs-versions.mjs`);
+  }
+  const badge = /class="version"[^>]*>v([^<]+)</.exec(fs.readFileSync(path.join(here, 'index.html'), 'utf8'))?.[1];
+  if (badge !== cargo) problems.push(`the badge on docs/index.html says v${badge}, but Cargo.toml says ${cargo}`);
+  const built = fs.existsSync(path.join(here, 'v')) ? fs.readdirSync(path.join(here, 'v')).sort() : [];
+  const older = listed.slice(1).sort();
+  if (built.join() !== older.join()) {
+    problems.push(`docs/v/ has [${built.join(', ')}] but docs/versions.js lists [${older.join(', ')}]: run node scripts/docs-versions.mjs`);
+  }
+  for (const v of older) {
+    if (!fs.existsSync(path.join(here, 'v', v, 'index.html'))) problems.push(`docs/v/${v}/index.html is missing`);
+  }
+  report(`version switcher: ${cargo} and ${older.length} older releases`, problems);
+}
+
+checkVersions();
+
 // Every starter program in the playground.
 const { EXAMPLES } = await import(new URL('./examples.js', import.meta.url));
 for (const [name, source] of Object.entries(EXAMPLES)) {

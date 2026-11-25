@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="430" viewBox="0 0 1280 430" role="img" aria-label="How a µNorman program runs: the checker infers types and effects; a program that doesn't check never starts. The interpreter reserves the worst case before every ask, and answers come from a script, Claude, Python or a person.">
+  <rect width="1280" height="430" rx="18" fill="#fcfcfd"/>
+  <rect x="0.5" y="0.5" width="1279" height="429" rx="18" fill="none" stroke="#e2e3ea"/>
+  
+  <rect x="32" y="122" width="190" height="100" rx="12" fill="#f6f7f9" stroke="#e2e3ea"/>
+  <text x="52" y="158" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="21" font-weight="650" fill="#1c1d22">program.nrm</text>
+  <text x="52" y="184" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#5a5d6b">no type annotations</text>
+  <path d="M222 172 L272 172" stroke="#85899a" stroke-width="1.8" fill="none"/>
+  <path d="M272 172 L263.8959760788259,168.08531019299892 L263.8959760788259,175.91468980700108 Z" fill="#85899a"/>
+  
+  <rect x="276" y="102" width="300" height="140" rx="12" fill="#eeeefc" stroke="#4a4ad8"/>
+  <text x="296" y="138" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="21" font-weight="650" fill="#1c1d22">Checker</text>
+  <text x="296" y="164" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#5a5d6b">infers types and effects;</text>
+  <text x="296" y="186" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#5a5d6b">checks which tools concurrent</text>
+  <text x="296" y="208" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#5a5d6b">steps may share</text>
+  <path d="M576 172 L626 172" stroke="#85899a" stroke-width="1.8" fill="none"/>
+  <path d="M626 172 L617.8959760788259,168.08531019299892 L617.8959760788259,175.91468980700108 Z" fill="#85899a"/>
+  
+  <rect x="630" y="102" width="300" height="140" rx="12" fill="#e7f6ed" stroke="#1a7f4b"/>
+  <text x="650" y="138" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="21" font-weight="650" fill="#1c1d22">Interpreter</text>
+  <text x="650" y="164" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#5a5d6b">reserves the worst case before</text>
+  <text x="650" y="186" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#5a5d6b">every ask; enforces budgets</text>
+  <text x="650" y="208" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#5a5d6b">and deadlines as it runs</text>
+  <path d="M930 172 L996 55" stroke="#85899a" stroke-width="1.8" fill="none"/>
+  <path d="M996 55 L988.6087108183335,60.135060294970245 L995.4279318779148,63.981800379862264 Z" fill="#85899a"/>
+  <rect x="1000" y="23" width="248" height="64" rx="10" fill="#f6f7f9" stroke="#e2e3ea"/>
+  <text x="1018" y="49" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1c1d22">a script</text>
+  <text x="1018" y="72" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a5d6b">free and repeatable: for tests</text>
+  <path d="M930 172 L996 133" stroke="#85899a" stroke-width="1.8" fill="none"/>
+  <path d="M996 133 L987.031513368273,133.75249421029935 L991.0145482736826,140.49301481945415 Z" fill="#85899a"/>
+  <rect x="1000" y="101" width="248" height="64" rx="10" fill="#f6f7f9" stroke="#e2e3ea"/>
+  <text x="1018" y="127" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1c1d22">Claude</text>
+  <text x="1018" y="150" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a5d6b"><tspan font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" fill="#4a4ad8">ask</tspan>, with <tspan font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" fill="#4a4ad8">--live</tspan></text>
+  <path d="M930 172 L996 211" stroke="#85899a" stroke-width="1.8" fill="none"/>
+  <path d="M996 211 L991.0145482736826,203.50698518054585 L987.031513368273,210.24750578970065 Z" fill="#85899a"/>
+  <rect x="1000" y="179" width="248" height="64" rx="10" fill="#f6f7f9" stroke="#e2e3ea"/>
+  <text x="1018" y="205" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1c1d22">Python</text>
+  <text x="1018" y="228" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a5d6b"><tspan font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" fill="#4a4ad8">call</tspan>, with <tspan font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" fill="#4a4ad8">--python</tspan></text>
+  <path d="M930 172 L996 289" stroke="#85899a" stroke-width="1.8" fill="none"/>
+  <path d="M996 289 L995.4279318779148,280.01819962013775 L988.6087108183335,283.86493970502977 Z" fill="#85899a"/>
+  <rect x="1000" y="257" width="248" height="64" rx="10" fill="#f6f7f9" stroke="#e2e3ea"/>
+  <text x="1018" y="283" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1c1d22">a person</text>
+  <text x="1018" y="306" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a5d6b"><tspan font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" fill="#4a4ad8">consult</tspan>, with <tspan font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" fill="#4a4ad8">--human</tspan></text>
+  <path d="M426 242 L426 320" stroke="#b4252c" stroke-width="1.8" fill="none"/>
+  <path d="M426 320 L429.9146898070011,311.8959760788259 L422.0853101929989,311.8959760788259 Z" fill="#b4252c"/>
+  <rect x="276" y="324" width="300" height="72" rx="12" fill="#fcecec" stroke="#b4252c"/>
+  <text x="296" y="355" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#b4252c">Doesn't check? Never starts.</text>
+  <text x="296" y="380" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a5d6b">No model is called and nothing is spent.</text>
+  <path d="M780 242 L780 320" stroke="#b4252c" stroke-width="1.8" fill="none"/>
+  <path d="M780 320 L783.9146898070011,311.8959760788259 L776.0853101929989,311.8959760788259 Z" fill="#b4252c"/>
+  <rect x="630" y="324" width="300" height="72" rx="12" fill="#fcecec" stroke="#b4252c"/>
+  <text x="650" y="355" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#b4252c">Over budget? Never asked.</text>
+  <text x="650" y="380" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a5d6b">The ask fails with OverBudget, for $0.</text>
+</svg>
