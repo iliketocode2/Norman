@@ -5,6 +5,13 @@
 > that framing needs into phases. Each phase that changes the language gets
 > its own design document first, as every earlier change did. Decisions marked
 > **(open)** in §0 need the user's review before that phase starts.
+>
+> **Revised 2026-11-25** after a second review, which found the phases right
+> but the order wrong. The plan built for months before testing its central
+> bet: that a model, given the reference, can write these programs. The
+> phases keep their numbers; [§"Order"](#order) now runs them in a different
+> sequence, starting with a measurement ([`14`](14-authoring-eval.md)).
+> Amendments are marked **(rev.)** where they occur.
 
 ## The use case
 
@@ -142,6 +149,22 @@ norman run FILE.nrm --input -              ; JSON on stdin
 - Every diagnostic (parse, type, policy, run-time) has a JSON form under
   `--format json`: file, line, column, message, and for type errors the two
   types. An agent repairs its own program from these.
+- **(rev.) Precise before structured.** JSON around a vague location is still
+  vague, so this comes first, and it's step 3 of the order, ahead of the
+  rest of Phase 1. In 0.4.0:
+  - a type error is reported at the start of the enclosing definition (`1:1`)
+    rather than at the subexpression, so a span must reach the offending
+    expression;
+  - one mistake reports again at every use, so knock-on errors from a
+    definition that already failed are suppressed;
+  - a syntax error is labelled `type error: syntax error`, so the two get
+    their own labels;
+  - messages cite design documents (`design/12, T2`), which mean nothing to
+    an agent, so the citations move to `--explain`;
+  - an `ask` whose site has no script entry says `script exhausted`, so it
+    should say the site has no entry and list the sites that do.
+
+  Each fix is measured by the repair rounds `14` reports.
 
 ### 1.3 Stable site names
 
@@ -153,9 +176,18 @@ no `ask`, `call` or `consult` has. (This is a change to the `ask` sugar in
 `04` §"Syntactic sugar", so it needs a law check: sites appear in traces,
 and `'exact` equivalence compares traces.)
 
+### 1.4 Getting `norman` onto a machine (rev.)
+
+An agent can't use a binary it can't install. Add a release workflow that
+builds `norman` for Linux (x86-64, arm64), macOS (arm64) and Windows
+(x86-64) on every tag and attaches the binaries to the GitHub release,
+alongside `cargo install --git`. `norman --version` reports the version and
+commit. Publishing to crates.io waits until the CLI's interface (`run`, the
+result format, the exit codes) is one we're willing to keep.
+
 **Done when:** `examples/cp-agent.nrm` runs live from `norman run` with the
 task as JSON input and returns the result above; every diagnostic has a JSON
-form.
+form; a tagged release has downloadable binaries.
 
 ---
 
@@ -223,6 +255,18 @@ exactly as `typed-tools` grants do today, and each is stateless or owned as
 
 `command` matters most for coding agents: "run the tests" is a capability,
 "run anything" is not.
+
+**(rev.) But an allowlist limits *which* command runs, not *what it does*.**
+`cargo test` compiles and runs whatever the repository contains, including
+`build.rs`; `npm test`, `make` and `pytest` are the same. A program allowed
+only `[cargo-test Text]` can still have the model write code that the test
+run then executes. So A3 isn't only about Python. **`command` needs the same
+operating-system sandbox as `python`**, or the policy must say plainly that
+a command host confines the agent's choice of action and nothing more. Until
+a sandbox exists, the policy file marks such hosts `unconfined = true`, and
+`norman run` prints that on every live start, so nobody reads the policy as
+containment it isn't. `filesystem` and `http` are confined by the host
+itself and don't need this, which is why they come first.
 
 ### 2.3 Approval gates
 
@@ -306,6 +350,11 @@ exactly the same point. That one observation gives three features.
    Spending already recorded counts against the budget on resume, so
    resuming can't reset a limit.
 
+**(rev.) Split in two.** Items 1 and 2 (journal, and script from journal)
+are **4a**: straightforward, and they give regression tests and eval data
+early, so they're step 7 of the order. Item 3 (resume) is **4b**, and waits:
+its concurrency is the hard part, and nothing else depends on it.
+
 Resume is sound only if the program hasn't changed. The journal records a
 hash of the program and of the policy, and `--resume` refuses on mismatch.
 Concurrency is the hard part: the journal must record the order completions
@@ -335,7 +384,11 @@ What changes is how much of it the author has to work out alone.
    spends. The largest parts are the default thinking allowance and unbounded
    text. Make `think` default to 0 unless the grant asks for it, and have the
    checker **warn** on an unbounded `Text` in an asked type, with the
-   reservation it causes.
+   reservation it causes. **(rev.) This item moves into Phase 2.** An agent
+   that writes `$2` and is stopped by `OverBudget` after spending a few
+   cents learns to write huge budgets, and then the operator's ceiling is
+   the only limit that means anything. Narrowing the slack is cheap, and it
+   has to land before agents start writing budgets for real.
 4. **Report both numbers.** The result (§1.2) and the journal show reserved
    and spent per site, so an agent learns what its budgets should be from its
    own runs.
@@ -370,6 +423,12 @@ parser and every proof depend on them.
    calling one tool, and the policy belongs to the person who configured the
    server, not to the agent. This is the most natural deployment for the use
    case, and it's thin once Phase 1 and 2 exist.
+
+   **(rev.) Ship half of it early.** A server exposing only `check` and
+   *scripted* `run` needs nothing from Phase 2 and can't spend money or touch
+   anything, so it's step 6 of the order, right after Phase 1. It lets us
+   use µNorman from Claude Code months before live runs are safe to offer.
+   `--live` over MCP waits for the policy.
 2. **MCP tools as hosts.** An MCP server the operator lists in the policy
    becomes a stateless host whose operations are its tools, typed from their
    input and output schemas.
@@ -380,21 +439,62 @@ parser and every proof depend on them.
 
 ---
 
-## Order and dependencies
+## Order
+
+> **(rev.)** The first version of this section ran the phases in number
+> order. That built Phases 1 and 2 on a guess about what model authors need.
+> The order below measures first, fixes what the authors trip on, gets a
+> usable binary and a safe MCP server out early, and only then builds the
+> policy and the live hosts.
+
+The minimum useful version for an agent limiting itself is still **Phases
+0–2**: a program it can run with input, whose limits the operator caps and
+the interpreter enforces, over tools narrower than "arbitrary Python". That
+is reached at step 8. Steps 2–7 make sure that, when it's reached, agents can
+actually write the programs.
+
+Two rules hold for every step:
+
+- **A step that changes the language gets a design note first,** as every
+  earlier change did. A step that changes only messages, the prelude, the CLI
+  or tooling doesn't need one.
+- **Once step 2 has a baseline, every step that touches the language, the
+  prelude, the messages or the reference re-runs the eval**
+  ([`14`](14-authoring-eval.md) §5), and its pull request quotes the numbers
+  before and after.
+
+| Step | Work | Needs | Decision needed first | Done when |
+|---|---|---|---|---|
+| **1** | CI runs `cargo test` when only `tests/` or `examples/` change | — | — | **Done** (2026-11-25): the workflow's `paths` filter now includes them |
+| **2** | **The authoring eval** ([`14`](14-authoring-eval.md)): Stage 0, the corpus, checked in `cargo test`; then Stage 1, the harness and a baseline | 1 | `14` E6: which models | twenty tasks pass their reference solutions in CI; baseline summaries for both models are committed; the five most common failure causes are written up |
+| **3** | **Diagnostics:** precise spans, no knock-on errors, honest labels, no document citations (§1.2 rev.), then `--format json` (§1.2). Stable site names (§1.3) join this step if `14` §5's gate says so. | 2's baseline | §1.3's law check, if it's pulled in | every type error points at its subexpression; the eval reads JSON diagnostics; mean repair rounds fall from the baseline |
+| **4** | **The prelude, in the order the eval asks for:** §3.1's list functions and association lists, §3.2's string primitives and `string->num`. Nested patterns (Phase 6) join if the gate says so. | 2 (3 can run alongside) | — | each function has `06`-style laws and tests; tier A pass@R rises from the baseline; `14`'s top unbound names are all bound |
+| **5** | **Phase 1:** `norman run`, `main`, JSON in and out, exit codes (§1.1–1.2), and release binaries (§1.4) | 3 | the result format in §1.2 is reviewed, since step 6 and every agent will depend on it | Phase 1's "done when"; the eval gains tasks that define `main` |
+| **6** | **An MCP server for `check` and scripted `run`** (§7.1 rev.). No live runs. | 5 | — | Claude Code, given the server and the reference, writes, checks and runs a scripted µNorman program in one session |
+| **7** | **Phase 4a:** the journal, and `script-from` (§4 rev.) | 5's result format | — | a live `cp-agent` run's journal becomes a script that the same program passes, offline |
+| **8** | **Phase 2:** the operator's policy (§2.1); `filesystem` and `http` hosts (§2.2); narrowing the reservation slack (§5.3 rev.); `command` and `python` only under a sandbox, or marked unconfined (§2.2 rev.); a design note for approval gates (§2.3) | 5; 7 helps its tests | **A3:** which sandbox. **§2.3:** static check or run-time token. | Phase 2's "done when"; `cp-agent`'s reservation-to-spend ratio is reported, and far below 80× |
+| **9** | **By evidence:** live runs over MCP (§7.1); Phase 5 (`OverBudget` that says why, `estimate`, `cost-of`); `par-map` (§3.3); recursive askable types (§3.4); resume (Phase 4b); the rest of Phase 6; §7.2–7.4 | 8 | each item's own (open) questions | each is chosen next because the eval, or someone using step 6's server, showed it was what stopped them |
 
 ```
-Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 7.1 (MCP server)
-                │
-                ├──► Phase 3 (independent of 2; can run alongside)
-                ├──► Phase 4 (needs 1's journal format)
-                └──► Phase 5 (needs 1's result format; 5.2 needs 3's cost-of)
-Phase 6 can be done any time; nested patterns are the most useful item.
+1 ──► 2 ──┬──► 3 ──► 5 ──┬──► 6
+          └──► 4         ├──► 7 ──┐
+                         └──► 8 ◄─┘
+                              │
+                              ▼
+                              9
 ```
 
-The minimum useful version for an agent limiting itself is **Phases 0–2**:
-a program it can run with input, whose limits the operator caps and the
-interpreter enforces, over tools narrower than "arbitrary Python". Phases 3–5
-make it pleasant; 7 makes it easy to adopt.
+Step 4 can run alongside 3, and its gate can pull Phase 6's nested patterns
+forward. Step 7 isn't required for 8, but its journal makes 8's live tests
+cheap to turn into scripted ones.
+
+**What could change this order.** The eval's baseline (step 2) can move
+steps 3 and 4 around and pull Phase 6 forward (`14` §5). If tier A and B
+pass rates are low even after steps 3 and 4, the language's surface, not its
+runtime, is the problem, and Phase 6 comes before step 8. If `14`'s Stage 3
+is run and shows that a JSON task spec over the same runtime gets most of
+the value, the language should be smaller than this plan assumes, and that
+outcome gets its own document.
 
 ## What we're deliberately not doing
 
