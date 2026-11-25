@@ -18,6 +18,7 @@ pub mod anthropic;
 pub mod ast;
 pub mod check;
 pub mod defaults;
+pub mod diag;
 pub mod driver;
 pub mod host;
 pub mod lexer;

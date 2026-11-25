@@ -23,8 +23,10 @@ No API key is needed for either command.
 **Status: research prototype.** Every program is type-checked before it
 runs: types and effects are inferred (no annotations), and a program that
 doesn't check never starts, so a type mistake can't spend money.
-`--no-check` runs a program without the checker. Nothing has been
-benchmarked against a hand-written agent.
+`--no-check` runs a program without the checker. `--format json` writes
+each diagnostic as a JSON object (file, line, column, message, and for a
+type mismatch the two types), for tools that repair programs from them.
+Nothing has been benchmarked against a hand-written agent.
 
 ### Running against a real model and real Python
 

@@ -246,6 +246,39 @@ impl ScriptState {
         *i += 1;
         Some(e)
     }
+
+    /// Why `next` had nothing for `site`, which is a `kind` site ("ask",
+    /// "call", "consult") answered by `noun`s. A site with no entry at all
+    /// is usually a misspelled site, so the script's sites are listed.
+    pub fn missing(&self, kind: &str, site: &str, noun: &str) -> String {
+        let Some(script) = &self.script else {
+            return format!(
+                "no script is in effect, so nothing answers {} site '{}' (run the test under [script Name])",
+                kind, site
+            );
+        };
+        match script.sites.get(site) {
+            Some(entries) => format!(
+                "script exhausted: {} site '{}' had {} {}{}, and all of them have been used",
+                kind,
+                site,
+                entries.len(),
+                noun,
+                if entries.len() == 1 { "" } else { "s" }
+            ),
+            None => {
+                let mut sites: Vec<&str> = script.sites.keys().map(|s| s.as_str()).collect();
+                sites.sort();
+                let known = match sites.as_slice() {
+                    [] => "it has no sites".to_string(),
+                    ss => {
+                        format!("its sites are {}", ss.iter().map(|s| format!("'{}", s)).collect::<Vec<_>>().join(", "))
+                    }
+                };
+                format!("the script has no entry for {} site '{}'; {}", kind, site, known)
+            }
+        }
+    }
 }
 
 /// The scripted oracle: replies come from a script, and time is virtual.
@@ -354,10 +387,7 @@ impl Oracle for ScriptedOracle {
     }
 
     fn issue_ask(&mut self, rid: u64, req: AskReq, now: i64) -> Result<(), String> {
-        let entry = self
-            .state
-            .next(&req.site)
-            .ok_or_else(|| format!("script exhausted: no reply left for ask site '{}'", req.site))?;
+        let entry = self.state.next(&req.site).ok_or_else(|| self.state.missing("ask", &req.site, "reply"))?;
         let usage = self.cache.usage(&req, now);
         let out = |n: u64| Usage { output: (n as i64).min(req.max_tokens), ..usage };
         let completion = match &entry {
@@ -375,10 +405,7 @@ impl Oracle for ScriptedOracle {
     }
 
     fn issue_call(&mut self, rid: u64, site: &str, _args: &[Value], now: i64) -> Result<(), String> {
-        let entry = self
-            .state
-            .next(site)
-            .ok_or_else(|| format!("script exhausted: no result left for call site '{}'", site))?;
+        let entry = self.state.next(site).ok_or_else(|| self.state.missing("call", site, "result"))?;
         let completion = match &entry {
             Entry::Result { text, .. } => Completion::ToolResult { text: text.clone() },
             Entry::Error { msg, .. } => Completion::ToolError { msg: msg.clone() },
@@ -392,10 +419,7 @@ impl Oracle for ScriptedOracle {
     /// are all mistakes in the test, so all are checked run-time errors.
     fn issue_consult(&mut self, rid: u64, req: ConsultReq, now: i64) -> Result<(), String> {
         let site = &req.site;
-        let entry = self
-            .state
-            .next(site)
-            .ok_or_else(|| format!("script exhausted: no answer left for consult site '{}'", site))?;
+        let entry = self.state.next(site).ok_or_else(|| self.state.missing("consult", site, "answer"))?;
         let completion = match &entry {
             Entry::Answer { json, .. } => Completion::HumanAnswer { json: json.clone() },
             Entry::Approve { .. } => match &req.proposal {

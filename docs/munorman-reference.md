@@ -532,6 +532,8 @@ It **warns**, without rejecting, about a `case` that may not match, a workflow s
 
 Some things stay run-time errors by design: division by zero and overflow, a `substring` out of range, a size bound exceeded, an exhausted script, and the step limit. `norman --no-check` runs a program without the checker.
 
+Each diagnostic names the file, line and column of the expression at fault, and a mistake is reported once, not again at every use of the definition it broke. `norman --format json` writes each diagnostic as one JSON object, with `kind`, `file`, `line`, `column` and `message`, and for a type mismatch `expected` and `found`, for a program (or an agent) that repairs code from them.
+
 ## Reserved words
 
 `val` `define` `datatype` `record` `use` `grant` `script` `under` `check-expect` `check-assert` `check-error` `check-fail` `check-within` `check-equiv` `check-type-error` `if` `let*` `lambda` `case` `ask` `call` `consult` `fail` `catch` `budget` `workflow` `begin` `par` `and` `or` `_`

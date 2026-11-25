@@ -661,6 +661,14 @@
       <code>substring</code> out of range, a size bound exceeded, an exhausted script, and the step
       limit. <code>norman --no-check</code> runs a program without the checker.
     </p>
+    <p>
+      Each diagnostic names the file, line and column of the expression at fault, and a mistake
+      is reported once, not again at every use of the definition it broke.
+      <code>norman --format json</code> writes each diagnostic as one JSON object, with
+      <code>kind</code>, <code>file</code>, <code>line</code>, <code>column</code> and
+      <code>message</code>, and for a type mismatch <code>expected</code> and <code>found</code>,
+      for a program (or an agent) that repairs code from them.
+    </p>
 
     <h2 id="reserved">Reserved words</h2>
     <p class="small">

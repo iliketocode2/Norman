@@ -177,7 +177,7 @@ function lines(src) {
 function runOnce(cmd, cwd, file) {
   const [exe, ...pre] = cmd.split(' ').filter(Boolean);
   return new Promise((resolve) => {
-    execFile(exe, [...pre, file], { cwd, timeout: 120_000, maxBuffer: 1 << 24 }, (err, stdout, stderr) => {
+    execFile(exe, [...pre, '--format', 'json', file], { cwd, timeout: 120_000, maxBuffer: 1 << 24 }, (err, stdout, stderr) => {
       const code = err ? (typeof err.code === 'number' ? err.code : -1) : 0;
       resolve({ code, out: `${stderr}${stdout}`.replace(/\r\n/g, '\n') });
     });
@@ -196,6 +196,44 @@ async function runNorman(cmd, cwd, file) {
   return { code: r.code, out: `${r.out}\n(harness: norman could not be run; exit code ${r.code})` };
 }
 
+// norman's `--format json` writes one object per line (design/13 §1.2). The
+// harness classifies from the objects, and shows the model the same text a
+// terminal would: what `--format text` prints for each one.
+const LABELS = { syntax: 'syntax error: ', type: 'type error: ', 'run-time': 'run-time error: ', warning: 'warning: ' };
+
+function renderDiag(d) {
+  if (d.kind === 'output') return d.text;
+  if (d.kind === 'tests') {
+    const { file, passed, total } = d;
+    if (passed === total && total === 1) return `${file}: The only test passed.`;
+    if (passed === total) return `${file}: All ${total} tests passed.`;
+    if (passed === 0) return `${file}: All ${total} tests failed.`;
+    return `${file}: ${passed} of ${total} tests passed.`;
+  }
+  const at = d.file != null ? `${d.file}:${d.line}:${d.column}: ` : '';
+  return `${LABELS[d.kind] ?? ''}${at}${d.message}`;
+}
+
+// The objects in norman's output, and its text. A line that isn't JSON (the
+// harness's own note, say) is kept as text.
+function readDiags(out) {
+  const diags = [];
+  const lines = out.split('\n').filter((l) => l.trim()).map((l) => {
+    try {
+      const d = JSON.parse(l);
+      if (d && typeof d === 'object' && d.kind) {
+        diags.push(d);
+        return renderDiag(d);
+      }
+    } catch {}
+    return l;
+  });
+  return { diags, text: lines.join('\n') };
+}
+
+const ALL_PASSED = (t) => t && t.passed === t.total && t.total > 0;
+const summaryText = (t) => (t ? renderDiag(t).replace(/^[^:]*: /, '') : null);
+
 // The program in a reply: the last fenced code block.
 function extract(text) {
   const blocks = [...text.matchAll(/```[^\n`]*\n([\s\S]*?)```/g)];
@@ -211,16 +249,20 @@ async function score(opts, task, dir, program) {
   fs.writeFileSync(path.join(dir, 'check.nrm'), '(use interface.nrm)\n(use solution.nrm)\n');
   const check = await runNorman(opts.norman, dir, 'check.nrm');
   const grade = await runNorman(opts.norman, dir, 'tests.nrm');
-  const hidden = grade.out.match(/^tests\.nrm: (.*)$/m)?.[1] ?? null;
-  const own = check.out.match(/^solution\.nrm: (.*)$/m)?.[1] ?? null;
+  const c = readDiags(check.out);
+  const g = readDiags(grade.out);
+  const hidden = g.diags.find((d) => d.kind === 'tests' && d.file === 'tests.nrm');
+  const own = c.diags.find((d) => d.kind === 'tests' && d.file === 'solution.nrm');
   return {
     checkClean: check.code === 0,
-    checkOut: check.out,
-    gradeOut: grade.out,
-    hidden,
-    pass: hidden !== null && /^(All \d+ tests passed|The only test passed)\.$/.test(hidden),
-    selfTests: own !== null,
-    selfPass: own !== null && /^(All \d+ tests passed|The only test passed)\.$/.test(own),
+    checkOut: c.text,
+    gradeOut: g.text,
+    checkDiags: c.diags,
+    gradeDiags: g.diags,
+    hidden: summaryText(hidden),
+    pass: ALL_PASSED(hidden),
+    selfTests: own !== undefined,
+    selfPass: ALL_PASSED(own),
     category: null,
     unbound: null,
   };
@@ -242,15 +284,21 @@ function classify(task, s, program) {
   if (redefined && !s.pass) return { category: 'redefinition', detail: redefined };
   if (s.checkClean) {
     if (s.pass) return { category: 'pass' };
-    const site = s.gradeOut.match(/no reply left for (?:ask|call|consult) site '([^']+)'/);
+    // norman 0.4.0 said "no reply left for ask site 'x'"; later versions say
+    // "the script has no entry for ask site 'x'" when the site is unknown.
+    // Only ask and consult sites: the model names those. A call site is the
+    // grant's capability and operation, so the task fixes it.
+    const site = s.gradeOut.match(/(?:no (?:reply|answer) left for|the script has no entry for) (?:ask|consult) site '([^']+)'/);
     if (site && !task.sites.includes(site[1])) return { category: 'wrong site', detail: site[1] };
     // The hidden tests didn't check against this solution (for example, a
     // clash between their names and the solution's), so nothing was graded.
     // That's a fault in the task or the language, not a wrong program.
-    const clash = s.gradeOut.split('\n').find((l) => /^type error: tests\.nrm:/.test(l));
-    if (clash) return { category: 'grading error', detail: clash.replace(/^type error: /, '').slice(0, 160) };
+    const clash = (s.gradeDiags ?? []).find((d) => ['syntax', 'type'].includes(d.kind) && d.file === 'tests.nrm');
+    if (clash) return { category: 'grading error', detail: renderDiag(clash).replace(/^\w+ error: /, '').slice(0, 160) };
     return { category: 'hidden tests fail' };
   }
+  if (s.checkDiags) return classifyDiags(s.checkDiags);
+  // A run recorded before the harness read JSON: classify its text.
   const first = s.checkOut.split('\n').find((l) => l.trim() && !/^The program was not run/.test(l) && !/^solution\.nrm: /.test(l)) || '';
   let m;
   if (/syntax error|unclosed|unexpected/.test(first)) return { category: 'syntax' };
@@ -261,6 +309,30 @@ function classify(task, s, program) {
   if (/Check-\w+ failed|check-\w+ failed/i.test(first)) return { category: 'own tests fail' };
   if (/run-time error/.test(first)) return { category: 'run-time error' };
   return { category: 'other', detail: first.slice(0, 120) };
+}
+
+// The first problem norman reported, read from its JSON (design/13 §1.2):
+// a rejected program's first syntax or type error, or else the first thing
+// that went wrong while it ran.
+function classifyDiags(diags) {
+  const err = diags.find((d) => d.kind === 'syntax' || d.kind === 'type');
+  if (err) {
+    let m;
+    if (err.kind === 'syntax') return { category: 'syntax' };
+    if (/is already defined|can't be redefined/.test(err.message)) return { category: 'redefinition' };
+    if ((m = err.message.match(/unbound name (\S+)/))) return { category: 'unbound name', detail: m[1] };
+    if (err.expected != null) return { category: 'type mismatch' };
+    return { category: 'other check error' };
+  }
+  const ran = diags.find((d) => ['test', 'run-time', 'load'].includes(d.kind));
+  if (ran) {
+    // A failed test reports a run-time error inside it as its message.
+    if (ran.kind === 'run-time' || /^run-time error/.test(ran.message)) return { category: 'run-time error' };
+    if (/This test is ill-typed/.test(ran.message)) return { category: 'type mismatch' };
+    if (ran.kind === 'test') return { category: 'own tests fail' };
+  }
+  const first = diags.find((d) => !['output', 'tests', 'note', 'warning'].includes(d.kind));
+  return { category: 'other', detail: (first ? renderDiag(first) : '(no diagnostic)').slice(0, 120) };
 }
 
 // ---------------------------------------------------------------- the model

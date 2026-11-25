@@ -9,6 +9,7 @@ use crate::ast::*;
 use crate::lexer::Sx;
 use crate::types::TypeEnv;
 use crate::value::Value;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -166,13 +167,30 @@ fn lit(v: Value) -> ExpRef {
     Rc::new(Exp::Literal(v))
 }
 
+/// Where each expression came from, for diagnostics: keyed by the node's
+/// address, holding the node itself so the address can't be reused while
+/// the entry exists. The tree itself carries no locations, so evaluation
+/// pays nothing for them.
+pub type Spans = HashMap<usize, (ExpRef, Loc)>;
+
+/// The key of `e` in `Spans`.
+pub fn span_key(e: &ExpRef) -> usize {
+    Rc::as_ptr(e) as *const () as usize
+}
+
 pub struct Parser<'a> {
     pub theta: &'a TypeEnv,
+    spans: Option<&'a RefCell<Spans>>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(theta: &'a TypeEnv) -> Parser<'a> {
-        Parser { theta }
+        Parser { theta, spans: None }
+    }
+
+    /// A parser that records where each expression came from in `spans`.
+    pub fn with_spans(theta: &'a TypeEnv, spans: &'a RefCell<Spans>) -> Parser<'a> {
+        Parser { theta, spans: Some(spans) }
     }
 
     // ---------------------------------------------------------------- names
@@ -640,6 +658,16 @@ impl<'a> Parser<'a> {
     // ---------------------------------------------------------- expressions
 
     pub fn exp(&self, sx: &Sx) -> P<ExpRef> {
+        let e = self.exp_unrecorded(sx)?;
+        if let Some(spans) = self.spans {
+            // A node that sugar passed through unchanged keeps its own,
+            // more precise, location.
+            spans.borrow_mut().entry(span_key(&e)).or_insert_with(|| (e.clone(), sx.loc().clone()));
+        }
+        Ok(e)
+    }
+
+    fn exp_unrecorded(&self, sx: &Sx) -> P<ExpRef> {
         match sx {
             Sx::Str(s, _) => Ok(lit(Value::Str(s.clone()))),
             Sx::Atom(a, _) => Ok(match classify(a).map_err(|m| format!("{}: {}", sx.loc(), m))? {

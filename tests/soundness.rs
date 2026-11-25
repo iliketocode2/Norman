@@ -248,6 +248,8 @@ const REMAINING: &[&str] = &[
     "no case branch matches",
     "the proposal",
     "script exhausted",
+    "the script has no entry",
+    "no script is in effect",
     "requests are in flight but the oracle has nothing to deliver",
     "step limit",
     "∞",

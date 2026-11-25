@@ -102,6 +102,16 @@ for (const [name, program, category, detail] of cases) {
   });
 }
 
+await test('the harness reads JSON diagnostics, and the model sees text', async () => {
+  const s = await score(opts, triage, path.join(out, 'json'), '(define triage (model ticket) (+ 1 "a"))');
+  const d = s.checkDiags.find((x) => x.kind === 'type');
+  assert.ok(d, JSON.stringify(s.checkDiags));
+  assert.deepEqual([d.file, d.line, d.column, d.expected, d.found], ['solution.nrm', 1, 31, 'Text', 'Num']);
+  // The model's feedback is the terminal's text, without JSON or citations.
+  assert.match(s.checkOut, /^type error: solution\.nrm:1:31: in the definition of triage: /m);
+  assert.doesNotMatch(s.checkOut, /[{}]|design\//);
+});
+
 await test('the repair loop feeds the checker output back, and stops at a clean check', async () => {
   const client = mockClient([
     'I forgot the code.',
