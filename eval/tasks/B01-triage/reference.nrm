@@ -1,0 +1,7 @@
+(define triage-ctx (ticket)
+  (list (Message [role System]
+                 [content "Classify the support ticket as a Bug, a Feature request or Spam, with a one-sentence summary."])
+        (Message [role User] [content ticket])))
+
+(define triage (model ticket)
+  (repair 1 (lambda (ctx) (ask model Triage ctx 'triage)) (triage-ctx ticket)))

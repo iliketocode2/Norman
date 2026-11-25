@@ -1,0 +1,17 @@
+(define fold-ctx (summary chunk)
+  (list (Message [role System] [content "Update the running summary with the new chunk. Reply with the new summary only."])
+        (Message [role User]   [content (string-append "Summary so far: " summary)])
+        (Message [role User]   [content (string-append "New chunk: " chunk)])))
+
+(define fold-chunk (model summary chunk)
+  (catch (ask model (Text 500) (fold-ctx summary chunk) 'fold) e
+    (case e
+      [(Invalid _) summary]
+      [_           (fail e)])))
+
+(define summarize-from (model summary chunks)
+  (case chunks
+    ['() summary]
+    [(cons c cs) (summarize-from model (fold-chunk model summary c) cs)]))
+
+(define summarize (model chunks) (summarize-from model "" chunks))

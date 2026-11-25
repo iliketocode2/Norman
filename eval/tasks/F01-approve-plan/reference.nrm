@@ -1,0 +1,18 @@
+(define plan-ctx (goal)
+  (list (Message [role System] [content "Write a short list of shell commands that reach the goal."])
+        (Message [role User]   [content goal])))
+
+(define run-all (sh commands)
+  (case commands
+    ['() '()]
+    [(cons c rest)
+       (let* ([out (call sh run c)])
+         (cons out (run-all sh rest)))]))
+
+(define plan-and-run (model reviewer sh goal)
+  (let* ([plan     (ask model (List (Text 80) 5) (plan-ctx goal) 'plan)]
+         [approved (consult reviewer (List (Text 80) 5)
+                            "Approve, edit or decline this plan."
+                            [propose plan]
+                            'review)])
+    (run-all sh approved)))

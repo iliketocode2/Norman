@@ -1,0 +1,4 @@
+(grant claude (model))
+
+(record LineItem (description (Text 100)) (cents Num))
+(record Invoice  (vendor (Text 80)) (items (List LineItem 20)))

@@ -1,0 +1,16 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script both
+  [left  (reply "\"A careful survey.\"") (out 5) (latency 3s)]
+  [right (reply "\"A hasty note.\"") (out 5) (latency 1s)]
+  [judge (reply "{\"tag\":\"Left\",\"why\":\"More careful.\"}") (out 8) (latency 2s)])
+(script left-garbled
+  [left  (reply "not JSON") (out 2) (latency 1s)]
+  [right (reply "\"A hasty note.\"") (out 5) (latency 1s)])
+
+(under ([script both] [cost $1.00] [time 1min])
+  (check-expect (compare claude "Document A ..." "Document B ...") (Left "More careful."))
+  (check-within (compare claude "Document A ..." "Document B ...") ([time 5s])))
+(under ([script left-garbled] [cost $1.00] [time 1min])
+  (check-fail (compare claude "Document A ..." "Document B ...") (Invalid _)))

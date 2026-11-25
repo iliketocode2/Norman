@@ -1,0 +1,12 @@
+;; Asks for approval, but then runs the model's own plan.
+(define run-all (sh commands)
+  (case commands
+    ['() '()]
+    [(cons c rest)
+       (let* ([out (call sh run c)])
+         (cons out (run-all sh rest)))]))
+
+(define plan-and-run (model reviewer sh goal)
+  (let* ([plan (ask model (List (Text 80) 5) (list (Message [role User] [content goal])) 'plan)]
+         [ok   (consult reviewer (List (Text 80) 5) "Approve this plan?" [propose plan] 'review)])
+    (run-all sh plan)))

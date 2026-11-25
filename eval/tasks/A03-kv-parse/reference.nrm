@@ -1,0 +1,29 @@
+(define char-at (s i) (substring s i (+ i 1)))
+
+;; the index of the first c in s at or after i, or -1
+(define index-of (s c i)
+  (if (>= i (string-length s))
+      -1
+      (if (= (char-at s i) c) i (index-of s c (+ i 1)))))
+
+;; the pieces of s between semicolons, from start on
+(define pieces (s start)
+  (let* ([semi (index-of s ";" start)])
+    (if (< semi 0)
+        (list (substring s start (string-length s)))
+        (cons (substring s start semi) (pieces s (+ semi 1))))))
+
+(define parse-pair (piece)
+  (let* ([eq (index-of piece "=" 0)])
+    (if (< eq 0)
+        (fail 'malformed)
+        (Pair [fst (substring piece 0 eq)]
+              [snd (substring piece (+ eq 1) (string-length piece))]))))
+
+(define parse-all (ps)
+  (case ps
+    ['() '()]
+    [(cons p rest) (cons (parse-pair p) (parse-all rest))]))
+
+(define parse-pairs (text)
+  (if (= text "") '() (parse-all (pieces text 0))))

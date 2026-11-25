@@ -1,0 +1,6 @@
+;; Asks once at the right site, but never repairs a bad reply.
+(define triage (model ticket)
+  (ask model Triage
+       (list (Message [role System] [content "Classify this support ticket."])
+             (Message [role User] [content ticket]))
+       'triage))

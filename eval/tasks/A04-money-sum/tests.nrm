@@ -1,0 +1,14 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(check-expect (invoice-total (list (Item [name "pen"] [price $1.50] [qty 4])
+                                   (Item [name "pad"] [price $3.00] [qty 1])))
+              $9.00)
+(check-expect (invoice-total '()) $0)
+;; exactly $100 is discounted
+(check-expect (invoice-total (list (Item [name "chair"] [price $25.00] [qty 4]))) $90.00)
+;; just under is not
+(check-expect (invoice-total (list (Item [name "chair"] [price $99.99] [qty 1]))) $99.99)
+;; the tenth of $100.000007 rounds down to $10.000000
+(check-expect (invoice-total (list (Item [name "a"] [price $100.000007] [qty 1]))) $90.000007)
+(check-expect (invoice-total (list (Item [name "none"] [price $5.00] [qty 0]))) $0)

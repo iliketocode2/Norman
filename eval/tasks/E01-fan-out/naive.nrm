@@ -1,0 +1,10 @@
+;; Right answer, but the summaries are asked one after the other.
+(define summary-ctx (doc)
+  (list (Message [role User] [content doc])))
+
+(define compare (model left right)
+  (let* ([l (ask model (Text 300) (summary-ctx left) 'left)]
+         [r (ask model (Text 300) (summary-ctx right) 'right)])
+    (ask model Pick
+         (list (Message [role User] [content (string-append l r)]))
+         'judge)))

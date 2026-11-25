@@ -1,0 +1,6 @@
+(grant claude (model))
+
+(datatype Triage
+  [Bug     (summary (Text 200))]
+  [Feature (summary (Text 200))]
+  [Spam])

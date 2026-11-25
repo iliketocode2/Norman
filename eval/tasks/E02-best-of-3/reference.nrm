@@ -1,0 +1,8 @@
+(define slogan-ctx (product)
+  (list (Message [role System] [content "Write a slogan of a few words for the product."])
+        (Message [role User]   [content product])))
+
+(define short-slogan (model product)
+  (best-of 3
+           (lambda () (ask model (Text 200) (slogan-ctx product) 'slogan))
+           (lambda (s) (< (string-length s) 30))))

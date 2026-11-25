@@ -1,0 +1,29 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script approves
+  [plan   (reply "[\"ls\",\"wc -l notes.txt\"]") (out 10) (latency 1s)]
+  [review (approve) (latency 1min)]
+  [sh/run (result "notes.txt") (latency 1s)
+          (result "3 notes.txt") (latency 1s)])
+(script trims
+  [plan   (reply "[\"ls\",\"rm notes.txt\"]") (out 10) (latency 1s)]
+  [review (answer "[\"ls\"]") (latency 2min)]
+  [sh/run (result "notes.txt") (latency 1s)])
+(script declines
+  [plan   (reply "[\"rm -rf build\"]") (out 6) (latency 1s)]
+  [review (decline "Too risky.") (latency 30s)])
+(script empties
+  [plan   (reply "[\"ls\"]") (out 4) (latency 1s)]
+  [review (answer "[]") (latency 30s)])
+
+(under ([script approves] [cost $1.00] [time 1h])
+  (check-expect (plan-and-run claude reviewer sh "Count the notes.") (list "notes.txt" "3 notes.txt"))
+  (check-within (plan-and-run claude reviewer sh "Count the notes.") ([time 63s])))
+(under ([script trims] [cost $1.00] [time 1h])
+  ;; what runs is what the person gave back, not what the model proposed
+  (check-expect (plan-and-run claude reviewer sh "Tidy up.") (list "notes.txt")))
+(under ([script declines] [cost $1.00] [time 1h])
+  (check-expect (plan-and-run claude reviewer sh "Clean the build.") (fail (Declined "Too risky."))))
+(under ([script empties] [cost $1.00] [time 1h])
+  (check-expect (plan-and-run claude reviewer sh "Nothing, really.") '()))

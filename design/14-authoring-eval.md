@@ -1,6 +1,9 @@
 # Measuring how well a model writes µNorman
 
-> **Status: design, not built.** This is step 2 of the order in
+> **Status: Stage 0 built; Stages 1–3 designed, not built.** The twenty tasks
+> are in [`../eval/tasks/`](../eval/tasks/), and
+> [`../tests/eval_corpus.rs`](../tests/eval_corpus.rs) checks them in
+> `cargo test` (§6). This is step 2 of the order in
 > [`13`](13-agents-limiting-themselves.md) §"Order", and every later step
 > uses it: each one is judged by what it does to the numbers here. Decisions
 > marked **(open)** in §0 need review before Stage 1 starts.
@@ -52,32 +55,38 @@ Each task is a directory, `eval/tasks/<tier><nn>-<name>/`:
 | File | Shown to the model? | Contents |
 |---|---|---|
 | `task.md` | yes | the goal, the function to define and its contract, required site names, one example |
-| `interface.nrm` | yes, verbatim in `task.md` | grants and datatypes the program uses and **must not redefine** |
-| `tests.nrm` | no | the hidden tests: scripts and `check-*` forms |
+| `interface.nrm` | yes: the harness appends it to `task.md`, under "Already defined for you (don't redefine these)" | grants and datatypes the program uses and **must not redefine** |
+| `tests.nrm` | no | the hidden tests. It starts `(use interface.nrm) (use solution.nrm)`, then scripts and `check-*` forms |
 | `reference.nrm` | no | a solution written by a person |
+| `naive.nrm` | no | a plausible wrong solution: it type-checks, and makes the mistake the task is about |
 
-The harness writes the model's program to `solution.nrm` beside them, and
-two driver files:
+The interface is kept out of `task.md` so that it's written once. A
+contract that only `task.md` states can't drift from the definitions the
+tests use.
+
+The harness copies `interface.nrm` and `tests.nrm` into a fresh directory,
+writes the model's program there as `solution.nrm`, and adds one driver file
+for the repair loop:
 
 ```
 ;; check.nrm: what the model's repair loop sees
 (use interface.nrm)
 (use solution.nrm)
-
-;; grade.nrm: what decides the score
-(use interface.nrm)
-(use solution.nrm)
-(use tests.nrm)
 ```
 
+**Grading is `norman tests.nrm`** in that directory. Its summary line,
+`tests.nrm: …`, counts only the hidden tests; the model's own tests report
+under `solution.nrm: …`.
+
 This relies on two properties of `use` (`08`, deviation 9): definitions join
-one namespace, so `solution.nrm` can refer to the interface's grants, and a
-used file's tests run. Both were checked against 0.4.0 while writing this
-document.
+one namespace, so `solution.nrm` can refer to the interface's grants and
+`tests.nrm` to the solution's functions, and a used file's tests run. Both
+were checked against 0.4.0.
 
 ### Example: `B01-triage`
 
-`task.md` (abridged):
+What the model sees, abridged: `task.md`, then the interface the harness
+appends.
 
 > Define `(triage model ticket)`. It asks `model` once, at site `'triage`,
 > to classify the support ticket as a `Triage`. If the reply doesn't fit the
@@ -106,9 +115,12 @@ document.
   (repair 1 (lambda (ctx) (ask model Triage ctx 'triage)) (triage-ctx ticket)))
 ```
 
-`tests.nrm`:
+`tests.nrm`, less one test (a refusal, which must not be retried):
 
 ```
+(use interface.nrm)
+(use solution.nrm)
+
 (script bug      [triage (reply "{\"tag\":\"Bug\",\"summary\":\"Login crashes.\"}") (out 12) (latency 1s)])
 (script spam     [triage (reply "{\"tag\":\"Spam\"}") (out 4) (latency 1s)])
 (script fixable  [triage (reply "Bug: login crashes") (out 8) (latency 1s)
@@ -128,9 +140,10 @@ document.
   (check-fail (triage claude "The app crashes when I log in.") (Invalid _)))
 ```
 
-The reference passes all five tests. A one-line solution that asks without
-a site name or a repair fails all five, with the `script exhausted` message
-quoted above.
+The reference passes all six tests. A one-line solution that asks without a
+site name or a repair fails every one, with the `script exhausted` message
+quoted above. `naive.nrm` is subtler: it names the site but never repairs,
+so it fails only the test that needs the second ask.
 
 ### Rules for writing a task
 
@@ -144,10 +157,19 @@ quoted above.
    has the reference in context, so a copied task measures recall.
 4. **Hidden tests include at least one failure path:** an `Invalid` reply, a
    `ToolError`, a budget that runs out, or a person who declines. Agents are
-   mostly about what happens when things go wrong.
+   mostly about what happens when things go wrong. A pure task (tier A)
+   tests its edge cases instead: empty input, ties, malformed text.
 5. **The reference solution is the shortest one a person would write today.**
    Its length is recorded. A task the reference finds painful is data too:
    it shows what the prelude is missing (`13` Phase 3).
+6. **The naive solution makes the mistake the task is about,** and nothing
+   else. It must type-check, so its tests run, and fail at least one hidden
+   test. If the hidden tests can't tell it from the reference, they don't
+   test what the task says it tests.
+7. **A test about cost or time leaves room for any reasonable prompt.**
+   A reservation grows with the context, and the model writes the context.
+   `D03`'s thresholds, for example, are set from the smallest reservation
+   possible, with a wide margin on the side a longer prompt moves.
 
 ---
 
@@ -158,17 +180,25 @@ Names are provisional; the features each tier exercises are the point.
 
 | Tier | Tasks | What it exercises |
 |---|---|---|
-| **A**: pure | `A01-word-freq`, `A02-run-length`, `A03-kv-parse`, `A04-money-sum`, `A05-dedupe` | syntax, recursion over lists, strings, `Money` arithmetic, the prelude's gaps. No effects. |
-| **B**: one ask | `B01-triage`, `B02-extract-invoice`, `B03-yes-no-gate`, `B04-route` | askable types, bounds, records vs. datatypes, `repair`/`retry`, `Refused` |
-| **C**: loops and tools | `C01-react-calc`, `C02-flaky-tool`, `C03-chunked-summary`, `C04-typed-tool` | `call`, a fuel-bounded loop, `ToolError` as an observation, tool result types |
-| **D**: budgets and failures | `D01-cheap-then-strong`, `D02-best-so-far`, `D03-spend-cap` | `budget`, `catch` on `OverBudget` and `PastDeadline`, nested limits |
-| **E**: concurrency | `E01-fan-out`, `E02-best-of-3` | `par`, `workflow`, the ownership rule |
-| **F**: people | `F01-approve-plan`, `F02-revise-on-decline` | `consult`, `[propose …]`, `Declined` |
+| **A**: pure | `A01-word-freq`, `A02-run-length`, `A03-kv-parse`, `A04-money-sum`, `A05-top-k` | syntax, recursion over lists, an association list, scanning text by byte offset, `Money` arithmetic, sorting. No effects. |
+| **B**: one ask | `B01-triage`, `B02-extract-invoice`, `B03-yes-no-gate`, `B04-route` | askable types, bounds, records vs. datatypes, a `Bool` answer, `repair`/`retry`, `Refused`, one typed `call` |
+| **C**: loops and tools | `C01-lookup-loop`, `C02-flaky-tool`, `C03-chunked-summary`, `C04-typed-tool` | a fuel-bounded loop, `ToolError` as an observation, retrying one step, a `Text` answer, a tool's typed result |
+| **D**: budgets and failures | `D01-cheap-then-strong`, `D02-best-so-far`, `D03-split-budget` | choosing what to catch, `PastDeadline` keeping the last complete result, a nested `budget` that caps one step |
+| **E**: concurrency | `E01-fan-out`, `E02-best-of-3` | `par` and `best-of`, checked by the time they take |
+| **F**: people | `F01-approve-plan`, `F02-revise-on-decline` | `consult`, `[propose …]`, running what was approved, `Declined` |
 
 Twenty is enough to see which tiers fail and why, and small enough that a
 person can read every failure of a baseline run. The corpus grows as later
 steps add features: `13` Phase 1 adds tasks that define `main`, and Phase 3
-adds tasks that use `par-map` and `json-parse`.
+adds tasks that use `par-map` and `json-parse`. One gap is known: no task
+yet makes two concurrent steps want the same kernel, so the ownership rule
+(and `fork`) is untested. That's the first task to add.
+
+Tier A is harder than it looks, on purpose. The basis has no `map`,
+`take`, sort, string split or `string->num`, so `A03`'s reference scans text
+a byte at a time with `substring` (29 lines), and `A05`'s writes its own
+insertion sort and `take`. How models cope with that is the first thing the
+baseline says about `13` Phase 3.
 
 ---
 
@@ -190,7 +220,7 @@ For each task and each trial:
    a failed round, not as a crash of the harness.
 2. **Check.** Run `norman check.nrm` in a fresh temporary directory. Record
    the exit code and output.
-3. **Grade.** Run `norman grade.nrm`. The hidden tests pass when the line for
+3. **Grade.** Run `norman tests.nrm`. The hidden tests pass when the line for
    `tests.nrm` in the output reports every test passed and nothing else went
    wrong. The model's own tests are scored separately (§4), so a wrong test
    the model wrote doesn't hide a correct program, or the other way round.
@@ -274,13 +304,19 @@ starting point, to be revised once a baseline exists:
 
 ## 6. Stages
 
-**Stage 0: the corpus, with no model involved.**
-Write the twenty tasks. Add `tests/eval_corpus.rs`, which for every task
-(a) grades `reference.nrm` and requires a pass, and (b) grades an empty
-solution and requires every hidden test to fail, so no test passes
-vacuously. Add `eval/**` to the CI `paths` filter. This runs in `cargo test`,
-costs nothing, and is worth having even if Stage 1 never runs: twenty more
-programs exercising the language.
+**Stage 0: the corpus, with no model involved. (Built.)**
+The twenty tasks are in `eval/tasks/`. `tests/eval_corpus.rs` checks that
+every task has its five files, then grades each one twice, as the harness
+will: `reference.nrm` must pass every hidden test, and `naive.nrm` must
+type-check (all its tests run) and fail at least one. `eval/**` is in the CI
+`paths` filter. It runs in `cargo test` and costs nothing.
+
+The first draft of this stage graded an *empty* solution instead. That
+proves nothing: an empty solution doesn't type-check, so no test runs, and
+every test "fails" whatever it says. A naive solution that checks and runs is
+what shows the tests can tell a right program from a nearly right one. When
+the corpus test was checked by swapping one task's naive solution for its
+reference, it failed as it should.
 
 **Stage 1: the harness and a baseline.**
 Write `eval/run.mjs`. Run it on both models (E6), under both conditions,

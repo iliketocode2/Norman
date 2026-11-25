@@ -1,0 +1,13 @@
+;; the runs of x (already seen n times) followed by xs
+(define runs-from (x n xs)
+  (case xs
+    ['() (list (Pair [fst x] [snd n]))]
+    [(cons y ys)
+       (if (= x y)
+           (runs-from x (+ n 1) ys)
+           (cons (Pair [fst x] [snd n]) (runs-from y 1 ys)))]))
+
+(define run-length (xs)
+  (case xs
+    ['() '()]
+    [(cons y ys) (runs-from y 1 ys)]))

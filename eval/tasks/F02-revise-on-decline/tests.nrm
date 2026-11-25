@@ -1,0 +1,32 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script first-time
+  [draft  (reply "\"Hello, world.\"") (out 4) (latency 2s)]
+  [review (approve) (latency 1min)])
+(script second-time
+  [draft  (reply "\"A very long greeting that goes on and on.\"") (out 10) (latency 2s)
+          (reply "\"Short and sweet.\"") (out 4) (latency 2s)]
+  [review (decline "Too long.") (latency 1min)
+          (approve) (latency 1min)])
+(script edited
+  [draft  (reply "\"Hello, world.\"") (out 4) (latency 2s)]
+  [review (answer "\"Hello, team.\"") (latency 2min)])
+(script never
+  [draft  (reply "\"One.\"") (out 2) (latency 1s)
+          (reply "\"Two.\"") (out 2) (latency 1s)
+          (reply "\"Three.\"") (out 2) (latency 1s)]
+  [review (decline "No.") (latency 10s)
+          (decline "Still no.") (latency 10s)
+          (decline "Give up.") (latency 10s)])
+
+(under ([script first-time] [cost $1.00] [time 1h])
+  (check-expect (draft-approved claude reviewer "Greet the world.") "Hello, world."))
+(under ([script second-time] [cost $1.00] [time 1h])
+  (check-expect (draft-approved claude reviewer "Greet the world.") "Short and sweet.")
+  (check-within (draft-approved claude reviewer "Greet the world.") ([time 124s])))
+(under ([script edited] [cost $1.00] [time 1h])
+  (check-expect (draft-approved claude reviewer "Greet the team.") "Hello, team."))
+(under ([script never] [cost $1.00] [time 1h])
+  (check-expect (draft-approved claude reviewer "Greet the world.") (fail (Declined "Give up.")))
+  (check-within (draft-approved claude reviewer "Greet the world.") ([time 33s])))

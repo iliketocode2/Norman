@@ -1,0 +1,23 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script one-short
+  [slogan (reply "\"The finest coffee beans from every corner of the world.\"") (out 12) (latency 2s)
+          (reply "\"Brew bold.\"") (out 4) (latency 2s)
+          (reply "\"Coffee that wakes you up and keeps you going all day.\"") (out 12) (latency 2s)])
+(script all-long
+  [slogan (reply "\"The finest coffee beans from every corner of the world.\"") (out 12) (latency 2s)
+          (reply "\"Coffee that wakes you up and keeps you going all day.\"") (out 12) (latency 2s)
+          (reply "\"Roasted slowly, by hand, in small batches, with love.\"") (out 12) (latency 2s)])
+(script messy
+  [slogan (reply "Brew bold.") (out 4) (latency 2s)
+          (provider-error "503 Service Unavailable") (latency 1s)
+          (reply "\"Wake up.\"") (out 4) (latency 2s)])
+
+(under ([script one-short] [cost $1.00] [time 1min])
+  (check-expect (short-slogan claude "coffee") "Brew bold.")
+  (check-within (short-slogan claude "coffee") ([time 2s])))
+(under ([script all-long] [cost $1.00] [time 1min])
+  (check-expect (short-slogan claude "coffee") (fail 'none-accepted)))
+(under ([script messy] [cost $1.00] [time 1min])
+  (check-expect (short-slogan claude "coffee") "Wake up."))

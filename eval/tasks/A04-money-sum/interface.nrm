@@ -1,0 +1,1 @@
+(record Item (name Text) (price Money) (qty Num))

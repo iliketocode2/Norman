@@ -1,0 +1,21 @@
+(define sum-cents (items)
+  (case items
+    ['() 0]
+    [(cons i rest) (+ (. i cents) (sum-cents rest))]))
+
+(define any-negative? (items)
+  (case items
+    ['() #f]
+    [(cons i rest) (or (< (. i cents) 0) (any-negative? rest))]))
+
+(define invoice-total (model document)
+  (let* ([inv (ask model Invoice
+                   (list (Message [role System] [content "Extract the vendor and every line item, with amounts in cents."])
+                         (Message [role User] [content document]))
+                   'invoice)]
+         [items (. inv items)])
+    (if (= (length items) 0)
+        (fail 'no-items)
+        (if (any-negative? items)
+            (fail 'negative-amount)
+            (sum-cents items)))))

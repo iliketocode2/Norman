@@ -1,0 +1,20 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script searching   [route (reply "{\"tag\":\"Search\",\"query\":\"capital of France\"}") (out 15) (latency 1s)]
+                    [web/search (result "Paris is the capital of France.") (latency 2s)])
+(script calculating [route (reply "{\"tag\":\"Calculate\",\"expression\":\"6*7\"}") (out 15) (latency 1s)]
+                    [calc/eval (result "42") (latency 1s)])
+(script answering   [route (reply "{\"tag\":\"Answer\",\"text\":\"Hello!\"}") (out 10) (latency 1s)])
+(script search-down [route (reply "{\"tag\":\"Search\",\"query\":\"news\"}") (out 10) (latency 1s)]
+                    [web/search (error "connection reset") (latency 1s)])
+
+(under ([script searching] [cost $1.00] [time 1min])
+  (check-expect (route claude web calc "What is the capital of France?") "Paris is the capital of France.")
+  (check-within (route claude web calc "What is the capital of France?") ([time 3s])))
+(under ([script calculating] [cost $1.00] [time 1min])
+  (check-expect (route claude web calc "What is six times seven?") "42"))
+(under ([script answering] [cost $1.00] [time 1min])
+  (check-expect (route claude web calc "Say hello.") "Hello!"))
+(under ([script search-down] [cost $1.00] [time 1min])
+  (check-fail (route claude web calc "What's new?") (ToolError _)))

@@ -1,0 +1,28 @@
+;; Splits correctly, but never checks for a missing '=': a malformed piece
+;; becomes a pair with an empty key instead of a failure.
+(define char-at (s i) (substring s i (+ i 1)))
+
+(define index-of (s c i)
+  (if (>= i (string-length s))
+      -1
+      (if (= (char-at s i) c) i (index-of s c (+ i 1)))))
+
+(define pieces (s start)
+  (let* ([semi (index-of s ";" start)])
+    (if (< semi 0)
+        (list (substring s start (string-length s)))
+        (cons (substring s start semi) (pieces s (+ semi 1))))))
+
+(define parse-pair (piece)
+  (let* ([eq (index-of piece "=" 0)]
+         [cut (if (< eq 0) 0 eq)])
+    (Pair [fst (substring piece 0 cut)]
+          [snd (substring piece (if (< eq 0) 0 (+ eq 1)) (string-length piece))])))
+
+(define parse-all (ps)
+  (case ps
+    ['() '()]
+    [(cons p rest) (cons (parse-pair p) (parse-all rest))]))
+
+(define parse-pairs (text)
+  (if (= text "") '() (parse-all (pieces text 0))))

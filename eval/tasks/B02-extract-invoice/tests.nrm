@@ -1,0 +1,18 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script acme    [invoice (reply "{\"vendor\":\"Acme\",\"items\":[{\"description\":\"Bolts\",\"cents\":1250},{\"description\":\"Nuts\",\"cents\":300}]}") (out 40) (latency 2s)])
+(script empty   [invoice (reply "{\"vendor\":\"Acme\",\"items\":[]}") (out 10) (latency 1s)])
+(script refund  [invoice (reply "{\"vendor\":\"Acme\",\"items\":[{\"description\":\"Bolts\",\"cents\":1250},{\"description\":\"Refund\",\"cents\":-500}]}") (out 40) (latency 2s)])
+(script garbled [invoice (reply "{\"vendor\":\"Acme\"}") (out 5) (latency 1s)])
+
+(under ([script acme] [cost $1.00] [time 1min])
+  (check-expect (invoice-total claude "INVOICE Acme ...") 1550))
+(under ([script empty] [cost $1.00] [time 1min])
+  (check-expect (invoice-total claude "INVOICE Acme (blank)") (fail 'no-items)))
+(under ([script refund] [cost $1.00] [time 1min])
+  (check-expect (invoice-total claude "INVOICE Acme, with a refund") (fail 'negative-amount)))
+(under ([script garbled] [cost $1.00] [time 1min])
+  (check-fail   (invoice-total claude "INVOICE ???") (Invalid _))
+  ;; one ask only: no retry
+  (check-within (invoice-total claude "INVOICE ???") ([time 1s])))

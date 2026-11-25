@@ -1,0 +1,5 @@
+(grant claude (model))
+
+(datatype Pick
+  [Left  (why (Text 200))]
+  [Right (why (Text 200))])

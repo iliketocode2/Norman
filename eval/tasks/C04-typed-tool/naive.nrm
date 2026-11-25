@@ -1,0 +1,12 @@
+;; Never calls twice, and keeps the later quote on a tie.
+(define cheaper (a b) (if (<= (. b cents) (. a cents)) b a))
+
+(define cheapest-of (best qs)
+  (case qs
+    ['() best]
+    [(cons q rest) (cheapest-of (cheaper best q) rest)]))
+
+(define cheapest (prices sku)
+  (case (call prices quotes sku)
+    ['() None]
+    [(cons q rest) (Some (cheapest-of q rest))]))

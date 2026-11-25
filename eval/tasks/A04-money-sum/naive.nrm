@@ -1,0 +1,9 @@
+;; Discounts only strictly above $100.
+(define subtotal (items)
+  (case items
+    ['() $0]
+    [(cons i rest) (+ (* (. i price) (. i qty)) (subtotal rest))]))
+
+(define invoice-total (items)
+  (let* ([s (subtotal items)])
+    (if (> s $100.00) (- s (/ s 10)) s)))

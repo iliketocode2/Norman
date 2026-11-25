@@ -1,0 +1,20 @@
+(define brief-ctx (brief)
+  (list (Message [role System] [content "Write a short draft following the brief."])
+        (Message [role User]   [content brief])))
+
+(define after-decline (ctx draft reason)
+  (append ctx (list (Message [role Assistant] [content draft])
+                    (Message [role User]      [content (string-append "The reviewer declined it: " reason)]))))
+
+(define review-loop (model reviewer ctx revisions)
+  (let* ([draft (ask model (Text 300) ctx 'draft)])
+    (catch (consult reviewer (Text 300) "Approve, edit or decline this draft." [propose draft] 'review) e
+      (case e
+        [(Declined reason)
+           (if (<= revisions 0)
+               (fail e)
+               (review-loop model reviewer (after-decline ctx draft reason) (- revisions 1)))]
+        [_ (fail e)]))))
+
+(define draft-approved (model reviewer brief)
+  (review-loop model reviewer (brief-ctx brief) 2))

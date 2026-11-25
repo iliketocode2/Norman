@@ -1,0 +1,22 @@
+(define observe (kb key)
+  (catch (call kb lookup key) e
+    (case e
+      [(ToolError m) (string-append "error: " m)]
+      [_             (fail e)])))
+
+(define lookup-loop (model kb ctx fuel)
+  (if (<= fuel 0)
+      (fail 'out-of-fuel)
+      (case (ask model Move ctx 'move)
+        [(Lookup key)
+           (lookup-loop model kb
+                        (append ctx (list (Message [role Assistant] [content (show (Lookup key))])
+                                          (Message [role Tool]      [content (observe kb key)])))
+                        (- fuel 1))]
+        [(Final answer) answer])))
+
+(define investigate (model kb question fuel)
+  (lookup-loop model kb
+               (list (Message [role System] [content "Answer the question. Reply Lookup to consult the knowledge base, or Final with your answer."])
+                     (Message [role User]   [content question]))
+               fuel))

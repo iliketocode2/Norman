@@ -1,0 +1,27 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script settles
+  [polish (reply "\"v1\"") (out 3) (latency 2s)
+          (reply "\"v1\"") (out 3) (latency 2s)])
+(script slow
+  [polish (reply "\"v1\"") (out 3) (latency 4s)
+          (reply "\"v2\"") (out 3) (latency 4s)
+          (reply "\"v3\"") (out 3) (latency 4s)])
+(script glacial
+  [polish (reply "\"v1\"") (out 3) (latency 1min)])
+(script outage
+  [polish (reply "\"v1\"") (out 3) (latency 1s)
+          (provider-error "500 Internal Server Error") (latency 1s)])
+
+(under ([script settles] [cost $1.00] [time 5min])
+  (check-expect (polish claude "v0" 1min) "v1")
+  (check-within (polish claude "v0" 1min) ([time 4s])))
+(under ([script slow] [cost $1.00] [time 5min])
+  ;; Two asks finish by 8s; the third would finish at 12s, past the 10s limit.
+  (check-expect (polish claude "v0" 10s) "v2")
+  (check-within (polish claude "v0" 10s) ([time 10s])))
+(under ([script glacial] [cost $1.00] [time 5min])
+  (check-expect (polish claude "v0" 5s) "v0"))
+(under ([script outage] [cost $1.00] [time 5min])
+  (check-fail (polish claude "v0" 1min) (ToolError _)))

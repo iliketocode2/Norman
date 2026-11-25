@@ -1,0 +1,13 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(check-expect (run-length (list 7 7 2 7))
+              (list (Pair [fst 7] [snd 2]) (Pair [fst 2] [snd 1]) (Pair [fst 7] [snd 1])))
+(check-expect (run-length '()) '())
+(check-expect (run-length (list 4)) (list (Pair [fst 4] [snd 1])))
+(check-expect (run-length (list 1 1 1 1)) (list (Pair [fst 1] [snd 4])))
+(check-expect (run-length (list 1 2 1 2))
+              (list (Pair [fst 1] [snd 1]) (Pair [fst 2] [snd 1])
+                    (Pair [fst 1] [snd 1]) (Pair [fst 2] [snd 1])))
+(check-expect (run-length (list -3 -3 0))
+              (list (Pair [fst -3] [snd 2]) (Pair [fst 0] [snd 1])))

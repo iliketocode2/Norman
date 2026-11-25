@@ -14,13 +14,13 @@
 name: docs
 
 on:
-  # The two lists must stay the same. `cargo test` reads tests/ and
-  # examples/ (tests/examples.rs runs every example file), so a change to
-  # either one alone must run the check job.
+  # The two lists must stay the same. `cargo test` reads tests/, examples/
+  # and eval/ (every example file and every eval task is run), so a change
+  # to any one of them alone must run the check job.
   push:
-    paths: ['src/**', 'tests/**', 'examples/**', 'docs/**', 'scripts/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'README.md', 'design/README.md', '.github/workflows/docs.yml']
+    paths: ['src/**', 'tests/**', 'examples/**', 'eval/**', 'docs/**', 'scripts/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'README.md', 'design/README.md', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['src/**', 'tests/**', 'examples/**', 'docs/**', 'scripts/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'README.md', 'design/README.md', '.github/workflows/docs.yml']
+    paths: ['src/**', 'tests/**', 'examples/**', 'eval/**', 'docs/**', 'scripts/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'README.md', 'design/README.md', '.github/workflows/docs.yml']
 
 jobs:
   examples:

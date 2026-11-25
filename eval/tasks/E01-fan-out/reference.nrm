@@ -1,0 +1,13 @@
+(define summary-ctx (doc)
+  (list (Message [role System] [content "Summarize the document in one sentence."])
+        (Message [role User]   [content doc])))
+
+(define judge-ctx (l r)
+  (list (Message [role System] [content "Two documents were summarized. Say which is better, Left or Right, and why."])
+        (Message [role User]   [content (string-append "Left: " l)])
+        (Message [role User]   [content (string-append "Right: " r)])))
+
+(define compare (model left right)
+  (let* ([s (par (ask model (Text 300) (summary-ctx left) 'left)
+                 (ask model (Text 300) (summary-ctx right) 'right))])
+    (ask model Pick (judge-ctx (. s fst) (. s snd)) 'judge)))

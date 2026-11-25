@@ -1,0 +1,12 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(check-expect (parse-pairs "host=example.org;port=8080")
+              (list (Pair [fst "host"] [snd "example.org"]) (Pair [fst "port"] [snd "8080"])))
+(check-expect (parse-pairs "") '())
+(check-expect (parse-pairs "a=b=c") (list (Pair [fst "a"] [snd "b=c"])))
+(check-expect (parse-pairs "a=;b=2")
+              (list (Pair [fst "a"] [snd ""]) (Pair [fst "b"] [snd "2"])))
+(check-expect (parse-pairs " k = v ") (list (Pair [fst " k "] [snd " v "])))
+(check-expect (parse-pairs "a=1;oops;c=3") (fail 'malformed))
+(check-expect (parse-pairs "novalue") (fail 'malformed))

@@ -1,0 +1,12 @@
+;; Adds up the items, but checks neither for an empty invoice nor for
+;; negative amounts.
+(define sum-cents (items)
+  (case items
+    ['() 0]
+    [(cons i rest) (+ (. i cents) (sum-cents rest))]))
+
+(define invoice-total (model document)
+  (sum-cents (. (ask model Invoice
+                     (list (Message [role User] [content document]))
+                     'invoice)
+                items)))
