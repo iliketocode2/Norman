@@ -1,0 +1,8 @@
+(define route (model web calc question)
+  (case (ask model Route
+             (list (Message [role System] [content "Decide whether to search the web, calculate, or answer directly."])
+                   (Message [role User] [content question]))
+             'route)
+    [(Search q)     (call web search q)]
+    [(Calculate e)  (show (call calc eval e))]
+    [(Answer t)     t]))

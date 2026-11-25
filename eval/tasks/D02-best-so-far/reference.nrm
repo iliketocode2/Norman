@@ -1,0 +1,16 @@
+(define polish-ctx (draft)
+  (list (Message [role System] [content "Improve this draft. If it can't be improved, reply with it unchanged."])
+        (Message [role User]   [content draft])))
+
+;; Each level catches the deadline itself, so the draft it holds -- the last
+;; complete one -- is what comes back.
+(define polish-from (model draft)
+  (catch (let* ([next (ask model (Text 1000) (polish-ctx draft) 'polish)])
+           (if (= next draft) draft (polish-from model next)))
+         e
+    (case e
+      [PastDeadline draft]
+      [_            (fail e)])))
+
+(define polish (model draft limit)
+  (budget ([time limit]) (polish-from model draft)))

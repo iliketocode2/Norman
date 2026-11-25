@@ -1,0 +1,7 @@
+;; Falls back to the strong model on every failure, including an outage.
+(define qa-ctx (question)
+  (list (Message [role User] [content question])))
+
+(define answer (fast strong question)
+  (catch (ask fast (Text 300) (qa-ctx question) 'fast) e
+    (ask strong (Text 300) (qa-ctx question) 'strong)))

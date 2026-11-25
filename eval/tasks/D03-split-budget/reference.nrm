@@ -1,0 +1,14 @@
+(define plan-ctx (task)
+  (list (Message [role System] [content "Write a short step-by-step plan for the task."])
+        (Message [role User]   [content task])))
+
+(define do-ctx (task plan)
+  (list (Message [role System] [content "Carry out the task, following the plan. Reply with the result only."])
+        (Message [role User]   [content task])
+        (Message [role User]   [content (string-append "Plan: " (show plan))])))
+
+(define plan-then-do (model task total)
+  (budget ([cost total])
+    (let* ([plan (budget ([cost (/ total 3)])
+                   (ask model (List (Text 200) 10) (plan-ctx task) 'plan))])
+      (ask model (Text 200) (do-ctx task plan) 'do))))

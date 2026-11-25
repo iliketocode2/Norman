@@ -1,0 +1,2 @@
+(grant claude   (model))
+(grant reviewer (human))

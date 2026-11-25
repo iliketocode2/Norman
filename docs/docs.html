@@ -86,8 +86,7 @@
       <span class="label">Money and time are not numbers</span>
       <p>
         They are distinct kinds of value. You may add money to money, and a duration to a duration,
-        but never money to seconds. That rules out an entire class of budget bug at the level of
-        values rather than by convention.
+        but never money to seconds, and never either to a <code>Num</code>.
       </p>
     </div>
 
@@ -117,16 +116,26 @@
 
     <dl class="forms">
       <dt>(define <em>name</em> (<em>formals</em>) <em>body</em>)</dt>
-      <dd>A function. The formals must be distinct. Top-level names are mutually recursive.</dd>
+      <dd>A function. The formals must be distinct. Top-level names are mutually recursive, and each is defined <strong>once</strong>, including the names the <a href="#basis-functions">basis</a> defines.</dd>
 
       <dt>(val <em>name</em> <em>exp</em>)</dt>
       <dd>Evaluate once and bind the result. If it fails, nothing is bound and the failure is reported.</dd>
 
       <dt>(datatype <em>Type</em> [<em>Con</em> (<em>field</em> <em>ty</em>)…]…)</dt>
-      <dd>A sum type: a value is <em>one of</em> its constructors. Constructor names must be distinct, and they share one namespace across the program.</dd>
+      <dd>A sum type: a value is <em>one of</em> its constructors. Constructor names must be distinct, and they share one namespace across the program. A type, like any top-level name, is defined <strong>once</strong>: a second <code>datatype</code> or <code>record</code> of the same name is an error, including for the <a href="#basis-types">predefined types</a>.</dd>
 
       <dt>(record <em>Record</em> (<em>field</em> <em>ty</em>)…)</dt>
       <dd>A product type: a value has <em>all</em> of its fields.</dd>
+
+      <dt>(use <em>file</em>)</dt>
+      <dd>
+        Load another file here, as if its definitions were written at this point. The path is
+        relative to the file that says <code>use</code>. Its definitions, grants and scripts join one
+        global namespace (there are no modules), its top-level expressions run, and its own unit tests
+        run; anything that goes wrong there counts against this file. A file is loaded <strong>at
+        most once</strong> per run, so a second <code>use</code> of it, including a cycle, does
+        nothing. The whole tree of used files is type-checked before any of it runs.
+      </dd>
     </dl>
 
     <p>
@@ -178,9 +187,8 @@
 
     <p>
       <strong>Patterns are flat.</strong> A constructor applies to variables or <code>_</code>, never
-      to another pattern, and no variable may repeat within one pattern. This keeps matching a
-      single step, which keeps every proof about <code>case</code> to a single step too. Nested
-      patterns could be added later as sugar.
+      to another pattern, and no variable may repeat within one pattern. To match nested data, nest
+      <code>case</code>s.
     </p>
 
     <h3 id="exp-build" data-short="Building values">Building values</h3>
@@ -190,11 +198,12 @@
 (<span class="lit">list</span> {<span class="meta">exp</span>})                <span class="meta">; a list</span>
 (<span class="lit">cons</span> <span class="meta">exp</span> <span class="meta">exp</span>)              <span class="meta">; prepend</span></pre>
 
-    <h2 id="effects">The six agentic forms</h2>
+    <h2 id="effects">The seven agentic forms</h2>
     <p>
       These are what the language adds. Everything a program can do to the outside world happens
-      through <code>ask</code> and <code>call</code>; there is no other door, which is why a budget,
-      a deadline, the trace and the ownership rules apply to <em>everything</em>.
+      through <code>ask</code>, <code>call</code> and <code>consult</code>; there is no other door,
+      which is why a budget, a deadline, the trace and the ownership rules apply to
+      <em>everything</em>.
     </p>
 
     <h3 id="ask" data-short="ask">ask</h3>
@@ -205,6 +214,17 @@
       back. The site is a name for this place in the program; scripts and traces are keyed by it, and
       it defaults to the source location.
     </p>
+    <p>
+      A site is written <strong>literally</strong>, as a quoted symbol in the <code>ask</code>
+      itself. It can't be a variable or an expression, so a helper can't take a site as an
+      argument. When two asks share their shape, factor out what they share (the context, the
+      handling of the answer) and write each <code>ask</code>, with its own site, where it happens:
+    </p>
+    <pre><code>(define summary-ctx (doc)
+  (list (Message [role User] [content (string-append "Summarize: " doc)])))
+
+(par (ask model (Text 300) (summary-ctx left) 'left)
+     (ask model (Text 300) (summary-ctx right) 'right))</code></pre>
     <p>
       The answer is validated against <em>ty</em> before it is bound. If it doesn't fit, the ask
       produces <code>Invalid</code> rather than a value. Asking again is a separate, visible
@@ -223,6 +243,59 @@
       come from there. What the operation answers with is declared by the grant, not written at the
       call site — see <a href="#hosts">Hosts and capabilities</a>.
     </p>
+
+    <h3 id="consult" data-short="consult">consult</h3>
+    <pre class="syntax">(<span class="lit">consult</span> <span class="meta">person</span> <span class="meta">ty</span> <span class="meta">prompt</span> [<span class="lit">propose</span> <span class="meta">exp</span>] [<span class="meta">'site</span>])</pre>
+    <p>
+      Put a question to a person <strong>once</strong>, for an answer of type <em>ty</em>. The
+      person comes from a <a href="#hosts"><code>human</code> grant</a>, and <em>ty</em> must be
+      askable, exactly as for <code>ask</code>. The answer is validated the same way, and the site
+      is written literally, as for <a href="#ask"><code>ask</code></a>.
+    </p>
+    <p>
+      With <code>[propose <em>v</em>]</code>, the person sees <em>v</em> as a pre-filled answer and
+      may approve it, edit it, or decline. <strong>Approving gives back exactly <em>v</em></strong>,
+      editing gives back the edit, and declining fails with <code>(Declined reason)</code>. Run the
+      answer, never the original proposal, and what runs is what was approved.
+      <code>retry</code> never retries <code>Declined</code>.
+    </p>
+    <p>
+      Waiting for a person spends the scope's time, so give a consult's scope room for a person and
+      each model call its own short <code>budget</code> inside it. A person costs no money unless
+      the grant gives a price.
+    </p>
+
+    <div class="example">
+      <div class="head"><span class="title">consult.nrm</span>
+        <span class="tools"><button class="copy" type="button">Copy</button><button class="open" type="button">Playground</button><button class="run" type="button">Run</button></span></div>
+<pre><code>(grant reviewer (human))
+
+(define approved-plan (plan)
+  (consult reviewer (List (Text 80) 3)
+           "Approve, edit or decline this plan."
+           [propose plan]
+           'review))
+
+(val plan (list "read the failing test" "fix the parser"))
+
+(script approves  [review (approve) (latency 1min)])
+(script edits     [review (answer "[\"read the failing test\"]") (latency 2min)])
+(script declines  [review (decline "Don't touch the parser.") (latency 30s)])
+
+(under ([script approves] [time 1h])
+  ;; Approving gives back exactly what was proposed.
+  (check-expect (approved-plan plan) plan))
+
+(under ([script edits] [time 1h])
+  ;; Editing gives back the edit, and that is what the program runs.
+  (check-expect (approved-plan plan) (list "read the failing test")))
+
+(under ([script declines] [time 1h])
+  ;; Declining is a failure carrying the reason; retry leaves it alone.
+  (check-expect (approved-plan plan) (fail (Declined "Don't touch the parser.")))
+  (check-fail   (retry 3 (lambda () (approved-plan plan))) (Declined _)))</code></pre>
+      <div class="result"></div>
+    </div>
 
     <h3 id="fail-catch" data-short="fail and catch">fail and catch</h3>
     <pre class="syntax">(<span class="lit">fail</span> <span class="meta">exp</span>)
@@ -297,17 +370,11 @@
       400-byte reasons reserves far less than the same type with unbounded text, so it fits budgets
       the unbounded one is refused by.
     </p>
-    <div class="note">
-      <span class="label">Measured, not assumed</span>
-      <p>
-        The type is also <em>sent</em> with every ask, as a JSON schema, and billed as input. The
-        project's first real API call spent 538 input tokens on a 175-character prompt, 478 of them
-        on the schema. So bounding an <em>answer</em> shrinks the reservation, while adding a
-        constructor or a field makes every ask dearer on input for as long as the program runs. No
-        bound on the text inside those fields helps, because what is sent is the schema, not the
-        answer.
-      </p>
-    </div>
+    <p>
+      The type is also <strong>sent</strong> with every ask, as a JSON schema billed as input, and
+      it is usually most of the input. So every constructor and field makes every ask dearer, and no
+      bound on the text inside them helps. In a loop, use <a href="#hosts">prompt caching</a>.
+    </p>
 
     <h3 id="json" data-short="JSON encoding">How a type maps to JSON</h3>
     <table>
@@ -412,18 +479,30 @@
       <dt>(window <em>n</em> <em>ctx</em>)</dt>
       <dd>A context policy: every <code>System</code> message, then the last <em>n</em> others. Note that it moves system messages to the front.</dd>
     </dl>
+    <p>
+      These use helpers that are also top-level names, so a program can't define them again:
+      <code>attempt</code>, <code>best-of*</code>, <code>correction</code>,
+      <code>first-some</code>, <code>last-n</code> and <code>system?</code>.
+    </p>
 
     <h2 id="hosts">Hosts and capabilities</h2>
     <pre class="syntax">(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">model</span> [<span class="lit">id</span> <span class="meta">"…"</span>] [<span class="lit">in</span> <span class="meta">p</span>] [<span class="lit">out</span> <span class="meta">p</span>] [<span class="lit">cache</span> <span class="meta">5min|1h</span>] [<span class="lit">cache-read</span> <span class="meta">p</span>] [<span class="lit">ceiling</span> <span class="meta">n</span>] [<span class="lit">think</span> <span class="meta">n</span>]))
 (<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">kernel</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))        <span class="meta">; stateful</span>
 (<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">filesystem</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))    <span class="meta">; stateful</span>
-(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">http</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))          <span class="meta">; stateless</span></pre>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">http</span> {[<span class="meta">op</span> <span class="meta">ty</span>]}))          <span class="meta">; stateless</span>
+(<span class="lit">grant</span> <span class="meta">name</span> (<span class="lit">human</span> [<span class="lit">price</span> <span class="meta">money</span>]))        <span class="meta">; a person, for consult; the price is optional</span></pre>
+    <p>
+      Live, only <code>model</code> and <code>kernel</code> (with <code>--python</code>) have real
+      hosts so far; <code>filesystem</code> and <code>http</code> answer only from scripts. A
+      <code>human</code> grant must be bound on the command line before a live run starts:
+      <code>--human <em>name</em>=tty</code> asks at the terminal, and
+      <code>--human <em>name</em>=unattended</code> makes any consult stop the run.
+    </p>
 
     <h3 id="tool-types" data-short="What a tool answers with">What a tool answers with</h3>
     <p>
       A grant declares each operation's result type, so a tool's answer is typed the same way a
-      model's is. The declaration lives at the grant rather than the call site because the grant is
-      already the host–program contract, and because a capability should carry its own interface.
+      model's is. The call site names no type.
     </p>
     <pre class="syntax">(<span class="lit">grant</span> py (<span class="lit">kernel</span> [exec (<span class="lit">Text</span> 4000)] [count <span class="lit">Num</span>] [solve Outcome]))
 (<span class="lit">call</span> py count <span class="meta">"wc -l"</span>)        <span class="meta">; a Num, not the text "7"</span></pre>
@@ -433,15 +512,10 @@
       <li><strong>A declared <code>Text</code> takes the result verbatim,</strong> and only its bound is checked.</li>
       <li><strong>Any other type reads the result as JSON</strong> and validates it, exactly as a model's reply is validated. Failure is <code>Invalid</code>, so <code>retry</code> handles a malformed tool result for free.</li>
     </ol>
-    <div class="note">
-      <span class="label">Why 3 and 4 differ</span>
-      <p>
-        An <code>ask</code> that wants <code>Text</code> receives a JSON string; a <code>call</code>
-        that wants <code>Text</code> receives raw bytes. The channels really are different — a model
-        emits JSON because a schema told it to, while a tool emits bytes, and the grant is what says
-        what those bytes mean.
-      </p>
-    </div>
+    <p>
+      Note the difference from <code>ask</code>: there, <code>Text</code> is a JSON string; here, it
+      is the tool's raw output.
+    </p>
     <p>
       Every model field is optional and falls back to a default. Prices are dollars per million
       tokens, with up to three decimals: <code>[in 3]</code> is $3 per million input tokens,
@@ -475,17 +549,26 @@
     <p>Faults are injected the same way, which is what makes failure paths testable at all:</p>
     <table>
       <tbody>
-        <tr><td><code>(reply "…")</code></td><td>what the model says; pair with <code>(out n)</code> for output tokens</td></tr>
+        <tr><td><code>(reply "…")</code></td><td>what the model says, as JSON, validated against the ask's type: an answer of type <code>(Text n)</code> is a JSON string, <code>(reply "\"yes\"")</code>, and <code>(reply "yes")</code> is <code>Invalid</code>; pair with <code>(out n)</code> for output tokens</td></tr>
         <tr><td><code>(refusal "category")</code></td><td>the model declines</td></tr>
         <tr><td><code>(provider-error "503 …")</code></td><td>the provider fails</td></tr>
         <tr><td><code>(result "…")</code></td><td>a tool succeeds</td></tr>
         <tr><td><code>(error "…")</code></td><td>a tool fails</td></tr>
+        <tr><td><code>(approve)</code></td><td>a person approves the proposal unchanged</td></tr>
+        <tr><td><code>(answer "…")</code></td><td>a person gives this answer, as JSON</td></tr>
+        <tr><td><code>(decline "…")</code></td><td>a person declines, with this reason</td></tr>
         <tr><td><code>(latency 2s)</code></td><td>how long it takes on the simulated clock</td></tr>
       </tbody>
     </table>
 
     <h3 id="checks" data-short="Test forms">Test forms</h3>
     <pre class="syntax">(<span class="lit">under</span> ([<span class="lit">script</span> <span class="meta">Name</span>] [<span class="lit">cost</span> <span class="meta">$1.00</span>] [<span class="lit">time</span> <span class="meta">1min</span>]) {<span class="meta">unit-test</span>})</pre>
+    <p>
+      Each item is optional. A <code>[script Name]</code> must name a script defined in this file or
+      a file it uses, and a file defines each script name once; the checker enforces both before
+      anything runs. A file may reuse a script name from a file it uses: that file's tests have
+      already run, against its own script.
+    </p>
     <dl class="forms">
       <dt>(check-expect <em>e</em> <em>expected</em>)</dt>
       <dd>Both sides run in their own fresh world, so evaluating the expected value cannot consume the script. Two equal failures agree too, so <code>(check-expect (ask-v) (fail (Refused 'cyber)))</code> says exactly how it fails.</dd>
@@ -547,7 +630,11 @@
 (<span class="lit">budget</span> ([<span class="lit">cost</span> <span class="meta">e</span>]) <span class="meta">body</span>)    =  BUDGET(<span class="meta">e</span>, ∞, <span class="meta">body</span>)</pre>
 
     <h2 id="wellformed">What is checked before a program runs</h2>
-    <p>Each of these is decidable from the syntax alone, so the parser rejects it outright.</p>
+    <p>
+      A whole file is checked before any of it runs, and a program that doesn't check never starts,
+      so a mistake found here can't spend money. There are two passes.
+    </p>
+    <p><strong>The parser</strong> rejects what is decidable from the syntax alone:</p>
     <ol>
       <li>The formals of a <code>lambda</code> or <code>define</code> are distinct; so are a datatype's constructors and a record's fields.</li>
       <li>A <code>workflow</code>'s binding names are distinct.</li>
@@ -556,10 +643,32 @@
       <li>Forms are applied with the right number of parts.</li>
     </ol>
     <p>
-      Askability is checked when the <code>ask</code> runs rather than at parse time, because a
-      function may ask for a datatype defined later in the file. Everything else about types is a
-      run-time check too. Moving those to compile time is what the planned type and effect system is
-      for — see <a href="./#status">Status</a>.
+      <strong>The type and effect checker</strong> then infers every type, with no annotations, and
+      rejects a program that could reach any of these:
+    </p>
+    <ul>
+      <li>an <code>if</code> on a non-Boolean; applying a non-function, or with the wrong number of arguments; an unbound name; an unknown constructor, record or field;</li>
+      <li><code>ask</code> on a non-model, <code>consult</code> on a non-person, <code>call</code> on a non-capability;</li>
+      <li>an <strong>unaskable type</strong> in <code>ask</code> or <code>consult</code>, or a proposal of the wrong shape;</li>
+      <li>an undeclared operation on a closed grant; <code>show</code> of a function, model, person or capability; <code>fail</code> of a non-<code>Failure</code>;</li>
+      <li>two concurrent <code>workflow</code> steps that <strong>share a stateful tool</strong>.</li>
+    </ul>
+    <p>
+      It <strong>warns</strong>, without rejecting, about a <code>case</code> that may not match, a
+      workflow step that reads <code>(remaining)</code>, and two steps that consult the same person.
+    </p>
+    <p>
+      Some things stay run-time errors by design: division by zero and overflow, a
+      <code>substring</code> out of range, a size bound exceeded, an exhausted script, and the step
+      limit. <code>norman --no-check</code> runs a program without the checker.
+    </p>
+    <p>
+      Each diagnostic names the file, line and column of the expression at fault, and a mistake
+      is reported once, not again at every use of the definition it broke.
+      <code>norman --format json</code> writes each diagnostic as one JSON object, with
+      <code>kind</code>, <code>file</code>, <code>line</code>, <code>column</code> and
+      <code>message</code>, and for a type mismatch <code>expected</code> and <code>found</code>,
+      for a program (or an agent) that repairs code from them.
     </p>
 
     <h2 id="reserved">Reserved words</h2>
@@ -573,10 +682,10 @@
       <code>par</code> <code>and</code> <code>or</code> <code>_</code>
     </p>
     <p>
-      <code>cost</code> and <code>time</code> are <strong>not</strong> reserved. They appear only in
-      fixed bracket positions, and they are the field names of <code>Resources</code>. An earlier
-      draft did reserve them, which made <code>(. (remaining) cost)</code> a syntax error in the
-      language's own basis. Running the tests caught it.
+      <code>cost</code>, <code>time</code>, <code>propose</code> and <code>price</code> are
+      <strong>not</strong> reserved: they appear only in fixed bracket positions, so they are free to
+      use as names. <code>cost</code> and <code>time</code> are the fields of
+      <code>Resources</code>.
     </p>
 
     <h2 id="deeper">Going deeper</h2>

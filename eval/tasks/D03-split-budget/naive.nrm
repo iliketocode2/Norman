@@ -1,0 +1,8 @@
+;; Caps the whole, but lets planning take as much of it as it likes.
+(define plan-then-do (model task total)
+  (budget ([cost total])
+    (let* ([plan (ask model (List (Text 200) 10) (list (Message [role User] [content task])) 'plan)])
+      (ask model (Text 200)
+           (list (Message [role User] [content task])
+                 (Message [role User] [content (show plan)]))
+           'do))))

@@ -1,0 +1,2 @@
+(grant fast   (model [in 1] [out 5]))
+(grant strong (model [in 15] [out 75]))

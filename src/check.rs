@@ -29,10 +29,11 @@
 //! is one kernel, and every use of `k` must say so.
 
 use crate::ast::*;
-use crate::lexer::read_all;
-use crate::parser::Parser;
+use crate::lexer::{Sx, read_all};
+use crate::parser::{Parser, Spans, span_key};
 use crate::types::TypeEnv;
 use crate::value::Value;
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -852,6 +853,16 @@ pub struct Checker {
     globals: HashMap<Name, Global>,
     /// Where each global was defined, for the redefinition rule (Q-2).
     defined_in: HashMap<Name, String>,
+    /// Where each datatype and record was defined: the same rule for types.
+    types_defined_in: HashMap<Name, String>,
+    /// Where each expression came from, filled in by the parser.
+    spans: RefCell<Spans>,
+    /// Where the error being reported happened: the innermost expression
+    /// with a known location that the error passed through on its way out.
+    err_at: Option<Loc>,
+    /// Every script defined so far, in any file: a test's `[script s]` must
+    /// name one of them.
+    scripts: HashMap<Name, String>,
     /// The operations each capability grant declares; none means an open
     /// interface, every operation answering Text (`10` §2.1).
     ops: HashMap<Name, Vec<(Name, Type)>>,
@@ -889,6 +900,10 @@ impl Checker {
             theta: TypeEnv::default(),
             globals,
             defined_in: HashMap::new(),
+            types_defined_in: HashMap::new(),
+            spans: RefCell::new(HashMap::new()),
+            err_at: None,
+            scripts: HashMap::new(),
             ops: HashMap::new(),
             pending: vec![],
             answers: vec![],
@@ -936,7 +951,8 @@ impl Checker {
         let forms = match read_all(src, file) {
             Ok(f) => f,
             Err(e) => {
-                report.errors.push(e);
+                // The lexer's errors are syntax errors too.
+                report.errors.push(format!("syntax error: {}", e));
                 return report;
             }
         };
@@ -944,23 +960,31 @@ impl Checker {
         // later forms parse with the records they mention.
         let mut items: Vec<(Loc, Item)> = vec![];
         let mut tests: Vec<UnitTest> = vec![];
+        // Each `under`'s script, checked once the whole file has been read.
+        let mut wanted: Vec<(Loc, Name)> = vec![];
+        let mut own_scripts: HashMap<Name, Loc> = HashMap::new();
         for sx in &forms {
-            let top = match Parser::new(&self.theta).top(sx) {
+            let top = match Parser::with_spans(&self.theta, &self.spans).top(sx) {
                 Ok(t) => t,
                 Err(e) => {
                     report.errors.push(format!("syntax error: {}", e));
+                    self.stand_in_for(sx, &mut report);
                     continue;
                 }
             };
             let loc = sx.loc().clone();
             match top {
                 Top::Def(Def::Datatype(t, ps, cons)) => {
-                    if let Err(e) = self.theta.add_datatype(t, ps, cons) {
+                    if self.type_is_new(&t, &loc, &mut report)
+                        && let Err(e) = self.theta.add_datatype(t, ps, cons)
+                    {
                         report.errors.push(format!("{}: {}", loc, e));
                     }
                 }
                 Top::Def(Def::Record(r, ps, fs)) => {
-                    if let Err(e) = self.theta.add_record(r, ps, fs) {
+                    if self.type_is_new(&r, &loc, &mut report)
+                        && let Err(e) = self.theta.add_record(r, ps, fs)
+                    {
                         report.errors.push(format!("{}: {}", loc, e));
                     }
                 }
@@ -992,9 +1016,39 @@ impl Checker {
                         self.ops.insert(x, (*ops).clone());
                     }
                 }
-                Top::Script(..) => {}
-                Top::Under(_, ts) => tests.extend(ts),
+                // Once per file. A file's tests run as soon as it's read, so a
+                // later file that reuses a script's name (as a task's hidden
+                // tests do, after `use`ing the solution) can't change what the
+                // earlier file's tests ran against. Within one file it would.
+                Top::Script(name, _) => match own_scripts.get(&name) {
+                    Some(prev) => report
+                        .errors
+                        .push(format!("{}: the script {} is already defined in this file, at {}", loc, name, prev)),
+                    None => {
+                        own_scripts.insert(name.clone(), loc.clone());
+                        self.scripts.insert(name, loc.to_string());
+                    }
+                },
+                Top::Under(cfg, ts) => {
+                    if let Some(s) = cfg.script {
+                        wanted.push((loc, s));
+                    }
+                    tests.extend(ts)
+                }
                 Top::Test(t) => tests.push(t),
+            }
+        }
+        // A file's tests run once the file is read, so a script defined
+        // anywhere in it, or in a file it uses, is in time.
+        for (loc, s) in wanted {
+            if !self.scripts.contains_key(&s) {
+                let mut known: Vec<&str> = self.scripts.keys().map(|k| &**k).collect();
+                known.sort();
+                let known = match known.as_slice() {
+                    [] => "no scripts are defined".to_string(),
+                    ks => format!("the scripts defined are {}", ks.join(", ")),
+                };
+                report.errors.push(format!("{}: there is no script named {}; {}", loc, s, known));
             }
         }
         self.check_items(file, items, &mut report);
@@ -1021,12 +1075,40 @@ impl Checker {
         report
     }
 
+    /// A datatype or record is defined once (Q-2), like any other name.
+    /// Without this, a second definition silently replaced the first.
+    fn type_is_new(&mut self, t: &Name, loc: &Loc, report: &mut Report) -> bool {
+        if let Some(prev) = self.types_defined_in.get(t) {
+            report.errors.push(redefined(&loc.to_string(), &format!("the type {}", t), prev));
+            return false;
+        }
+        self.types_defined_in.insert(t.clone(), loc.to_string());
+        true
+    }
+
+    /// A `define` or `val` that didn't parse still names something, and the
+    /// rest of the file uses it. Bind the name at the most general type,
+    /// ∀a. a, so each use doesn't add an "unbound name" to the syntax error
+    /// that is the real problem. The file still doesn't check, so nothing runs.
+    fn stand_in_for(&mut self, sx: &Sx, report: &mut Report) {
+        let Some([head, name, ..]) = sx.list() else { return };
+        if !matches!(head.atom(), Some("define" | "val")) {
+            return;
+        }
+        let Some(x) = name.atom() else { return };
+        let scheme = self.anything();
+        self.define_global(&Rc::from(x), Global::Scheme(scheme), &sx.loc().to_string(), report);
+    }
+
+    /// ∀a. a: the type of a name whose definition failed, which fits every use.
+    fn anything(&mut self) -> Scheme {
+        let Ty::Var(v) = self.st.fresh() else { unreachable!("fresh makes a variable") };
+        Scheme { tvs: vec![v], evs: vec![], preds: vec![], ty: Ty::Var(v) }
+    }
+
     fn define_global(&mut self, x: &Name, g: Global, where_: &str, report: &mut Report) {
         if let Some(prev) = self.defined_in.get(x) {
-            report.errors.push(format!(
-                "{}: {} is already defined, at {} (a name is defined once: design/12, Q-2)",
-                where_, x, prev
-            ));
+            report.errors.push(redefined(where_, x, prev));
             return;
         }
         if matches!(self.globals.get(x), Some(Global::Prim(_))) {
@@ -1051,10 +1133,7 @@ impl Checker {
                 Item::Expr(_) => continue,
             };
             if let Some(prev) = self.defined_in.get(name) {
-                report.errors.push(format!(
-                    "{}: {} is already defined, at {} (a name is defined once: design/12, Q-2)",
-                    loc, name, prev
-                ));
+                report.errors.push(redefined(&loc.to_string(), name, prev));
                 continue;
             }
             if matches!(self.globals.get(name), Some(Global::Prim(_))) {
@@ -1062,10 +1141,7 @@ impl Checker {
                 continue;
             }
             if let Some(&j) = index.get(name) {
-                report.errors.push(format!(
-                    "{}: {} is already defined, at {} (a name is defined once: design/12, Q-2)",
-                    loc, name, items[j].0
-                ));
+                report.errors.push(redefined(&loc.to_string(), name, &items[j].0.to_string()));
                 continue;
             }
             index.insert(name.clone(), i);
@@ -1100,8 +1176,8 @@ impl Checker {
                 let j = index[&x];
                 if j > i {
                     report.errors.push(format!(
-                        "{}: this runs while {} loads, and needs {}, which is defined below it at {} \
-                         (move the definition up: design/12 §4.4)",
+                        "{}: this runs while {} loads, and needs {}, which is defined below it at {}; \
+                         move the definition up (design/12 §4.4)",
                         loc, file, x, items[j].0
                     ));
                     break;
@@ -1120,9 +1196,11 @@ impl Checker {
         for (loc, item) in &items {
             if let Item::Expr(e) = item {
                 let mark = self.st.preds.len();
+                self.err_at = None;
                 let result = self.infer_closed(e, mark);
                 if let Err(err) = result {
-                    report.errors.push(format!("{}: {}", loc, err));
+                    let at = self.error_at(loc);
+                    report.errors.push(format!("{}: {}", at, err));
                 }
                 self.flush_warnings(&format!("{}: ", loc), report);
             }
@@ -1160,6 +1238,7 @@ impl Checker {
         let mut failed = false;
         for (&i, (_, t)) in group.iter().zip(&mono) {
             let (loc, item) = &items[i];
+            self.err_at = None;
             let result = (|| -> R<()> {
                 let mut env = vec![];
                 let got = match item {
@@ -1171,7 +1250,8 @@ impl Checker {
             })();
             if let Err(e) = result {
                 let name = &mono[group.iter().position(|&j| j == i).unwrap()].0;
-                report.errors.push(format!("{}: in the definition of {}: {}", loc, name, e));
+                let at = self.error_at(loc);
+                report.errors.push(format!("{}: in the definition of {}: {}", at, name, e));
                 failed = true;
             }
         }
@@ -1183,6 +1263,7 @@ impl Checker {
             self.st.ftv(t, &mut gen_tvs);
             self.st.fev(t, &mut gen_evs);
         }
+        self.err_at = None;
         if let Err(e) = self.settle(mark, &outer, &gen_tvs, &gen_evs) {
             let names: Vec<&str> = mono.iter().map(|(n, _)| &**n).collect();
             report.errors.push(format!("{}: in the definition of {}: {}", items[group[0]].0, names.join(" and "), e));
@@ -1200,8 +1281,11 @@ impl Checker {
         self.flush_warnings(&prefix, report);
         for (name, t) in mono {
             let loc = &items[group[mono_index(group, items, &name)]].0;
+            // A definition that failed has already been reported. Its uses
+            // see the most general type, so they don't report it again
+            // with whatever half-solved type the failure left behind.
             let sc =
-                if failed { Scheme::mono(t) } else { self.generalize(&t, &preds, &outer, &BTreeSet::new(), values).0 };
+                if failed { self.anything() } else { self.generalize(&t, &preds, &outer, &BTreeSet::new(), values).0 };
             self.globals.insert(name.clone(), Global::Scheme(sc));
             self.defined_in.insert(name, loc.to_string());
         }
@@ -1303,13 +1387,32 @@ impl Checker {
 
     // ------------------------------------------------------------ predicates
 
+    /// The variables that `vs` stand for now: each one's free variables under
+    /// the current substitution.
+    fn through_subst(&mut self, vs: &BTreeSet<TV>) -> BTreeSet<TV> {
+        let mut out = BTreeSet::new();
+        for &v in vs {
+            let t = self.st.zonk(&Ty::Var(v));
+            self.st.ftv(&t, &mut out);
+        }
+        out
+    }
+
     /// Discharge the predicates added since `mark`: simplify to a fixed
     /// point, default the numeric ones on variables that `keep` doesn't
     /// mention and the environment doesn't hold, and report what can never
     /// hold. Predicates still on `keep`'s variables stay for the scheme.
     fn settle(&mut self, mark: usize, env_tvs: &BTreeSet<TV>, keep: &BTreeSet<TV>, live: &BTreeSet<EV>) -> R<()> {
+        let (mut keep, mut env_tvs) = (keep.clone(), env_tvs.clone());
         loop {
             self.simplify_from(mark)?;
+            // Simplifying can bind a kept variable to a new one: resolving
+            // `(. p fst)` makes p a `(Pair a b)` and the field's type `a`. The
+            // sets are followed through the substitution, or an `Ord` on `a`
+            // would look ambiguous and be defaulted to Num, though the type
+            // mentions it.
+            keep = self.through_subst(&keep);
+            env_tvs = self.through_subst(&env_tvs);
             // Default per binding group (design/12 §3).
             let mut defaulted = false;
             let pending: Vec<Pred> = self.st.preds[mark..].to_vec();
@@ -1353,7 +1456,7 @@ impl Checker {
                     return Err(format!("can't tell which record's field {} this is; several records have it", f));
                 }
             }
-            let held: BTreeSet<TV> = keep.union(env_tvs).copied().collect();
+            let held: BTreeSet<TV> = keep.union(&env_tvs).copied().collect();
             if self.st.pred_live(&p, &held, live) {
                 i += 1;
                 continue;
@@ -1612,7 +1715,8 @@ impl Checker {
         let mut seen = HashSet::new();
         for w in std::mem::take(&mut self.pending) {
             if seen.insert(w.clone()) {
-                report.warnings.push(format!("{}warning: {}", prefix, w));
+                // The label first, as for every other kind of diagnostic.
+                report.warnings.push(format!("warning: {}{}", prefix, w));
             }
         }
     }
@@ -1772,7 +1876,29 @@ impl Checker {
     }
 
     /// `Γ ⊢ e : τ ! ε`.
+    /// Infer `e`, and on the way out of an error, note where it happened:
+    /// the first expression with a location that the error leaves is the
+    /// innermost one, so it's the most precise. Success clears the note, so
+    /// an error that was recovered from can't lend its location to a later one.
     fn infer(&mut self, env: &mut Vec<(Name, Scheme)>, e: &ExpRef) -> R<(Ty, Eff)> {
+        let result = self.infer_here(env, e);
+        match &result {
+            Ok(_) => self.err_at = None,
+            Err(_) if self.err_at.is_none() => {
+                self.err_at = self.spans.borrow().get(&span_key(e)).map(|(_, l)| l.clone());
+            }
+            Err(_) => {}
+        }
+        result
+    }
+
+    /// Where the error just returned happened, or `fallback` (the form it
+    /// was in) if no expression on its way out had a location.
+    fn error_at(&mut self, fallback: &Loc) -> Loc {
+        self.err_at.take().unwrap_or_else(|| fallback.clone())
+    }
+
+    fn infer_here(&mut self, env: &mut Vec<(Name, Scheme)>, e: &ExpRef) -> R<(Ty, Eff)> {
         let pure = Eff::default();
         match &**e {
             Exp::Literal(v) => Ok((
@@ -2218,6 +2344,7 @@ impl Checker {
             };
         }
         let mark = self.st.preds.len();
+        self.err_at = None;
         let result = (|| -> R<()> {
             let mut env = vec![];
             match &t.kind {
@@ -2240,7 +2367,26 @@ impl Checker {
         })();
         let settled = result.and_then(|_| self.settle(mark, &BTreeSet::new(), &BTreeSet::new(), &BTreeSet::new()));
         self.st.preds.truncate(mark);
-        settled
+        // The verdict is reported at the test; say where inside it, if
+        // somewhere more precise is known.
+        settled.map_err(|m| match self.err_at.take() {
+            Some(at) if at.to_string() != t.loc.to_string() => format!("at {}, {}", at, m),
+            _ => m,
+        })
+    }
+}
+
+/// A second definition of `what` at `at`; the first was at `prev`. A name
+/// the prelude defines is called predefined, not pointed at: the prelude is
+/// a file the reader has never seen.
+fn redefined(at: &str, what: &str, prev: &str) -> String {
+    if prev.starts_with("prelude.nrm:") {
+        format!(
+            "{}: {} is already defined: it's predefined, so give yours another name              (a name is defined once: design/12, Q-2)",
+            at, what
+        )
+    } else {
+        format!("{}: {} is already defined, at {} (a name is defined once: design/12, Q-2)", at, what, prev)
     }
 }
 

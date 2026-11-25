@@ -1,0 +1,12 @@
+;; the cheaper of two quotes, keeping the earlier one on a tie
+(define cheaper (a b) (if (< (. b cents) (. a cents)) b a))
+
+(define cheapest-of (best qs)
+  (case qs
+    ['() best]
+    [(cons q rest) (cheapest-of (cheaper best q) rest)]))
+
+(define cheapest (prices sku)
+  (case (retry 1 (lambda () (call prices quotes sku)))
+    ['() None]
+    [(cons q rest) (Some (cheapest-of q rest))]))

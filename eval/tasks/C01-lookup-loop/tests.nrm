@@ -1,0 +1,37 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script one-lookup
+  [move      (reply "{\"tag\":\"Lookup\",\"key\":\"boiling point of water\"}") (out 15) (latency 1s)
+             (reply "{\"tag\":\"Final\",\"answer\":\"100 C\"}") (out 10) (latency 1s)]
+  [kb/lookup (result "100 C at sea level") (latency 1s)])
+
+(script lookup-fails
+  [move      (reply "{\"tag\":\"Lookup\",\"key\":\"x\"}") (out 10) (latency 1s)
+             (reply "{\"tag\":\"Final\",\"answer\":\"I could not find out.\"}") (out 12) (latency 1s)]
+  [kb/lookup (error "no such key") (latency 1s)])
+
+(script endless
+  [move      (reply "{\"tag\":\"Lookup\",\"key\":\"a\"}") (out 10) (latency 1s)
+             (reply "{\"tag\":\"Lookup\",\"key\":\"b\"}") (out 10) (latency 1s)]
+  [kb/lookup (result "A") (latency 1s)
+             (result "B") (latency 1s)])
+
+(script direct
+  [move (reply "{\"tag\":\"Final\",\"answer\":\"Yes.\"}") (out 8) (latency 1s)])
+
+(script nothing)
+
+(under ([script one-lookup] [cost $1.00] [time 1min])
+  (check-expect (investigate claude kb "At what temperature does water boil?" 5) "100 C")
+  (check-within (investigate claude kb "At what temperature does water boil?" 5) ([time 3s])))
+(under ([script lookup-fails] [cost $1.00] [time 1min])
+  ;; a failed lookup is an observation, not the end of the run
+  (check-expect (investigate claude kb "What is x?" 5) "I could not find out."))
+(under ([script endless] [cost $1.00] [time 1min])
+  (check-expect (investigate claude kb "Keep looking." 2) (fail 'out-of-fuel)))
+(under ([script direct] [cost $1.00] [time 1min])
+  (check-expect (investigate claude kb "Is this easy?" 1) "Yes."))
+(under ([script nothing] [cost $1.00] [time 1min])
+  (check-expect (investigate claude kb "Anything?" 0) (fail 'out-of-fuel))
+  (check-within (investigate claude kb "Anything?" 0) ([cost $0] [time 0s])))

@@ -1,0 +1,19 @@
+;; insert x into xs, which is sorted largest first
+(define insert (x xs)
+  (case xs
+    ['() (list x)]
+    [(cons y ys) (if (>= x y) (cons x xs) (cons y (insert x ys)))]))
+
+(define sort-desc (xs)
+  (case xs
+    ['() '()]
+    [(cons y ys) (insert y (sort-desc ys))]))
+
+(define take (k xs)
+  (if (<= k 0)
+      '()
+      (case xs
+        ['() '()]
+        [(cons y ys) (cons y (take (- k 1) ys))])))
+
+(define top-k (k xs) (take k (sort-desc xs)))

@@ -110,6 +110,46 @@ async function checkGenerated() {
 
 await checkGenerated();
 
+/* Claims known to have gone stale. Agents are given the reference as context,
+ * so a false sentence there becomes a wrong program. Each entry is a pattern
+ * that was once true and isn't now, with what replaced it. Only the pages
+ * that describe the language as it is today are scanned: the numbered design
+ * documents record history, and may say what was true when they were written
+ * (design/13, Phase 0). Add a pattern whenever a release falsifies a claim. */
+const STALE = [
+  [/planned type and effect system/i, 'the type and effect checker is built (design/12)'],
+  [/\bdraft, not built\b[^|]*type and effect/i, 'the type and effect checker is built (design/12)'],
+  [/everything else about types is a\s+run-time check/i, 'types are checked before a program runs'],
+  [/askability is checked when the\s+(<code>)?`?ask`?(<\/code>)? runs/i, 'askability is checked before a program runs'],
+  [/\bsix agentic forms\b/i, 'there are seven: consult is one'],
+  [/enforced (\*\*)?when the program (<em>)?runs/i, 'types are checked before a program runs; only budgets and deadlines are enforced while it runs'],
+];
+
+function checkStale() {
+  const root = path.join(here, '..');
+  const files = [
+    'README.md', 'design/README.md',
+    'docs/index.html', 'docs/docs.html', 'docs/demo.html', 'docs/playground.html',
+    'docs/munorman-reference.md',
+  ];
+  const problems = [];
+  for (const file of files) {
+    const full = path.join(root, file);
+    if (!fs.existsSync(full)) continue;
+    const text = fs.readFileSync(full, 'utf8');
+    for (const [pattern, truth] of STALE) {
+      const m = text.match(pattern);
+      if (m) {
+        const line = text.slice(0, m.index).split('\n').length;
+        problems.push(`${file}:${line}: "${m[0]}" is stale: ${truth}`);
+      }
+    }
+  }
+  report('no stale claims about the language', problems);
+}
+
+checkStale();
+
 // Every starter program in the playground.
 const { EXAMPLES } = await import(new URL('./examples.js', import.meta.url));
 for (const [name, source] of Object.entries(EXAMPLES)) {

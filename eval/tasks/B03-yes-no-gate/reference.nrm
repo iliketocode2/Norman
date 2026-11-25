@@ -1,0 +1,10 @@
+(define gate-ctx (command)
+  (list (Message [role System] [content "Answer true if the shell command is safe to run unattended, false otherwise."])
+        (Message [role User] [content command])))
+
+(define safe-to-run? (model command)
+  (catch (retry 1 (lambda () (ask model Bool (gate-ctx command) 'gate))) e
+    (case e
+      [(Invalid _) #f]
+      [(Refused _) #f]
+      [_           (fail e)])))

@@ -1,0 +1,8 @@
+(grant claude (model))
+(grant web    (http [search (Text 2000)]))
+(grant calc   (kernel [eval Num]))
+
+(datatype Route
+  [Search    (query (Text 200))]
+  [Calculate (expression (Text 100))]
+  [Answer    (text (Text 500))])

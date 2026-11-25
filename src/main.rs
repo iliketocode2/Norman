@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 const USAGE: &str =
-    "usage: norman [--live [--python EXE] [--human NAME=tty|unattended]…] [--trace] [--no-check] FILE.nrm …
+    "usage: norman [--version] [--live [--python EXE] [--human NAME=tty|unattended]…] [--trace] [--no-check] [--explain] [--format text|json] FILE.nrm …
 
 Type-checks each file, then loads it, printing the value of each top-level
 expression, then runs its unit tests (check-expect, check-fail, …). A file
@@ -31,13 +31,21 @@ that doesn't type-check is not run.
   --no-check
             run without the type checker, as before it existed: type
             mistakes are found when they happen, and check-type-error
-            tests fail";
+            tests fail
+  --explain keep the design-document citations in diagnostics, such as
+            (design/12, Q-2): the section that gives the rule's reason
+  --format json
+            write each diagnostic as one JSON object on stderr (kind, file,
+            line, column, message, and for a type mismatch expected and
+            found), and each other line as one JSON object on stdout";
 
 fn main() -> ExitCode {
     let mut files = vec![];
     let mut live = false;
     let mut trace = false;
     let mut check = true;
+    let mut explain = false;
+    let mut json = false;
     let mut python = None;
     let mut people = munorman::live::People::default();
     let mut args = std::env::args().skip(1);
@@ -71,8 +79,21 @@ fn main() -> ExitCode {
             }
             "--trace" => trace = true,
             "--no-check" => check = false,
+            "--explain" => explain = true,
+            "--format" => match args.next().as_deref() {
+                Some("json") => json = true,
+                Some("text") => json = false,
+                other => {
+                    eprintln!("--format takes text or json, not {}\n\n{}", other.unwrap_or("nothing"), USAGE);
+                    return ExitCode::from(2);
+                }
+            },
             "-h" | "--help" => {
                 eprintln!("{}", USAGE);
+                return ExitCode::SUCCESS;
+            }
+            "--version" => {
+                println!("norman {}", env!("CARGO_PKG_VERSION"));
                 return ExitCode::SUCCESS;
             }
             f if f.starts_with("--") => {
@@ -97,6 +118,8 @@ fn main() -> ExitCode {
     let mut interp = Interp::new();
     interp.trace = trace;
     interp.check = check;
+    interp.explain = explain;
+    interp.json = json;
     interp.python = python;
     if live {
         // H3: refuse to start, before anything runs or is paid for, while any
@@ -126,7 +149,12 @@ fn main() -> ExitCode {
             // so a script can tell (say) a refused live consult from success.
             Ok(summary) => ok &= summary.clean(),
             Err(msg) => {
-                eprintln!("{}", msg);
+                let d = munorman::diag::Diagnostic::parse(munorman::diag::Kind::Load, &msg);
+                if json {
+                    eprintln!("{}", d.json());
+                } else {
+                    eprintln!("{}", d.text());
+                }
                 ok = false;
             }
         }

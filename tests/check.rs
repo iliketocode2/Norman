@@ -368,6 +368,92 @@ fn a_name_is_defined_once() {
     assert!(err.contains("primitive"), "{}", err);
 }
 
+/// Types too. A second definition used to replace the first silently, so a
+/// program that pasted in its interface checked and then failed at run time
+/// with constructors that "didn't exist" (found by the authoring eval).
+#[test]
+fn a_type_is_defined_once() {
+    for (src, name) in [
+        ("(datatype T [A])\n(datatype T [B])", "T"),
+        ("(record R (x Num))\n(record R (x Num))", "R"),
+        ("(datatype T [A])\n(record T (x Num))", "T"),
+        ("(record R (x Num))\n(datatype R [A])", "R"),
+        ("(datatype (Option a) [Nothing] [Just (value a)])", "Option"),
+        ("(record Message (role Role) (content Text))", "Message"),
+    ] {
+        let err = rejected(src);
+        assert!(err.contains(&format!("the type {} is already defined", name)) && err.contains("Q-2"), "{}", err);
+    }
+    // The same definition twice is still two definitions.
+    let (_, r) = check("(datatype T [A])\n(datatype T [A])");
+    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+}
+
+const SCRIPT: &str = "(script s [x (reply \"\\\"a\\\"\") (out 1) (latency 1s)])\n";
+
+/// A test's `[script s]` names a script, and scripts are defined once. Both
+/// were found only when a test ran, if at all (a second script replaced the
+/// first).
+#[test]
+fn a_test_names_a_script_that_exists() {
+    let err = rejected(&format!("{}(under ([script none] [cost $1] [time 1min]) (check-expect 1 1))", SCRIPT));
+    assert!(err.contains("there is no script named none; the scripts defined are s"), "{}", err);
+    let err = rejected("(under ([script none] [cost $1] [time 1min]) (check-expect 1 1))");
+    assert!(err.contains("no scripts are defined"), "{}", err);
+    // Defined later in the same file is in time: the tests run after the file is read.
+    let (_, r) = check(&format!("(under ([script s] [cost $1] [time 1min]) (check-expect 1 1))\n{}", SCRIPT));
+    assert!(r.ok(), "{:?}", r.errors);
+    let err = rejected(&format!("{}{}", SCRIPT, SCRIPT));
+    assert!(err.contains("the script s is already defined in this file"), "{}", err);
+}
+
+/// A later file may reuse a script name from a file it uses: the used file's
+/// tests have already run. A task's hidden tests do exactly this after
+/// `use`ing a solution whose own tests chose the same names.
+#[test]
+fn a_later_file_may_reuse_a_script_name() {
+    let dir = std::env::temp_dir().join(format!("munorman-scripts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("lib.nrm"),
+        format!("{}(under ([script s] [cost $1] [time 1min]) (check-expect 1 1))\n", SCRIPT),
+    )
+    .unwrap();
+    let mut c = Checker::new();
+    let r = c.check_str(
+        &format!("(use lib.nrm)\n{}(under ([script s] [cost $1] [time 1min]) (check-expect 2 2))", SCRIPT),
+        "main.nrm",
+        &dir,
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(r.ok(), "{:?}", r.errors);
+}
+
+/// A site written as a variable: the message says what to write instead, and
+/// the helper it was in doesn't come back as an "unbound name" wherever it's
+/// used. Every model in the eval's baseline wrote this helper first.
+#[test]
+fn a_site_that_is_not_a_quoted_symbol_is_one_error() {
+    let (_, r) = check(
+        r#"
+(grant claude (model))
+(define summarize (model doc site)
+  (ask model (Text 300) (list (Message [role User] [content doc])) site))
+(define compare (model left right)
+  (string-append (summarize model left 'left) (summarize model right 'right)))
+(val x (compare claude "a" "b"))
+"#,
+    );
+    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+    assert!(r.errors[0].contains("a helper can't take a site as an argument"), "{}", r.errors[0]);
+    // The stand-in doesn't let the name be defined twice.
+    let (_, r) = check("(define f (x) (ask x (Text 10) '() s))\n(define f (x) x)");
+    assert!(r.errors.iter().any(|e| e.contains("f is already defined")), "{:?}", r.errors);
+    // consult says the same.
+    let err = rejected("(grant p (human))\n(define g (s) (consult p Bool \"ok?\" s))");
+    assert!(err.contains("a site is a quoted symbol"), "{}", err);
+}
+
 // ------------------------------------------------------------------ polymorphism
 
 #[test]
@@ -406,6 +492,19 @@ fn overloading_stays_generic_and_defaults_per_group() {
     assert!(check("(define twice (x) (+ x x))\n(define m () (twice $1.00))").1.ok());
     let err = rejected("(define twice (x) (+ x x))\n(define m () (twice #t))");
     assert!(err.contains("not on Bool"), "{}", err);
+}
+
+/// Resolving a field binds the field's type to the record's parameter, a
+/// variable the type didn't mention a moment before. An `Ord` on it used to be
+/// defaulted to Num, so comparing a pair's text with `<` was rejected at every
+/// use (found by the authoring eval, in `A01`).
+#[test]
+fn ordering_a_field_stays_generic() {
+    let got = schemes("(define first-below? (p w) (< (. p fst) w))", &["first-below?"]);
+    assert_eq!(got[0], "Ord a => ((Pair a b) a -> Bool)");
+    let (_, r) =
+        check("(define first-below? (p w) (< (. p fst) w))\n(val t (first-below? (Pair [fst \"a\"] [snd 1]) \"b\"))");
+    assert!(r.ok(), "{:?}", r.errors);
 }
 
 /// A field only one record has decides the record. A field several records

@@ -1,0 +1,21 @@
+(use interface.nrm)
+(use solution.nrm)
+
+;; Planning reserves at least $0.0315 for its largest possible answer, and
+;; doing at least $0.003. So $0.30 is enough for both under any reasonable
+;; prompt, and under $0.06 planning's third ($0.02) can't cover its
+;; reservation, although the whole would.
+
+(script counts
+  [plan (reply "[\"list the files\",\"count them\"]") (out 12) (latency 2s)]
+  [do   (reply "\"12 files\"") (out 4) (latency 1s)])
+(script unused)
+
+(under ([script counts] [cost $5.00] [time 1min])
+  (check-expect (plan-then-do claude "Count the files." $0.30) "12 files")
+  (check-within (plan-then-do claude "Count the files." $0.30) ([cost $0.30] [time 3s])))
+(under ([script unused] [cost $5.00] [time 1min])
+  (check-fail   (plan-then-do claude "Count the files." $0.06) OverBudget)
+  ;; refused before the model is contacted: nothing spent
+  (check-within (plan-then-do claude "Count the files." $0.06) ([cost $0] [time 0s]))
+  (check-fail   (plan-then-do claude "Count the files." $0) OverBudget))

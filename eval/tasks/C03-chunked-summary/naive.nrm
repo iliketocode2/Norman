@@ -1,0 +1,12 @@
+;; Folds correctly, but one bad reply ends the run.
+(define summarize-from (model summary chunks)
+  (case chunks
+    ['() summary]
+    [(cons c cs)
+       (summarize-from model
+                       (ask model (Text 500)
+                            (list (Message [role User] [content (string-append summary c)]))
+                            'fold)
+                       cs)]))
+
+(define summarize (model chunks) (summarize-from model "" chunks))

@@ -477,7 +477,19 @@ Questions, **decided** with the user before implementation began:
   deviation 2). With whole-file checking, "which definition does this use?"
   has no good answer, and a second definition is usually an accident. µNorman
   has no interactive REPL, which is where Ramsey's redefinition habit earns
-  its keep.
+  its keep. The rule covers type names too (added in `13` step 3). Until
+  then a second `datatype` or `record` silently replaced the first, and the
+  authoring eval (`14`) found models doing it by pasting an interface they'd
+  been given.
+  Script names follow a weaker rule: **once per file.** A file's tests run as
+  soon as the file is read, so a later file that reuses a script name can't
+  change what an earlier file's tests ran against. Within one file it would.
+  The global version of the rule was tried first. It rejected every eval
+  task whose solution's tests happened to name a script the way the hidden
+  tests did, and the hidden tests `use` the solution. Whether scripts should
+  be scoped to their file outright is open; it's a language change and
+  needs its own note. A test's `[script s]` must name a script defined so
+  far, which the checker sees without running anything.
 - **Q-3, decided: a non-exhaustive `case` is an error when its scrutinee is
   an answer from `ask` or `consult`, and a warning otherwise.** A missed
   constructor in an answer type is the commonest way an agent program gets

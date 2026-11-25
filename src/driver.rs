@@ -3,13 +3,14 @@
 //! Ramsey's interpreters, a file's unit tests run after the whole file is loaded.
 
 use crate::ast::*;
+use crate::diag::{Diagnostic, Kind};
 use crate::lexer::read_all;
 use crate::machine::{self, Outcome, Res, WorldConfig, match_pattern};
 use crate::parser::Parser;
 use crate::types::TypeEnv;
 use crate::value::*;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -34,6 +35,11 @@ pub struct Interp {
     pub people: crate::live::People,
     /// Print the trace of each top-level evaluation: one line per ask or call.
     pub trace: bool,
+    /// Keep the design-document citations in diagnostics (`--explain`).
+    pub explain: bool,
+    /// Write each diagnostic and result line as one JSON object
+    /// (`--format json`, design/13 §1.2).
+    pub json: bool,
     /// Everything the interpreter reports, kept as a value rather than only
     /// written to the terminal. Natively it is echoed to stdout and stderr as
     /// well; on wasm, where there is no terminal, it is the only output there
@@ -50,24 +56,55 @@ pub struct Interp {
     /// (`norman --no-check`), a program runs as it did before the checker,
     /// and WORKFLOWSHARED is checked when a workflow starts.
     pub check: bool,
+    /// Every file loaded so far, by canonical path. A file is loaded at most
+    /// once per interpreter, as the checker reads it at most once: a second
+    /// `use` of it (a diamond, or a cycle back to a file still loading) does
+    /// nothing. Without this, a `use` cycle recursed until the stack
+    /// overflowed, and a diamond ran a file's definitions and tests twice.
+    loaded: HashSet<PathBuf>,
 }
 
 impl Interp {
     /// Report a line: to the transcript always, and to the terminal natively.
     fn say(&self, line: impl std::fmt::Display) {
+        let line = if self.json {
+            serde_json::json!({ "kind": "output", "text": line.to_string() }).to_string()
+        } else {
+            line.to_string()
+        };
+        self.emit_out(&line);
+    }
+
+    /// Report how a file's tests went.
+    fn say_tests(&self, file: &str, passed: usize, total: usize, text: String) {
+        if self.json {
+            let o = serde_json::json!({ "kind": "tests", "file": file, "passed": passed, "total": total });
+            self.emit_out(&o.to_string());
+        } else {
+            self.emit_out(&text);
+        }
+    }
+
+    fn emit_out(&self, line: &str) {
         #[cfg(not(target_arch = "wasm32"))]
         println!("{}", line);
         let mut out = self.out.borrow_mut();
-        out.push_str(&line.to_string());
+        out.push_str(line);
         out.push('\n');
     }
 
-    /// Report a problem: like `say`, but to stderr natively.
-    fn complain(&self, line: impl std::fmt::Display) {
+    /// Report a problem of the given kind: labelled, without its
+    /// design-document citations unless `explain`, or as JSON. To the
+    /// transcript always, and to stderr natively.
+    fn complain(&self, kind: Kind, line: impl std::fmt::Display) {
+        let line = line.to_string();
+        let line = if self.explain { line } else { crate::diag::strip_citations(&line) };
+        let d = Diagnostic::parse(kind, &line);
+        let line = if self.json { d.json().to_string() } else { d.text() };
         #[cfg(not(target_arch = "wasm32"))]
         eprintln!("{}", line);
         let mut out = self.out.borrow_mut();
-        out.push_str(&line.to_string());
+        out.push_str(&line);
         out.push('\n');
     }
 
@@ -132,10 +169,13 @@ impl Interp {
             #[cfg(not(target_arch = "wasm32"))]
             people: Default::default(),
             trace: false,
+            explain: false,
+            json: false,
             out: RefCell::new(String::new()),
             checker: crate::check::Checker::new(),
             verdicts: HashMap::new(),
             check: true,
+            loaded: HashSet::new(),
         };
         for p in Prim::ALL {
             i.globals.insert(Rc::from(p.name()), Value::Prim(p));
@@ -166,13 +206,16 @@ impl Interp {
     /// errors, report them and return the summary of a file that never ran.
     fn absorb(&mut self, report: crate::check::Report) -> Option<Summary> {
         for w in &report.warnings {
-            self.complain(w);
+            self.complain(Kind::Warning, w);
         }
         if !report.ok() {
             for e in &report.errors {
-                self.complain(format!("type error: {}", e));
+                // The checker reads the program as well as typing it, so
+                // some of what it rejects is syntax.
+                let kind = if e.starts_with("syntax error: ") { Kind::Syntax } else { Kind::Type };
+                self.complain(kind, e);
             }
-            self.complain("The program was not run, because it doesn't type-check (design/12, T2).");
+            self.complain(Kind::Note, "The program was not run, because it doesn't type-check (design/12, T2).");
             return Some(Summary { passed: 0, total: 0, errors: report.errors.len() });
         }
         self.verdicts.extend(report.verdicts);
@@ -180,6 +223,13 @@ impl Interp {
     }
 
     fn load_file_unchecked(&mut self, path: &Path) -> Result<Summary, String> {
+        // The same key the checker uses, so the two agree on what "the same
+        // file" means. A file that can't be canonicalized doesn't exist, and
+        // reading it below reports that.
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if !self.loaded.insert(key) {
+            return Ok(Summary::default());
+        }
         let src = std::fs::read_to_string(path).map_err(|e| format!("can't read {}: {}", path.display(), e))?;
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -207,7 +257,7 @@ impl Interp {
             let top = match top {
                 Ok(t) => t,
                 Err(msg) => {
-                    self.complain(format!("syntax error: {}", msg));
+                    self.complain(Kind::Syntax, msg);
                     errors += 1;
                     continue;
                 }
@@ -215,7 +265,8 @@ impl Interp {
             match top {
                 Top::Def(d) => {
                     if let Err(msg) = self.evaldef(d) {
-                        self.complain(format!("{}: {}", sx.loc(), msg));
+                        let kind = if msg.starts_with("run-time error: ") { Kind::RunTime } else { Kind::Load };
+                        self.complain(kind, format!("{}: {}", sx.loc(), msg));
                         errors += 1;
                     }
                 }
@@ -224,7 +275,7 @@ impl Interp {
                     // wrong there still counts against this load.
                     Ok(used) => errors += used.errors + (used.total - used.passed),
                     Err(msg) => {
-                        self.complain(format!("{}: {}", sx.loc(), msg));
+                        self.complain(Kind::Load, format!("{}: {}", sx.loc(), msg));
                         errors += 1;
                     }
                 },
@@ -426,18 +477,19 @@ impl Interp {
                 Ok(()) => s.passed += 1,
                 Err(msg) => {
                     if self.verbose {
-                        self.complain(format!("{}: {}", t.test.loc, msg));
+                        self.complain(Kind::Test, format!("{}: {}", t.test.loc, msg));
                     }
                 }
             }
         }
         if s.total > 0 {
-            match (s.passed, s.total) {
-                (p, t) if p == t && t == 1 => self.say(format!("{}: The only test passed.", file)),
-                (p, t) if p == t => self.say(format!("{}: All {} tests passed.", file, t)),
-                (0, t) => self.say(format!("{}: All {} tests failed.", file, t)),
-                (p, t) => self.say(format!("{}: {} of {} tests passed.", file, p, t)),
-            }
+            let text = match (s.passed, s.total) {
+                (p, t) if p == t && t == 1 => format!("{}: The only test passed.", file),
+                (p, t) if p == t => format!("{}: All {} tests passed.", file, t),
+                (0, t) => format!("{}: All {} tests failed.", file, t),
+                (p, t) => format!("{}: {} of {} tests passed.", file, p, t),
+            };
+            self.say_tests(file, s.passed, s.total, text);
         }
         s
     }

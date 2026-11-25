@@ -1,0 +1,1 @@
+(grant claude (model [in 3] [out 15] [think 0]))

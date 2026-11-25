@@ -1,0 +1,12 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(check-expect (word-freq (list "to" "be" "or" "not" "to" "be"))
+              (list (Pair [fst "to"] [snd 2]) (Pair [fst "be"] [snd 2])
+                    (Pair [fst "or"] [snd 1]) (Pair [fst "not"] [snd 1])))
+(check-expect (word-freq '()) '())
+(check-expect (word-freq (list "x")) (list (Pair [fst "x"] [snd 1])))
+(check-expect (word-freq (list "A" "a" "A"))
+              (list (Pair [fst "A"] [snd 2]) (Pair [fst "a"] [snd 1])))
+(check-expect (word-freq (list "c" "b" "a" "b"))
+              (list (Pair [fst "c"] [snd 1]) (Pair [fst "b"] [snd 2]) (Pair [fst "a"] [snd 1])))

@@ -1,0 +1,3 @@
+(record Quote (vendor (Text 50)) (cents Num))
+
+(grant prices (http [quotes (List Quote 20)]))

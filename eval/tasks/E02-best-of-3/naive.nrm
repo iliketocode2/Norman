@@ -1,0 +1,15 @@
+;; Accepts the right slogan, but makes the attempts one after another.
+(define try (model product n)
+  (if (<= n 0)
+      (fail 'none-accepted)
+      (let* ([s (catch (ask model (Text 200) (list (Message [role User] [content product])) 'slogan) e
+                  (case e
+                    [(Invalid _)   ""]
+                    [(ToolError _) ""]
+                    [_             (fail e)]))])
+        (if (and (> (string-length s) 0) (< (string-length s) 30))
+            s
+            (try model product (- n 1))))))
+
+(define short-slogan (model product)
+  (try model product 3))

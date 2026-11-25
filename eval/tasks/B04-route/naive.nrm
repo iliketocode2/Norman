@@ -1,0 +1,7 @@
+;; Routes, but answers a calculation with the expression instead of
+;; evaluating it.
+(define route (model web calc question)
+  (case (ask model Route (list (Message [role User] [content question])) 'route)
+    [(Search q)     (call web search q)]
+    [(Calculate e)  e]
+    [(Answer t)     t]))

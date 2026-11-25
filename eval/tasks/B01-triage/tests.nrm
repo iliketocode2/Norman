@@ -1,0 +1,24 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script bug      [triage (reply "{\"tag\":\"Bug\",\"summary\":\"Login crashes.\"}") (out 12) (latency 1s)])
+(script spam     [triage (reply "{\"tag\":\"Spam\"}") (out 4) (latency 1s)])
+(script fixable  [triage (reply "Bug: login crashes") (out 8) (latency 1s)
+                         (reply "{\"tag\":\"Bug\",\"summary\":\"Login crashes.\"}") (out 12) (latency 1s)])
+(script hopeless [triage (reply "Bug") (out 2) (latency 1s)
+                         (reply "Bug") (out 2) (latency 1s)])
+(script refused  [triage (refusal "abuse") (latency 1s)])
+
+(under ([script bug] [cost $1.00] [time 1min])
+  (check-expect (triage claude "The app crashes when I log in.") (Bug "Login crashes.")))
+(under ([script spam] [cost $1.00] [time 1min])
+  (check-expect (triage claude "Buy cheap watches!") Spam))
+(under ([script fixable] [cost $1.00] [time 1min])
+  ;; One bad reply is repaired, and only once: two asks, two seconds.
+  (check-expect (triage claude "The app crashes when I log in.") (Bug "Login crashes."))
+  (check-within (triage claude "The app crashes when I log in.") ([time 2s])))
+(under ([script hopeless] [cost $1.00] [time 1min])
+  (check-fail (triage claude "The app crashes when I log in.") (Invalid _)))
+(under ([script refused] [cost $1.00] [time 1min])
+  ;; A refusal is not retried: the script has only one entry.
+  (check-fail (triage claude "Something abusive.") (Refused _)))

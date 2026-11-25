@@ -1,0 +1,23 @@
+;; Counts correctly, but puts each new word first: the order is reversed.
+(define bump (word counts)
+  (case counts
+    ['() '()]
+    [(cons p rest)
+       (if (= (. p fst) word)
+           (cons (Pair [fst word] [snd (+ (. p snd) 1)]) rest)
+           (cons p (bump word rest)))]))
+
+(define seen? (word counts)
+  (case counts
+    ['() #f]
+    [(cons p rest) (or (= (. p fst) word) (seen? word rest))]))
+
+(define count-into (words counts)
+  (case words
+    ['() counts]
+    [(cons w ws)
+       (count-into ws (if (seen? w counts)
+                          (bump w counts)
+                          (cons (Pair [fst w] [snd 1]) counts)))]))
+
+(define word-freq (words) (count-into words '()))

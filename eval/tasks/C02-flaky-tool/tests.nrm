@@ -1,0 +1,26 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script healthy
+  [web/get (result "A") (latency 1s)
+           (result "B") (latency 1s)])
+(script recovers
+  [web/get (error "503") (latency 1s)
+           (error "503") (latency 1s)
+           (result "C") (latency 1s)])
+(script one-dead
+  [web/get (error "timeout") (latency 1s)
+           (error "timeout") (latency 1s)
+           (error "timeout") (latency 1s)
+           (result "B") (latency 1s)])
+(script quiet)
+
+(under ([script healthy] [cost $1.00] [time 1min])
+  (check-expect (fetch-all web (list "a.example" "b.example")) (list (Some "A") (Some "B"))))
+(under ([script recovers] [cost $1.00] [time 1min])
+  (check-expect (fetch-all web (list "c.example")) (list (Some "C")))
+  (check-within (fetch-all web (list "c.example")) ([time 3s])))
+(under ([script one-dead] [cost $1.00] [time 1min])
+  (check-expect (fetch-all web (list "a.example" "b.example")) (list None (Some "B"))))
+(under ([script quiet] [cost $1.00] [time 1min])
+  (check-expect (fetch-all web '()) '()))

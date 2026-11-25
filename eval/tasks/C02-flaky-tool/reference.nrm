@@ -1,0 +1,12 @@
+(define fetch-one (web url)
+  (catch (Some (retry 2 (lambda () (call web get url)))) e
+    (case e
+      [(ToolError _) None]
+      [_             (fail e)])))
+
+(define fetch-all (web urls)
+  (case urls
+    ['() '()]
+    [(cons u us)
+       (let* ([first (fetch-one web u)])
+         (cons first (fetch-all web us)))]))

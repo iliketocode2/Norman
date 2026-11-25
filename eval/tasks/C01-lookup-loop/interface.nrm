@@ -1,0 +1,6 @@
+(grant claude (model))
+(grant kb     (http [lookup (Text 500)]))
+
+(datatype Move
+  [Lookup (key (Text 100))]
+  [Final  (answer (Text 300))])

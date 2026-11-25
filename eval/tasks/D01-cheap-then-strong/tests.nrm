@@ -1,0 +1,29 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script easy      [fast (reply "\"Paris\"") (out 3) (latency 1s)])
+(script garbled   [fast (reply "Paris") (out 2) (latency 1s)]
+                  [strong (reply "\"Paris\"") (out 3) (latency 3s)])
+(script squeamish [fast (refusal "other") (latency 1s)]
+                  [strong (reply "\"It depends.\"") (out 4) (latency 3s)])
+(script fast-down [fast (provider-error "503 Service Unavailable") (latency 1s)])
+(script both-bad  [fast (reply "Paris") (out 2) (latency 1s)]
+                  [strong (reply "Paris") (out 2) (latency 3s)])
+(script unused)
+
+(under ([script easy] [cost $1.00] [time 1min])
+  (check-expect (answer fast strong "What is the capital of France?") "Paris")
+  (check-within (answer fast strong "What is the capital of France?") ([time 1s])))
+(under ([script garbled] [cost $1.00] [time 1min])
+  (check-expect (answer fast strong "What is the capital of France?") "Paris")
+  (check-within (answer fast strong "What is the capital of France?") ([time 4s])))
+(under ([script squeamish] [cost $1.00] [time 1min])
+  (check-expect (answer fast strong "Is this legal?") "It depends."))
+(under ([script fast-down] [cost $1.00] [time 1min])
+  (check-fail (answer fast strong "What is the capital of France?") (ToolError _)))
+(under ([script both-bad] [cost $1.00] [time 1min])
+  (check-fail (answer fast strong "What is the capital of France?") (Invalid _)))
+(under ([script unused] [cost $0] [time 1min])
+  ;; Nothing can be afforded, so nothing is asked.
+  (check-fail   (answer fast strong "What is the capital of France?") OverBudget)
+  (check-within (answer fast strong "What is the capital of France?") ([cost $0] [time 0s])))

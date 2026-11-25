@@ -1,2 +1,7 @@
 /target
 theory/
+eval/runs/
+eval/node_modules/
+.env
+.env*
+*.env

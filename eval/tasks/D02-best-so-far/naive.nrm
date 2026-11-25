@@ -1,0 +1,7 @@
+;; Polishes until it settles, but lets the deadline end the run.
+(define polish-from (model draft)
+  (let* ([next (ask model (Text 1000) (list (Message [role User] [content draft])) 'polish)])
+    (if (= next draft) draft (polish-from model next))))
+
+(define polish (model draft limit)
+  (budget ([time limit]) (polish-from model draft)))

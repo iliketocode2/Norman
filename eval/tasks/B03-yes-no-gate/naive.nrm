@@ -1,0 +1,4 @@
+;; Never asks twice, and treats every failure as "no".
+(define safe-to-run? (model command)
+  (catch (ask model Bool (list (Message [role User] [content command])) 'gate) e
+    #f))

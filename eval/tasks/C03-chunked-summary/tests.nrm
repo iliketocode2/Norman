@@ -1,0 +1,33 @@
+(use interface.nrm)
+(use solution.nrm)
+
+(script two
+  [fold (reply "\"Alice left.\"") (out 5) (latency 1s)
+        (reply "\"Alice left; Bob stayed.\"") (out 8) (latency 1s)])
+(script bad-middle
+  [fold (reply "\"Alice left.\"") (out 5) (latency 1s)
+        (reply "not a JSON string") (out 5) (latency 1s)
+        (reply "\"Alice left; Carol arrived.\"") (out 8) (latency 1s)])
+(script bad-last
+  [fold (reply "\"Alice left.\"") (out 5) (latency 1s)
+        (reply "42") (out 2) (latency 1s)])
+(script outage
+  [fold (reply "\"Alice left.\"") (out 5) (latency 1s)
+        (provider-error "529 Overloaded") (latency 1s)])
+(script silent)
+
+(under ([script two] [cost $1.00] [time 1min])
+  (check-expect (summarize claude (list "Alice left the room." "Bob stayed behind."))
+                "Alice left; Bob stayed.")
+  (check-within (summarize claude (list "Alice left the room." "Bob stayed behind."))
+                ([time 2s])))
+(under ([script bad-middle] [cost $1.00] [time 1min])
+  (check-expect (summarize claude (list "Alice left." "Bob ???" "Carol arrived."))
+                "Alice left; Carol arrived."))
+(under ([script bad-last] [cost $1.00] [time 1min])
+  (check-expect (summarize claude (list "Alice left." "Bob ???")) "Alice left."))
+(under ([script outage] [cost $1.00] [time 1min])
+  (check-fail (summarize claude (list "Alice left." "Bob stayed.")) (ToolError _)))
+(under ([script silent] [cost $1.00] [time 1min])
+  (check-expect (summarize claude '()) "")
+  (check-within (summarize claude '()) ([cost $0] [time 0s])))

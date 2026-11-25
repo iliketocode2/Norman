@@ -1,0 +1,3 @@
+(grant claude   (model))
+(grant reviewer (human))
+(grant sh       (kernel [run (Text 2000)]))

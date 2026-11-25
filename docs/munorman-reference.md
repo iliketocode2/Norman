@@ -27,7 +27,7 @@ A **semicolon** begins a comment that runs to the end of the line. Each bracket 
 
 > **Money and time are not numbers**
 >
-> They are distinct kinds of value. You may add money to money, and a duration to a duration, but never money to seconds. That rules out an entire class of budget bug at the level of values rather than by convention.
+> They are distinct kinds of value. You may add money to money, and a duration to a duration, but never money to seconds, and never either to a `Num`.
 
 ## Program structure
 
@@ -52,7 +52,7 @@ xdef ::= (use file)
 
 - `(define name (formals) body)`
 
-  A function. The formals must be distinct. Top-level names are mutually recursive.
+  A function. The formals must be distinct. Top-level names are mutually recursive, and each is defined **once**, including the names the [basis](https://norman-docs.vercel.app/docs#basis-functions) defines.
 
 - `(val name exp)`
 
@@ -60,11 +60,15 @@ xdef ::= (use file)
 
 - `(datatype Type [Con (field ty)…]…)`
 
-  A sum type: a value is *one of* its constructors. Constructor names must be distinct, and they share one namespace across the program.
+  A sum type: a value is *one of* its constructors. Constructor names must be distinct, and they share one namespace across the program. A type, like any top-level name, is defined **once**: a second `datatype` or `record` of the same name is an error, including for the [predefined types](https://norman-docs.vercel.app/docs#basis-types).
 
 - `(record Record (field ty)…)`
 
   A product type: a value has *all* of its fields.
+
+- `(use file)`
+
+  Load another file here, as if its definitions were written at this point. The path is relative to the file that says `use`. Its definitions, grants and scripts join one global namespace (there are no modules), its top-level expressions run, and its own unit tests run; anything that goes wrong there counts against this file. A file is loaded **at most once** per run, so a second `use` of it, including a cycle, does nothing. The whole tree of used files is type-checked before any of it runs.
 
 The difference matters when you write code over them. A datatype is consumed with `case`, one branch per constructor. A record is consumed with `(. r field)`. It also shows up in how you build them:
 
@@ -117,7 +121,7 @@ pattern ::= Con                        ; a constructor with no fields
           | _                          ; anything
 ```
 
-**Patterns are flat.** A constructor applies to variables or `_`, never to another pattern, and no variable may repeat within one pattern. This keeps matching a single step, which keeps every proof about `case` to a single step too. Nested patterns could be added later as sugar.
+**Patterns are flat.** A constructor applies to variables or `_`, never to another pattern, and no variable may repeat within one pattern. To match nested data, nest `case`s.
 
 ### Building values
 
@@ -129,9 +133,9 @@ Con                         ; a nullary constructor is just its name
 (cons exp exp)              ; prepend
 ```
 
-## The six agentic forms
+## The seven agentic forms
 
-These are what the language adds. Everything a program can do to the outside world happens through `ask` and `call`; there is no other door, which is why a budget, a deadline, the trace and the ownership rules apply to *everything*.
+These are what the language adds. Everything a program can do to the outside world happens through `ask`, `call` and `consult`; there is no other door, which is why a budget, a deadline, the trace and the ownership rules apply to *everything*.
 
 ### ask
 
@@ -140,6 +144,16 @@ These are what the language adds. Everything a program can do to the outside wor
 ```
 
 Consult a model **once**, for an answer of type *ty*. The context is an ordinary list of `Message`s that you build and pass: nothing accumulates behind your back. The site is a name for this place in the program; scripts and traces are keyed by it, and it defaults to the source location.
+
+A site is written **literally**, as a quoted symbol in the `ask` itself. It can't be a variable or an expression, so a helper can't take a site as an argument. When two asks share their shape, factor out what they share (the context, the handling of the answer) and write each `ask`, with its own site, where it happens:
+
+```
+(define summary-ctx (doc)
+  (list (Message [role User] [content (string-append "Summarize: " doc)])))
+
+(par (ask model (Text 300) (summary-ctx left) 'left)
+     (ask model (Text 300) (summary-ctx right) 'right))
+```
 
 The answer is validated against *ty* before it is bound. If it doesn't fit, the ask produces `Invalid` rather than a value. Asking again is a separate, visible decision — see [`retry`](https://norman-docs.vercel.app/docs#basis-functions).
 
@@ -152,6 +166,49 @@ Before the call, `ask` **reserves** the worst case: everything it is about to se
 ```
 
 Use a tool once. The capability comes from [`grant`](https://norman-docs.vercel.app/docs#hosts) and can only come from there. What the operation answers with is declared by the grant, not written at the call site — see [Hosts and capabilities](https://norman-docs.vercel.app/docs#hosts).
+
+### consult
+
+```
+(consult person ty prompt [propose exp] ['site])
+```
+
+Put a question to a person **once**, for an answer of type *ty*. The person comes from a [`human` grant](https://norman-docs.vercel.app/docs#hosts), and *ty* must be askable, exactly as for `ask`. The answer is validated the same way, and the site is written literally, as for [`ask`](https://norman-docs.vercel.app/docs#ask).
+
+With `[propose v]`, the person sees *v* as a pre-filled answer and may approve it, edit it, or decline. **Approving gives back exactly *v***, editing gives back the edit, and declining fails with `(Declined reason)`. Run the answer, never the original proposal, and what runs is what was approved. `retry` never retries `Declined`.
+
+Waiting for a person spends the scope's time, so give a consult's scope room for a person and each model call its own short `budget` inside it. A person costs no money unless the grant gives a price.
+
+Example, `consult.nrm`:
+
+```nrm
+(grant reviewer (human))
+
+(define approved-plan (plan)
+  (consult reviewer (List (Text 80) 3)
+           "Approve, edit or decline this plan."
+           [propose plan]
+           'review))
+
+(val plan (list "read the failing test" "fix the parser"))
+
+(script approves  [review (approve) (latency 1min)])
+(script edits     [review (answer "[\"read the failing test\"]") (latency 2min)])
+(script declines  [review (decline "Don't touch the parser.") (latency 30s)])
+
+(under ([script approves] [time 1h])
+  ;; Approving gives back exactly what was proposed.
+  (check-expect (approved-plan plan) plan))
+
+(under ([script edits] [time 1h])
+  ;; Editing gives back the edit, and that is what the program runs.
+  (check-expect (approved-plan plan) (list "read the failing test")))
+
+(under ([script declines] [time 1h])
+  ;; Declining is a failure carrying the reason; retry leaves it alone.
+  (check-expect (approved-plan plan) (fail (Declined "Don't touch the parser.")))
+  (check-fail   (retry 3 (lambda () (approved-plan plan))) (Declined _)))
+```
 
 ### fail and catch
 
@@ -210,9 +267,7 @@ That one rule is what keeps authority unforgeable: a capability is not an askabl
 
 A bound caps the answer's size, which caps the reservation. A `Verdict` with 400-byte reasons reserves far less than the same type with unbounded text, so it fits budgets the unbounded one is refused by.
 
-> **Measured, not assumed**
->
-> The type is also *sent* with every ask, as a JSON schema, and billed as input. The project's first real API call spent 538 input tokens on a 175-character prompt, 478 of them on the schema. So bounding an *answer* shrinks the reservation, while adding a constructor or a field makes every ask dearer on input for as long as the program runs. No bound on the text inside those fields helps, because what is sent is the schema, not the answer.
+The type is also **sent** with every ask, as a JSON schema billed as input, and it is usually most of the input. So every constructor and field makes every ask dearer, and no bound on the text inside them helps. In a loop, use [prompt caching](https://norman-docs.vercel.app/docs#hosts).
 
 ### How a type maps to JSON
 
@@ -314,6 +369,8 @@ These are written in µNorman itself, and each is defined by algebraic laws.
 
   A context policy: every `System` message, then the last *n* others. Note that it moves system messages to the front.
 
+These use helpers that are also top-level names, so a program can't define them again: `attempt`, `best-of*`, `correction`, `first-some`, `last-n` and `system?`.
+
 ## Hosts and capabilities
 
 ```
@@ -321,11 +378,14 @@ These are written in µNorman itself, and each is defined by algebraic laws.
 (grant name (kernel {[op ty]}))        ; stateful
 (grant name (filesystem {[op ty]}))    ; stateful
 (grant name (http {[op ty]}))          ; stateless
+(grant name (human [price money]))        ; a person, for consult; the price is optional
 ```
+
+Live, only `model` and `kernel` (with `--python`) have real hosts so far; `filesystem` and `http` answer only from scripts. A `human` grant must be bound on the command line before a live run starts: `--human name=tty` asks at the terminal, and `--human name=unattended` makes any consult stop the run.
 
 ### What a tool answers with
 
-A grant declares each operation's result type, so a tool's answer is typed the same way a model's is. The declaration lives at the grant rather than the call site because the grant is already the host–program contract, and because a capability should carry its own interface.
+A grant declares each operation's result type, so a tool's answer is typed the same way a model's is. The call site names no type.
 
 ```
 (grant py (kernel [exec (Text 4000)] [count Num] [solve Outcome]))
@@ -337,9 +397,7 @@ A grant declares each operation's result type, so a tool's answer is typed the s
 3. **A declared `Text` takes the result verbatim,** and only its bound is checked.
 4. **Any other type reads the result as JSON** and validates it, exactly as a model's reply is validated. Failure is `Invalid`, so `retry` handles a malformed tool result for free.
 
-> **Why 3 and 4 differ**
->
-> An `ask` that wants `Text` receives a JSON string; a `call` that wants `Text` receives raw bytes. The channels really are different — a model emits JSON because a schema told it to, while a tool emits bytes, and the grant is what says what those bytes mean.
+Note the difference from `ask`: there, `Text` is a JSON string; here, it is the tool's raw output.
 
 Every model field is optional and falls back to a default. Prices are dollars per million tokens, with up to three decimals: `[in 3]` is $3 per million input tokens, `[in 0.1]` is ten cents. **Prices are stated here, not looked up** — the API does not report them, so a grant is where the program says what it believes a token costs. If they are wrong, the budget arithmetic is wrong.
 
@@ -360,11 +418,14 @@ Faults are injected the same way, which is what makes failure paths testable at 
 
 |  |  |
 | --- | --- |
-| `(reply "…")` | what the model says; pair with `(out n)` for output tokens |
+| `(reply "…")` | what the model says, as JSON, validated against the ask's type: an answer of type `(Text n)` is a JSON string, `(reply "\"yes\"")`, and `(reply "yes")` is `Invalid`; pair with `(out n)` for output tokens |
 | `(refusal "category")` | the model declines |
 | `(provider-error "503 …")` | the provider fails |
 | `(result "…")` | a tool succeeds |
 | `(error "…")` | a tool fails |
+| `(approve)` | a person approves the proposal unchanged |
+| `(answer "…")` | a person gives this answer, as JSON |
+| `(decline "…")` | a person declines, with this reason |
 | `(latency 2s)` | how long it takes on the simulated clock |
 
 ### Test forms
@@ -372,6 +433,8 @@ Faults are injected the same way, which is what makes failure paths testable at 
 ```
 (under ([script Name] [cost $1.00] [time 1min]) {unit-test})
 ```
+
+Each item is optional. A `[script Name]` must name a script defined in this file or a file it uses, and a file defines each script name once; the checker enforces both before anything runs. A file may reuse a script name from a file it uses: that file's tests have already run, against its own script.
 
 - `(check-expect e expected)`
 
@@ -447,7 +510,9 @@ Sugar is defined by translation, so it inherits every theorem already proved abo
 
 ## What is checked before a program runs
 
-Each of these is decidable from the syntax alone, so the parser rejects it outright.
+A whole file is checked before any of it runs, and a program that doesn't check never starts, so a mistake found here can't spend money. There are two passes.
+
+**The parser** rejects what is decidable from the syntax alone:
 
 1. The formals of a `lambda` or `define` are distinct; so are a datatype's constructors and a record's fields.
 2. A `workflow`'s binding names are distinct.
@@ -455,13 +520,25 @@ Each of these is decidable from the syntax alone, so the parser rejects it outri
 4. Patterns are flat, and no variable repeats within one pattern.
 5. Forms are applied with the right number of parts.
 
-Askability is checked when the `ask` runs rather than at parse time, because a function may ask for a datatype defined later in the file. Everything else about types is a run-time check too. Moving those to compile time is what the planned type and effect system is for — see [Status](https://norman-docs.vercel.app/#status).
+**The type and effect checker** then infers every type, with no annotations, and rejects a program that could reach any of these:
+
+- an `if` on a non-Boolean; applying a non-function, or with the wrong number of arguments; an unbound name; an unknown constructor, record or field;
+- `ask` on a non-model, `consult` on a non-person, `call` on a non-capability;
+- an **unaskable type** in `ask` or `consult`, or a proposal of the wrong shape;
+- an undeclared operation on a closed grant; `show` of a function, model, person or capability; `fail` of a non-`Failure`;
+- two concurrent `workflow` steps that **share a stateful tool**.
+
+It **warns**, without rejecting, about a `case` that may not match, a workflow step that reads `(remaining)`, and two steps that consult the same person.
+
+Some things stay run-time errors by design: division by zero and overflow, a `substring` out of range, a size bound exceeded, an exhausted script, and the step limit. `norman --no-check` runs a program without the checker.
+
+Each diagnostic names the file, line and column of the expression at fault, and a mistake is reported once, not again at every use of the definition it broke. `norman --format json` writes each diagnostic as one JSON object, with `kind`, `file`, `line`, `column` and `message`, and for a type mismatch `expected` and `found`, for a program (or an agent) that repairs code from them.
 
 ## Reserved words
 
 `val` `define` `datatype` `record` `use` `grant` `script` `under` `check-expect` `check-assert` `check-error` `check-fail` `check-within` `check-equiv` `check-type-error` `if` `let*` `lambda` `case` `ask` `call` `consult` `fail` `catch` `budget` `workflow` `begin` `par` `and` `or` `_`
 
-`cost` and `time` are **not** reserved. They appear only in fixed bracket positions, and they are the field names of `Resources`. An earlier draft did reserve them, which made `(. (remaining) cost)` a syntax error in the language's own basis. Running the tests caught it.
+`cost`, `time`, `propose` and `price` are **not** reserved: they appear only in fixed bracket positions, so they are free to use as names. `cost` and `time` are the fields of `Resources`.
 
 ## Going deeper
 

@@ -77,11 +77,12 @@
     </tbody>
   </table>
 
-  <h3 id="cheat-forms">The six agentic forms</h3>
+  <h3 id="cheat-forms">The seven agentic forms</h3>
   <table>
     <tbody>
       <tr><td><code>(ask m τ ctx 'site)</code></td><td>consult a model once, for an answer of type τ</td></tr>
       <tr><td><code>(call κ op args…)</code></td><td>use a tool once</td></tr>
+      <tr><td><code>(consult h τ prompt [propose v] 'site)</code></td><td>ask a granted person once; approving gives back exactly <code>v</code>, declining fails with <code>Declined</code></td></tr>
       <tr><td><code>(fail φ)</code> / <code>(catch e x h)</code></td><td>raise and handle a failure</td></tr>
       <tr><td><code>(budget ([cost $1.00] [time 1min]) e)</code></td><td>a money and time limit for everything inside</td></tr>
       <tr><td><code>(workflow ([x e] …) body)</code></td><td>named steps; dependencies come from the names each uses</td></tr>

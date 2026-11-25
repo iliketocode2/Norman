@@ -164,6 +164,28 @@ fn errors_outside_the_tests_are_counted() {
     );
     assert_eq!((s.passed, s.total, s.errors), (1, 1, 2));
 
+    // A diamond loads the shared file once. Its one failing test counts once:
+    // loaded twice, it ran twice and counted twice.
+    let s = load_files(
+        "use-diamond",
+        "(use left.nrm)\n(use right.nrm)\n(check-expect (+ l r) 3)",
+        &[
+            ("left.nrm", "(use base.nrm)\n(val l 1)"),
+            ("right.nrm", "(use base.nrm)\n(val r 2)"),
+            ("base.nrm", "(check-expect 1 2)"),
+        ],
+    );
+    assert_eq!((s.passed, s.total, s.errors), (1, 1, 1));
+
+    // A cycle terminates: the use back to a file still loading does nothing.
+    // It used to recurse until the stack overflowed.
+    let s = load_files(
+        "use-cycle",
+        "(use sub.nrm)\n(val a 1)\n(check-expect (+ a b) 3)",
+        &[("sub.nrm", "(use use-cycle.nrm)\n(val b 2)")],
+    );
+    assert_eq!((s.passed, s.total, s.errors), (1, 1, 0));
+
     let s = load_files("all-good", "(val x 1)\n(check-expect x 1)", &[]);
     assert!(s.clean());
 }

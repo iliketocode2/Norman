@@ -1,0 +1,7 @@
+;; Retries, but a URL that never succeeds ends the whole run.
+(define fetch-all (web urls)
+  (case urls
+    ['() '()]
+    [(cons u us)
+       (let* ([first (retry 2 (lambda () (call web get u)))])
+         (cons (Some first) (fetch-all web us)))]))

@@ -1,0 +1,15 @@
+;; counts with word counted once more, keeping the order of first appearance
+(define bump (word counts)
+  (case counts
+    ['() (list (Pair [fst word] [snd 1]))]
+    [(cons p rest)
+       (if (= (. p fst) word)
+           (cons (Pair [fst word] [snd (+ (. p snd) 1)]) rest)
+           (cons p (bump word rest)))]))
+
+(define count-into (words counts)
+  (case words
+    ['() counts]
+    [(cons w ws) (count-into ws (bump w counts))]))
+
+(define word-freq (words) (count-into words '()))

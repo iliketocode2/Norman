@@ -1,0 +1,12 @@
+;; Re-proposes the same draft after a decline instead of asking for a
+;; revision.
+(define propose-again (reviewer draft tries)
+  (catch (consult reviewer (Text 300) "Approve this draft?" [propose draft] 'review) e
+    (case e
+      [(Declined _) (if (<= tries 0) (fail e) (propose-again reviewer draft (- tries 1)))]
+      [_            (fail e)])))
+
+(define draft-approved (model reviewer brief)
+  (propose-again reviewer
+                 (ask model (Text 300) (list (Message [role User] [content brief])) 'draft)
+                 2))
