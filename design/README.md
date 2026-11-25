@@ -13,17 +13,22 @@ documents. The [reading map](#reading-map) at the end says which one to open
 for what.
 
 > **Status:** a research prototype, designed and implemented. A Rust
-> interpreter runs the design's example programs and laws: 35 example tests,
-> 26 law tests, 39 tests of the predefined functions, 11 oracle tests, 15 tests
-> of SAGA's bi-level loop at its three autonomy levels ([`10`](10-saga.md)), 45 string and `show` tests, 18
-> typed-tool tests, 6 CP-Agent tests and 52 tests of `consult`
-> ([`11`](11-consult.md)) all pass. Seventeen laws are also
+> interpreter runs the design's example programs and laws: 290 tests written
+> in µNorman across eleven example files all pass. They cover the example
+> results, the laws, the predefined functions, SAGA's bi-level loop
+> ([`10`](10-saga.md)), strings, typed tools, prompt caching, type parameters,
+> CP-Agent and `consult` ([`11`](11-consult.md)). Seventeen laws are also
 > checked on 150 random scripts each, and the budget invariant is checked in
 > every state of every scripted run. A suite of deliberately wrong tests fails,
-> as it must. Live, `ask` goes to Claude Sonnet 5 ([`09`](09-live-oracle.md)
-> §6a), and with `--python` a `kernel` grant is a real Python process, so the
-> CP-Agent example has run end to end against both. See
-> [`08-implementation-notes.md`](08-implementation-notes.md).
+> as it must. Live, `ask` goes to Claude Sonnet 5 by default
+> ([`09`](09-live-oracle.md) §6a), and with `--python` a `kernel` grant is a
+> real Python process, so the CP-Agent example has run end to end against
+> both. See [`08-implementation-notes.md`](08-implementation-notes.md).
+>
+> **Models can write it.** Given only the reference, Claude Sonnet 5.5 and
+> Haiku 5.5 write programs that pass 93–100% of twenty graded tasks on the
+> first try, and all of them after repair from the interpreter's own messages
+> ([`14`](14-authoring-eval.md), [`../eval/results/`](../eval/results/README.md)).
 >
 > ```
 > cargo run -- examples/step5-examples.nrm
@@ -293,6 +298,8 @@ These are stated as theorems in [`04`](04-formal-definition.md) §8 and
   two steps that consult one person, get a warning: they're allowed, but
   fall outside guarantee 4. Some mistakes stay run-time errors by design:
   division by zero, a string index out of range, a size bound exceeded.
+  Each diagnostic names the line and column of the expression at fault, and
+  `--format json` writes them as JSON for a tool or agent to repair from.
 - **One real tool, with no sandbox.** With `--live --python python3`, every
   `kernel` grant is a real Python process. It runs model-written code with
   your permissions, so use it only in a throwaway container or VM. A deadline
@@ -386,8 +393,8 @@ Ramsey's point exactly: proofs are most useful when they fail.
 | [`10-saga.md`](10-saga.md) | what writing SAGA's bi-level loop in µNorman found: typed `call`, a form for consulting a human, derived capabilities | see what the language is missing, and why |
 | [`11-consult.md`](11-consult.md) | `consult`, a typed form for asking a person: the argument behind granted humans, `Declined`, and approval that binds to what runs. The rules are in `04` and `07`; a live person answers at the terminal. | see how a person fits into a program, and why |
 | [`12-types-and-effects.md`](12-types-and-effects.md) | the type and effect checker, **built** in [`../src/check.rs`](../src/check.rs): inference as in µML, effects that name each grant, qualified types for overloading and ownership, and what it guarantees | see what is checked before a program runs, and what stays dynamic |
-| [`13-agents-limiting-themselves.md`](13-agents-limiting-themselves.md) | **plan, not built:** making µNorman the place an AI agent writes down its own limits — running programs with input, an operator policy that caps every grant and budget, narrow real hosts, a usable standard library, record/replay/resume, and budgets an agent can choose | see where the language is headed, and in what order |
-| [`14-authoring-eval.md`](14-authoring-eval.md) | **Stages 0 and 1 done** (the corpus and the harness, in [`../eval/`](../eval/)); **the baseline is at ceiling** (93–100% pass@1, see [`../eval/results/`](../eval/results/README.md)), so harder tasks come next: measuring how well a model writes µNorman from the reference alone — twenty graded tasks, a repair loop fed by the interpreter's own messages, and the numbers that decide `13`'s order | see how changes to the language and its messages are judged |
+| [`13-agents-limiting-themselves.md`](13-agents-limiting-themselves.md) | **a plan, three steps of it done** (CI, the authoring eval, and diagnostics that point at the expression and come as JSON): making µNorman the place an AI agent writes down its own limits — running programs with input, an operator policy that caps every grant and budget, narrow real hosts, a usable standard library, record/replay/resume, and budgets an agent can choose | see where the language is headed, and in what order |
+| [`14-authoring-eval.md`](14-authoring-eval.md) | **Stages 0 and 1 done** (the corpus and the harness, in [`../eval/`](../eval/)); **the baseline is at ceiling** (93–100% pass@1, see [`../eval/results/`](../eval/results/README.md)), and the failures it did find led to `13` step 3's fixes, so harder tasks come next: measuring how well a model writes µNorman from the reference alone — twenty graded tasks, a repair loop fed by the interpreter's own messages, and the numbers that decide `13`'s order | see how changes to the language and its messages are judged |
 | [`../LIVE-SETUP.md`](../LIVE-SETUP.md) | the operator's companion to `09`: getting an API key, setting it, capping the spend, and the plan for the first real call | actually run against a real model |
 
 Where documents disagree, the later one wins. Each correction is also noted at
@@ -410,9 +417,13 @@ the place it corrects.
 - **budget scope**: a region of the program with its own money limit and
   deadline, both at most its parent's.
 - **site**: a name for a place in the program where an `ask`, `call` or
-  `consult` happens.
-  Scripts and traces are organized by site.
-- **script**: canned replies and faults used in tests, with a simulated clock.
+  `consult` happens. Scripts and traces are organized by site. An `ask` or
+  `consult` site is a quoted symbol written in the form itself, such as
+  `'review` (a variable can't be one), or else the source location; a
+  `call` site is its capability and operation, `py/exec`.
+- **script**: canned replies and faults used in tests, with a simulated
+  clock. A reply is the model's raw output, so it's JSON: a `Text` answer is
+  written `(reply "\"yes\"")`.
 - **trace**: the log of every `ask`, `call` and `consult`: what was sent, what came back,
   what it cost, how long it took.
 - **workflow**: named steps that run as soon as their inputs are ready.

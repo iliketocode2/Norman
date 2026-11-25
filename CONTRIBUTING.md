@@ -45,7 +45,12 @@ mode does and doesn't do, and
 3. Make your changes.
 4. Run `cargo fmt` and `cargo clippy --all-targets` before committing.
 5. Ensure all tests pass: `cargo test`.
-6. Open a pull request.
+6. **If the change touches the language, the prelude, a diagnostic or the
+   reference,** re-run the authoring eval and quote the numbers before and
+   after in the pull request ([`design/14`](design/14-authoring-eval.md) §5;
+   how to run it is in [`eval/README.md`](eval/README.md)). It spends a few
+   dollars of API credit; if you can't run it, say so in the pull request.
+7. Open a pull request.
 
 ## The documentation site
 
@@ -108,9 +113,15 @@ and a fresh build, and leaves a notice if the committed module has drifted from
     `expect` with a message saying why).
 
   Library code returns `Result` and never panics on bad input.
-- Errors are plain `String` messages, with a source location where there is
-  one. There's no `anyhow` or `thiserror`. Keep dependencies few: every new
-  crate needs a reason in the PR.
+- Errors are plain `String` messages of the form `file:line:col: message`
+  where there is a location. There's no `anyhow` or `thiserror`.
+  [`src/diag.rs`](src/diag.rs) turns each one into what the reader sees: it
+  adds the label, drops citations unless `--explain` is given, and writes
+  JSON under `--format json`. So keep the location first. Put a citation of
+  a design document in parentheses at the end, `(design/12, Q-2)`, after
+  any advice, which must make sense without it. Write "expected X, but found
+  Y" for a mismatch, so the JSON can carry both types.
+- Keep dependencies few: every new crate needs a reason in the PR.
 - Money is integer micro-dollars and time is integer milliseconds. Never use
   floats for either.
 
@@ -124,10 +135,18 @@ and a fresh build, and leaves a notice if the committed module has drifted from
   unless it genuinely can't be. That's the design rule from
   [`design/01-forms-of-data.md`](design/01-forms-of-data.md).
 - **Implementation** ([`src/`](src/)): bug fixes, performance, and features
-  that the design documents already specify. The deferred items in
-  [`design/09-live-oracle.md`](design/09-live-oracle.md) §6–7 are good places
-  to start: streaming, asynchronous counting, more tool hosts (a filesystem,
-  a sandboxed kernel, a kernel that can fork), and prompt caching.
+  that the design documents already specify. What comes next, and in what
+  order, is in [`design/13`](design/13-agents-limiting-themselves.md)
+  §"Order". Smaller deferred items are in
+  [`design/09-live-oracle.md`](design/09-live-oracle.md) §7: streaming,
+  effort control, keeping the prompt cache warm, and more tool hosts (a
+  filesystem, a sandboxed kernel, a kernel that can fork).
+- **The authoring eval** ([`eval/`](eval/)): tasks that show what a model
+  gets wrong when it writes µNorman. A new task follows the rules in
+  [`design/14`](design/14-authoring-eval.md) §1, and
+  `cargo test --test eval_corpus` checks it. The tasks at the moment are too
+  easy: harder ones are the most useful contribution there (`14` §6,
+  Stage 1b).
 - **The library** ([`src/prelude.nrm`](src/prelude.nrm)): new predefined
   functions are written in µNorman, each with its algebraic laws stated in
   [`design/06-algebraic-laws.md`](design/06-algebraic-laws.md).
@@ -145,7 +164,9 @@ and a fresh build, and leaves a notice if the committed module has drifted from
 
 1. Ensure formatting, Clippy and tests pass locally (`cargo fmt --check`,
    `cargo clippy --all-targets`, `cargo test`). CI runs the same three
-   checks, plus every example on the documentation site.
+   checks, every example on the documentation site, and the eval harness's
+   own tests (`node eval/test.mjs --norman target/debug/norman`, after
+   `npm ci --prefix eval`; Node 22 or later, and no API key).
 2. If your change is user-facing, update the documentation it affects: the
    guide, the relevant design document, and
    [`design/08-implementation-notes.md`](design/08-implementation-notes.md)

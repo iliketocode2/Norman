@@ -13,7 +13,20 @@ cargo build
 cargo run -- examples/step5-examples.nrm      # or: target/debug/norman FILE.nrm …
 cargo test                                    # Steps 5, 6, 9, the laws, and the must-fail suite
 cargo run -- --live --python python3 FILE.nrm # a real model and a real (unsandboxed) Python
+cargo run -- --format json FILE.nrm           # each diagnostic as one JSON object
 ```
+
+**Diagnostics** go to stderr, each labelled by kind (`syntax error:`,
+`type error:`, `run-time error:`, `warning:`) and placed at the expression
+at fault, not the start of its definition. A mistake is reported once: a
+definition that fails to parse or check gets the type ∀a. a, so its uses
+don't report it again. Citations of the design documents, such as
+`(design/12, Q-2)`, are left out unless `--explain` is given. Under
+`--format json` each diagnostic is one object on stderr, with `kind`,
+`file`, `line`, `column` and `message`, plus `expected` and `found` for a
+type mismatch. Every other line is an object on stdout, such as
+`{"kind":"tests","file":…,"passed":…,"total":…}`. `13` §1.2 is the plan
+this follows.
 
 `norman` exits 0 only if every unit test passed **and** nothing else went
 wrong: a syntax error, a top-level form that failed or got stuck (such as a
@@ -37,7 +50,9 @@ Current results:
 | Prompt caching, scripted ([`../examples/caching.nrm`](../examples/caching.nrm)) | 13 of 13 pass |
 | `consult`, scripted ([`../examples/consult.nrm`](../examples/consult.nrm)) | 52 of 52 pass |
 | Type parameters ([`../examples/type-parameters.nrm`](../examples/type-parameters.nrm)) | 19 of 19 pass |
-| The type checker, `12` §9 ([`../tests/check.rs`](../tests/check.rs)): the prelude's inferred types, effects, rejections, load order, polymorphism, overloading, grants' named types, `fork`, ownership, warnings, Q-3, `check-type-error`, and every example | 31 of 31 pass |
+| The type checker, `12` §9 ([`../tests/check.rs`](../tests/check.rs)): the prelude's inferred types, effects, rejections, load order, polymorphism, overloading, grants' named types, `fork`, ownership, warnings, Q-3, `check-type-error`, names defined once (types and scripts too), and every example | 36 of 36 pass |
+| Diagnostics, `13` §1.2 ([`../tests/diagnostics.rs`](../tests/diagnostics.rs), and unit tests in [`../src/diag.rs`](../src/diag.rs)): the location of a type error, no knock-on errors, labels, citations only with `--explain`, JSON, what a script says it lacks | 7 + 3 pass |
+| The authoring eval's corpus, `14` §6 ([`../tests/eval_corpus.rs`](../tests/eval_corpus.rs)): every task is well formed, its reference passes, and its naive solution fails | 3 of 3 pass |
 | Theorem 7 on random programs ([`../tests/soundness.rs`](../tests/soundness.rs)) | 400 programs; every one that checks runs without a ruled-out error |
 | `consult`'s trace record, the terminal host driven by a simulated person, and the start-up check ([`../tests/consult.rs`](../tests/consult.rs)) | 18 of 18 pass |
 | Live client against a local stub server ([`../tests/live_stub.rs`](../tests/live_stub.rs)) | 9 of 9 pass |
@@ -45,7 +60,7 @@ Current results:
 | Random tests of 17 laws ([`../tests/properties.rs`](../tests/properties.rs)) | 150 cases each, all pass |
 | The same harness on 3 false laws | finds a counterexample to each, as it must |
 | Must-fail suite ([`../tests/must-fail.nrm`](../tests/must-fail.nrm), [`../tests/must-fail-consult.nrm`](../tests/must-fail-consult.nrm)) | 15 of 15 fail, as they must |
-| Real API calls ([`../tests/live_real.rs`](../tests/live_real.rs), [`../tests/live_cp_agent.rs`](../tests/live_cp_agent.rs)) | 6 tests, `#[ignore]`d; they spend money, and `cargo test` skips them |
+| Real API calls ([`../tests/live_real.rs`](../tests/live_real.rs), [`../tests/live_cp_agent.rs`](../tests/live_cp_agent.rs)) | 7 tests, `#[ignore]`d; they spend money, and `cargo test` skips them |
 
 Every scripted run also checks Theorem 1′ (the budget invariant) in every
 state it reaches. See "The budget invariant is checked" below.
@@ -93,6 +108,8 @@ the event-by-event semantics implementable exactly.
 | `validate_Θ`, `bound`, `askable` | [`src/types.rs`](../src/types.rs); a parameterized type goes through `TypeEnv::instance`, which checks the arity and substitutes the arguments |
 | sugar of 04 §7.1 | [`src/parser.rs`](../src/parser.rs): `let*`, `begin`, `par`, `and`, `or`, `(fail 'sym)`, the default `ask` site |
 | initial basis of 04 §7.2 | [`src/prelude.nrm`](../src/prelude.nrm), written in µNorman |
+| where an expression came from, for diagnostics | `parser::Spans`, a side table keyed by each node's address that the checker reads, so the tree carries no locations and evaluation pays nothing for them |
+| what a diagnostic looks like to its reader | [`src/diag.rs`](../src/diag.rs): labels, citations, JSON; used by `Interp::complain`, and by `main` for a file that can't be loaded |
 
 ---
 
@@ -100,15 +117,20 @@ the event-by-event semantics implementable exactly.
 
 Each item is deliberate and listed here so it isn't mistaken for a bug.
 
-1. **Askability is checked when an `ask` or `consult` is evaluated,** not at
-   parse time as `04` §3.1 rule 5 says. A function may `ask` for a datatype that's defined
-   later in the file, so the check needs the Θ in force at run time. Failing
-   it is a checked run-time error. Once the type checker exists, it moves to
-   compile time.
+1. **Askability is checked twice.** The type checker checks it before the
+   program runs (`12`), once the whole file is read, so a function may `ask`
+   for a datatype defined later in the file. The machine checks it again when
+   an `ask` or `consult` is evaluated, which is all that's left under
+   `--no-check`. There, failing it is a checked run-time error. (`04` §3.1
+   rule 5 puts it at parse time, which can't see later definitions.)
 2. **Top-level names are late-bound,** as in µScheme's global store, rather
    than through `04`'s fixed-point environment. The two differ only if a
-   function is **redefined**. In that case, earlier functions see the new
-   definition. Ramsey's own interpreters behave the same way.
+   function is **redefined**, and the checker rejects that (`12`, Q-2), so
+   the difference shows only under `--no-check`: there, earlier functions
+   see the new definition, as in Ramsey's own interpreters. The same rule
+   covers datatypes and records, which `TypeEnv` itself refuses to redefine.
+   It covers scripts within a file. A later file may reuse a script name,
+   and the newer script then answers that file's tests.
 3. **The test tokenizer.** A context's size is the sum, over its messages, of
    role name + content + 4 bytes. Tokens are ⌈bytes ÷ 4⌉. To that it adds the
    answer type's JSON schema at 478 tokens per 521 bytes (`09` §7a). Before
@@ -279,18 +301,17 @@ specification on every other test.
 
 ## What's next
 
-- **Prompt caching** (`09` §7). Newly urgent: the schema is 89% of an ask's
-  input and is re-sent every iteration of a loop (`09` §6a).
-- **A scripted tokenizer that includes the schema,** so scripted costs predict
-  live ones. Today they are about an order of magnitude low (deviation 3).
+The order of the larger work is in `13` §"Order": `norman run` with JSON in
+and out, an MCP server for agents, a journal of live runs, an operator's
+policy, and real filesystem and HTTP hosts. Prompt caching (`09` §7a), a
+scripted tokenizer that counts the schema (deviation 3) and the type and
+effect checker (`12`), all once listed here, are built. Smaller items:
+
 - **Refunding cancelled calls** down to reported usage (`07` §5).
-- **More hosts.** A filesystem capability; a sandboxed Python kernel (today's
-  runs with the user's permissions); and a kernel that can `fork`.
-- **A read-eval-print loop,** for interactive use.
-- **The type and effect system** (Lesson 5). It makes askability, ownership,
-  and law W1's side conditions about `(remaining)` and consulting the same
-  human into compile-time checks, and it can warn when a consult's answer is
-  never used (`11` §8).
+- **More hosts.** A sandboxed Python kernel (today's runs with the user's
+  permissions), and a kernel that can `fork`.
+- **A read-eval-print loop,** for interactive use. It would need an answer
+  to `12`'s Q-2, which makes redefining a name an error.
 - **Tests of the inherited forms** (LITERAL, VAR, IF, LET, LAMBDA, APPLY,
   CON, RECORD, FIELD, CASE) on their own, which `05` promised for Step 9.
   They're still tested only indirectly.

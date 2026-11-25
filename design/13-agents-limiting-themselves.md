@@ -1,6 +1,8 @@
 # Agents limiting themselves: a plan
 
-> **Status: plan, not built.** This document follows a critical review of the
+> **Status: a plan, partly built.** Steps 1–3 of [§"Order"](#order) are
+> done: CI, the authoring eval ([`14`](14-authoring-eval.md)), and
+> diagnostics (§1.2 rev.). Step 4 is next. This document follows a critical review of the
 > language as of 0.4.0. It reframes what µNorman is for, and orders the work
 > that framing needs into phases. Each phase that changes the language gets
 > its own design document first, as every earlier change did. Decisions marked

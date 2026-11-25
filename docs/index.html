@@ -133,8 +133,9 @@
   <p>
     Agents fail a lot. The reply might not fit the type. The provider might be down. You might run
     out of money or time. In each case <code>ask</code> gives back a <strong>failure</strong> instead
-    of crashing. There are six kinds: <code>Invalid</code>, <code>ToolError</code>,
-    <code>Refused</code>, <code>OverBudget</code>, <code>PastDeadline</code> and <code>Raised</code>.
+    of crashing. There are seven kinds: <code>Invalid</code>, <code>ToolError</code>,
+    <code>Refused</code>, <code>Declined</code> (a person said no), <code>OverBudget</code>,
+    <code>PastDeadline</code> and <code>Raised</code>.
     You can catch any of them and decide what to do next.
   </p>
   <div class="example">
@@ -347,7 +348,7 @@
   <div class="cards">
     <div class="card">
       <h3>What works</h3>
-      <p>The language, its semantics, its laws, and an interpreter that runs them. 291 unit tests written in µNorman, 17 laws checked on 150 random scripts each, a type checker tested on 400 random programs, and a suite of deliberately wrong tests that must fail.</p>
+      <p>The language, its semantics, its laws, and an interpreter that runs them. 290 unit tests written in µNorman, 17 laws checked on 150 random scripts each, a type checker tested on 400 random programs, and a suite of deliberately wrong tests that must fail.</p>
     </div>
     <div class="card">
       <h3>It runs!</h3>
@@ -356,6 +357,10 @@
     <div class="card">
       <h3>Checked before it runs</h3>
       <p>Types and effects are inferred, with no annotations, and a program that doesn&rsquo;t type-check never starts, so a type mistake can&rsquo;t spend money. Sharing a stateful tool between concurrent steps is a type error too.</p>
+    </div>
+    <div class="card">
+      <h3>Models can write it</h3>
+      <p>Given only the <a href="docs.html">reference</a>, Claude Sonnet&nbsp;5.5 and Haiku&nbsp;5.5 pass 93&ndash;100% of twenty graded tasks on their first program, and all of them after reading the checker&rsquo;s errors. Each error names the line and column at fault, and <code>norman --format json</code> gives them as JSON. <a href="https://github.com/iliketocode2/Norman/tree/main/eval">The eval is here</a>.</p>
     </div>
     <div class="card">
       <h3>A small standard library</h3>

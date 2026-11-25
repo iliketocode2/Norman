@@ -173,7 +173,7 @@ Use a tool once. The capability comes from [`grant`](https://norman-docs.vercel.
 (consult person ty prompt [propose exp] ['site])
 ```
 
-Put a question to a person **once**, for an answer of type *ty*. The person comes from a [`human` grant](https://norman-docs.vercel.app/docs#hosts), and *ty* must be askable, exactly as for `ask`. The answer is validated the same way.
+Put a question to a person **once**, for an answer of type *ty*. The person comes from a [`human` grant](https://norman-docs.vercel.app/docs#hosts), and *ty* must be askable, exactly as for `ask`. The answer is validated the same way, and the site is written literally, as for [`ask`](https://norman-docs.vercel.app/docs#ask).
 
 With `[propose v]`, the person sees *v* as a pre-filled answer and may approve it, edit it, or decline. **Approving gives back exactly *v***, editing gives back the edit, and declining fails with `(Declined reason)`. Run the answer, never the original proposal, and what runs is what was approved. `retry` never retries `Declined`.
 

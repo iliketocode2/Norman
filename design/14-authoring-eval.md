@@ -32,6 +32,9 @@ well:
   exhausted: no reply left for ask site 'solution.nrm:1:31'`. The message
   doesn't say that the script has entries, just under other names.
 
+(That was norman 0.4.0. `13` step 3 fixed the last three; `map` and `car`
+are still unbound.)
+
 Each of these is a guess about what matters. This document replaces guesses
 with a number: **give a model the reference and a task, and count how often
 it writes a program that checks and passes hidden tests, and how many rounds

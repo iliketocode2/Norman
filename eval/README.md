@@ -7,7 +7,9 @@ The design, and what the numbers are for, is
 **Built:** the corpus (Stage 0) and the harness (Stage 1). **The baseline**
 (2026-11-25) is in [`results/`](results/README.md). Both Sonnet 5.5 and
 Haiku 5.5 pass 93–100% of tasks on the first program and all of them after
-repair, so the next work is harder tasks (design/14 §6, Stage 1b).
+repair. The failures it did find were fixed in `13` step 3
+([results](results/2026-11-25-step3.md)). The next work is harder tasks
+(design/14 §6, Stage 1b).
 
 ## Layout
 
@@ -33,12 +35,14 @@ and failures, **E** concurrency, **F** `consult`.
 
 ## Running the baseline
 
-You need Node 22 or later, a built `norman`, and an API key.
+You need Node 22 or later, a `norman` built from this repository (the
+harness reads its `--format json` output, which 0.4.0 doesn't have), and an
+API key.
 
 ```
 cargo build --release
 npm ci --prefix eval
-export ANTHROPIC_API_KEY=...          # or: ant auth login
+export ANTHROPIC_API_KEY=...          # or ANTHROPIC_AUTH_TOKEN, as in LIVE-SETUP.md
 
 for model in claude-sonnet-5-5 claude-haiku-5-5; do
   for condition in ref ref+examples; do
@@ -50,9 +54,15 @@ done
 On Windows with `norman` built in WSL, pass the command that runs it, for
 example `--norman "wsl -e /home/me/.cache/norman-target/release/norman"`.
 
+To keep the key in a file, put the file outside the repository (see
+[`../LIVE-SETUP.md`](../LIVE-SETUP.md)) and run with
+`node --env-file=PATH eval/run.mjs …`.
+
 Each run prints one line per trial and ends with the path of its
-`summary.md`. To rebuild a summary from a finished run:
-`node eval/run.mjs --summarize eval/runs/<dir>`.
+`summary.md`. A run that stops early still writes a summary of the trials
+that finished, and says why it stopped. It stops when the credit runs out,
+or on bad credentials, a bad request or an unknown model. To rebuild a
+summary from a finished run: `node eval/run.mjs --summarize eval/runs/<dir>`.
 
 **Cost.** Each run is capped by `--max-spend` (default $10): before every
 call, the harness reserves the call's worst case and makes no call that

@@ -23,10 +23,17 @@ No API key is needed for either command.
 **Status: research prototype.** Every program is type-checked before it
 runs: types and effects are inferred (no annotations), and a program that
 doesn't check never starts, so a type mistake can't spend money.
-`--no-check` runs a program without the checker. `--format json` writes
-each diagnostic as a JSON object (file, line, column, message, and for a
-type mismatch the two types), for tools that repair programs from them.
-Nothing has been benchmarked against a hand-written agent.
+`--no-check` runs a program without the checker. Each diagnostic names the
+line and column of the expression at fault. `--format json` writes each one
+as a JSON object (file, line, column, message, and for a type mismatch the
+two types), for tools that repair programs from them, and `--explain` adds
+the design document that gives each rule's reason.
+
+**Can a model write it?** [`eval/`](eval/) measures that: twenty graded
+tasks, given to a model with only the language reference. Claude Sonnet 5.5
+and Haiku 5.5 pass 93–100% of them on the first program and all of them after
+repair ([results](eval/results/README.md)). Nothing has been benchmarked
+against a hand-written agent.
 
 ### Running against a real model and real Python
 

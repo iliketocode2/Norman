@@ -55,7 +55,9 @@ fail" must be written out explicitly, never assumed.
 **The basis must not be redefined.** Ramsey's "terrifying transcript" (§1.7.2)
 redefines `+`, and then `(+ x 0) = x` is false. In the same way, every law that
 mentions `retry`, `par` or `remaining` assumes the initial-basis definition is
-in force.
+in force. The type checker makes sure of it: redefining any predefined name,
+function or type is an error (`12`, Q-2). Only `--no-check` gives up that
+assurance.
 
 ---
 
