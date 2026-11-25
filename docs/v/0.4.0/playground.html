@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playground · µNorman</title>
+<meta name="description" content="Write and run µNorman (uNorman) programs in your browser. The interpreter is compiled to WebAssembly, so nothing leaves your machine.">
+<meta property="og:site_name" content="µNorman">
+<link rel="canonical" href="https://norman-docs.vercel.app/playground">
+<meta property="og:url" content="https://norman-docs.vercel.app/playground">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Playground · µNorman">
+<meta property="og:description" content="Write and run µNorman (uNorman) programs in your browser. The interpreter is compiled to WebAssembly, so nothing leaves your machine.">
+<meta name="twitter:card" content="summary">
+<meta name="application-name" content="µNorman">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="./">µNorman</a>
+    <nav>
+      <a href="./">About</a>
+      <a href="demo.html">Demo</a>
+      <a href="docs.html">Docs</a>
+      <a href="playground.html" aria-current="page">Playground</a>
+      <button class="search-open" type="button" aria-label="Search the docs" aria-keyshortcuts="/ Control+K Meta+K" title="Search the docs (/ or Ctrl+K)"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M7 12.2A5.2 5.2 0 1 0 7 1.8a5.2 5.2 0 0 0 0 10.4zM10.9 10.9l3.6 3.6"/></svg><span class="search-hint">Search</span><kbd>/</kbd></button>
+      <button class="theme" type="button" aria-label="Switch between light and dark">☾</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap pg">
+
+  <h1 style="font-size:1.8rem">Playground</h1>
+  <p class="lede" style="font-size:1.05rem">
+    The whole interpreter runs here, compiled to WebAssembly. Models answer from
+    <strong>scripts</strong>, so programs are deterministic and free, and nothing leaves your machine.
+    Press <strong>Run</strong>, or <strong>Ctrl</strong>/<strong>⌘</strong>&nbsp;+&nbsp;<strong>Enter</strong>.
+  </p>
+
+  <div class="pg-grid">
+    <div class="editor-wrap">
+      <div class="editor-head">
+        <label for="examples" class="small muted">Example</label>
+        <select id="examples" aria-label="Choose an example"></select>
+        <span class="spacer"></span>
+        <button id="run" class="run" type="button">Run&nbsp; ⌃⏎</button>
+      </div>
+      <div class="editor">
+        <pre id="view" aria-hidden="true"></pre>
+        <textarea id="src" wrap="off" spellcheck="false" autocapitalize="off"
+                  autocorrect="off" autocomplete="off" aria-label="µNorman source"></textarea>
+      </div>
+    </div>
+
+    <div class="out-wrap">
+      <div class="out-head">Result</div>
+      <div class="out-body" id="out">Not run yet.</div>
+    </div>
+  </div>
+
+  <h2 id="cheatsheet">Cheat Sheet</h2>
+
+  <h3 id="cheat-definitions">Definitions and types</h3>
+  <table>
+    <tbody>
+      <tr><td><code>(define f (x y) e)</code></td><td>a function</td></tr>
+      <tr><td><code>(val x e)</code></td><td>a binding</td></tr>
+      <tr><td><code>(datatype T [K (f τ)] …)</code></td><td>a sum type: a value is one of the <code>K</code>s</td></tr>
+      <tr><td><code>(record R (f τ) …)</code></td><td>a record; read a field with <code>(. r f)</code></td></tr>
+      <tr><td><code>(Text 400)</code>, <code>Num</code>, <code>Bool</code>, <code>Sym</code>, <code>(List τ 8)</code></td><td>the askable types; bounds make answers cheaper to reserve</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="cheat-forms">The six agentic forms</h3>
+  <table>
+    <tbody>
+      <tr><td><code>(ask m τ ctx 'site)</code></td><td>consult a model once, for an answer of type τ</td></tr>
+      <tr><td><code>(call κ op args…)</code></td><td>use a tool once</td></tr>
+      <tr><td><code>(fail φ)</code> / <code>(catch e x h)</code></td><td>raise and handle a failure</td></tr>
+      <tr><td><code>(budget ([cost $1.00] [time 1min]) e)</code></td><td>a money and time limit for everything inside</td></tr>
+      <tr><td><code>(workflow ([x e] …) body)</code></td><td>named steps; dependencies come from the names each uses</td></tr>
+      <tr><td><code>(par e₁ e₂)</code></td><td>sugar for a two-step workflow, returning a <code>Pair</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="cheat-values">Text and values</h3>
+  <table>
+    <tbody>
+      <tr><td><code>(show <em>v</em>)</code></td><td>write a value as text that reads back: <code>validate (show v) τ = v</code></td></tr>
+      <tr><td><code>(string-append <em>a</em> <em>b</em> …)</code> · <code>(string-length <em>s</em>)</code></td><td>length is in bytes</td></tr>
+      <tr><td><code>(substring <em>s</em> <em>i</em> <em>j</em>)</code></td><td>byte offsets; a checked error out of range or mid-character</td></tr>
+      <tr><td><code>(string-truncate <em>s</em> <em>n</em>)</code></td><td>the safe cut: at most <em>n</em> bytes, never splitting a character</td></tr>
+      <tr><td><code>(string-contains? <em>s</em> <em>sub</em>)</code></td><td>a predicate</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="cheat-failures">Failures</h3>
+  <p class="small">
+    <code>Invalid</code> (the reply didn&rsquo;t fit the type) ·
+    <code>ToolError</code> · <code>Refused</code> ·
+    <code>OverBudget</code> · <code>PastDeadline</code> · <code>Raised</code>.
+    <code>retry</code> handles the first two and never the budget ones.
+  </p>
+
+  <h3 id="cheat-tests">Scripts and tests</h3>
+  <table>
+    <tbody>
+      <tr><td><code>(grant m (model [in 3] [out 15] [ceiling 8000]))</code></td><td>a model, priced in µ$ per token</td></tr>
+      <tr><td><code>(grant py (kernel))</code></td><td>a stateful tool</td></tr>
+      <tr><td><code>(script s [site (reply "…") (out 20) (latency 2s)])</code></td><td>canned replies, keyed by site</td></tr>
+      <tr><td><code>(provider-error "503 …")</code>, <code>(refusal "…")</code>, <code>(error "…")</code></td><td>injected faults</td></tr>
+      <tr><td><code>(under ([script s] [cost $1.00] [time 1min]) …)</code></td><td>the world each test runs in</td></tr>
+      <tr><td><code>check-expect</code> · <code>check-fail</code> · <code>check-within</code> · <code>check-equiv</code> · <code>check-error</code> · <code>check-type-error</code> · <code>check-assert</code></td><td>the unit-test forms</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <span class="label">Two things that will trip you up</span>
+    <p>
+      <strong>Constructors take positional arguments</strong> (<code>(Sell "reason")</code>) while
+      <strong>records take named ones</strong> (<code>(Message [role User] [content "hi"])</code>).
+      And to put a value into a prompt, use <code>(show v)</code>: it writes the same JSON that
+      <code>ask</code> validates, so what you write out reads back in.
+    </p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>µNorman — dual-licensed MIT or Apache-2.0.</span>
+    <span>Selected for the <a href="https://hub.xerj.org/contributors/iliketocode2">XERJ Corpus Hub</a>, from <a href="https://github.com/xerj-org/xerj">XERJ</a>, a search engine for AI agents.</span>
+    <span><a href="https://github.com/iliketocode2/Norman/blob/main/design/04-formal-definition.md">The full reference</a> is the formal definition.</span>
+  </div>
+</footer>
+
+<a class="gh-float" href="https://github.com/iliketocode2/Norman" aria-label="µNorman on GitHub" title="µNorman on GitHub"><svg viewBox="0 0 16 16" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+<div class="md-export">
+  <button class="md-float" type="button" aria-expanded="false" aria-controls="md-menu" aria-label="Export the language reference as Markdown" title="Export the language reference as Markdown">.md</button>
+  <div class="md-menu" id="md-menu" hidden>
+    <p>The language reference as Markdown, to give an AI agent as context.</p>
+    <a href="munorman-reference.md" download="munorman-reference.md">Download munorman-reference.md</a>
+    <button class="md-copy" type="button">Copy to clipboard</button>
+  </div>
+</div>
+
+<script type="module">
+  import { activatePlayground, activateChrome } from './norman.js';
+  import { EXAMPLES } from './examples.js';
+  activateChrome();
+  activatePlayground(EXAMPLES);
+</script>
+<script src="../../versions.js" data-version="0.4.0"></script>
+</body>
+</html>

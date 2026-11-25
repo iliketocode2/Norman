@@ -87,6 +87,19 @@ and a fresh build, and leaves a notice if the committed module has drifted from
   `index.html`, `demo.html` and `playground.html`, one entry per heading, so
   give a new section's heading an `id` (and, in `docs.html`, a `data-short`
   label for the sidebar if the heading is long).
+- The site of every earlier release is under `docs/v/X.Y.Z/`, copied from its
+  tag, and the version badge on the front page is a menu of them
+  (`docs/versions.js`). Don't edit `docs/v/` by hand. When releasing, bump the
+  version in `Cargo.toml`, `Cargo.lock` and the badge in `docs/index.html`,
+  then run
+
+  ```bash
+  git fetch --tags
+  node scripts/docs-versions.mjs
+  ```
+
+  It snapshots every tag older than the version in `Cargo.toml`, so it picks
+  up the previous release, and `node docs/verify.mjs` fails until it has run.
 - Anything that can't run in a browser — the live oracle, HTTP, threads, the
   real clock — is behind `#[cfg(not(target_arch = "wasm32"))]`. Keep it that
   way, or the site stops building.
