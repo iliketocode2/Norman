@@ -36,7 +36,7 @@ and failures, **E** concurrency, **F** `consult`.
 ## Running the baseline
 
 You need Node 22 or later, a `norman` built from this repository (the
-harness reads its `--format json` output, which 0.4.0 doesn't have), and an
+harness reads its `--format json` output, added in 0.5.0), and an
 API key.
 
 ```
