@@ -332,6 +332,23 @@ footer .wrap { display: flex; gap: 1.5rem; flex-wrap: wrap; }
     max-height: calc(100vh - 6rem); overflow-y: auto; padding-right: 0.5rem;
   }
 }
+/* The contents column scrolls on its own; a default grey scrollbar there
+   is the one thing on the page outside the palette. A thin accent thumb on
+   no track, a little stronger while the pointer is over the column. The
+   standard properties cover Chrome, Edge and Firefox; Safari reads only the
+   ::-webkit-scrollbar rules, which Chrome ignores once scrollbar-color is set. */
+.toc {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 30%, transparent) transparent;
+}
+.toc:hover { scrollbar-color: color-mix(in srgb, var(--accent) 60%, transparent) transparent; }
+.toc::-webkit-scrollbar { width: 8px; }
+.toc::-webkit-scrollbar-track { background: transparent; }
+.toc::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border: 2px solid var(--bg); border-radius: 99px;
+}
+.toc:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--accent) 60%, transparent); }
 .toc > summary {
   font-weight: 620; cursor: pointer; padding: 0.5rem 0.75rem; list-style: none;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg-soft);
