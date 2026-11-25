@@ -63,3 +63,13 @@ jobs:
       - name: Tests
         # The live tests are #[ignore]d: they need an API key and spend money.
         run: cargo test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: The eval harness's own tests
+        # A mock client stands in for the model, so no API key is needed and
+        # nothing is spent.
+        run: |
+          cargo build
+          npm ci --prefix eval
+          node eval/test.mjs --norman target/debug/norman

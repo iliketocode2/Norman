@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 const USAGE: &str =
-    "usage: norman [--live [--python EXE] [--human NAME=tty|unattended]…] [--trace] [--no-check] FILE.nrm …
+    "usage: norman [--version] [--live [--python EXE] [--human NAME=tty|unattended]…] [--trace] [--no-check] FILE.nrm …
 
 Type-checks each file, then loads it, printing the value of each top-level
 expression, then runs its unit tests (check-expect, check-fail, …). A file
@@ -73,6 +73,10 @@ fn main() -> ExitCode {
             "--no-check" => check = false,
             "-h" | "--help" => {
                 eprintln!("{}", USAGE);
+                return ExitCode::SUCCESS;
+            }
+            "--version" => {
+                println!("norman {}", env!("CARGO_PKG_VERSION"));
                 return ExitCode::SUCCESS;
             }
             f if f.starts_with("--") => {

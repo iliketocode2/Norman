@@ -1,9 +1,15 @@
 # Measuring how well a model writes µNorman
 
-> **Status: Stage 0 built; Stages 1–3 designed, not built.** The twenty tasks
-> are in [`../eval/tasks/`](../eval/tasks/), and
+> **Status: Stages 0 and 1 done; the baseline was taken on 2026-11-25.** The
+> twenty tasks are in [`../eval/tasks/`](../eval/tasks/), and
 > [`../tests/eval_corpus.rs`](../tests/eval_corpus.rs) checks them in
-> `cargo test` (§6). This is step 2 of the order in
+> `cargo test` (§6). The harness is [`../eval/run.mjs`](../eval/run.mjs), and
+> [`../eval/test.mjs`](../eval/test.mjs) tests it in CI with a mock model.
+> The baseline and its reading are in
+> [`../eval/results/`](../eval/results/README.md). Both models pass 93–100%
+> on the first program and 100% after repair, so **the corpus is at
+> ceiling**. It needs harder tasks before it can steer Stage 2 (§6). This is
+> step 2 of the order in
 > [`13`](13-agents-limiting-themselves.md) §"Order", and every later step
 > uses it: each one is judged by what it does to the numbers here. Decisions
 > marked **(open)** in §0 need review before Stage 1 starts.
@@ -41,8 +47,8 @@ of error messages it needs to get there.**
 | E2 | How is a program graded? | **Hidden tests in µNorman,** run against the model's program by the same `norman` binary an agent would use. Each task has a reference solution written by a person, and CI checks that it passes, so the corpus can't silently rot. |
 | E3 | What does the model get to see? | **The reference, the task, and an interface file.** The interface defines the grants and datatypes the program may use. It stands in for the operator, who will supply grants under `13` Phase 2. The hidden tests are never shown. |
 | E4 | Is there a repair loop? | **Yes, up to 3 rounds.** After each round the harness runs the model's program and its own tests, with the interface but without the hidden tests, and sends the output back verbatim. That is the loop a coding agent runs. The hidden tests are run after every round and recorded, but never fed back. |
-| E5 | Where does the harness live? | **A Node script, `eval/run.mjs`,** that drives the `norman` binary as a subprocess. It tests the interface agents will actually use, keeps model-API client code out of the interpreter crate, and follows `docs/verify.mjs`, which CI already runs with Node 22. |
-| E6 | Which models? | **(open)** Proposal: the current Sonnet-class model as the main subject, and the current Haiku-class model to see whether a cheap model can write the language too. Model ids are flags, never constants in the harness. |
+| E5 | Where does the harness live? | **A Node script, `eval/run.mjs`,** that drives the `norman` binary as a subprocess and calls the model through the official SDK, `@anthropic-ai/sdk` (its own `eval/package.json`, so the interpreter crate gains no dependency). It tests the interface agents will actually use, and follows `docs/verify.mjs`, which CI already runs with Node. |
+| E6 | Which models? | **Claude Sonnet 5.5 (`claude-sonnet-5-5`) and Claude Haiku 5.5 (`claude-haiku-5-5`).** Both at **effort `medium`**, set explicitly: their defaults differ (Sonnet's is `high`, Haiku's `medium`), and one setting keeps the comparison about the model. Adaptive thinking, as both default to. **No refusal fallbacks:** a fallback would let a different model write the program, and the run would measure the wrong thing. A refusal is its own category. Model ids are flags, never constants. |
 | E7 | What's committed? | The tasks, their tests and reference solutions, the harness, and **a summary table per run** in `eval/results/`. Raw transcripts go in `eval/runs/`, which is gitignored. |
 | E8 | How is spending capped? | `--max-spend` (default $10). It counts the usage the API reports and stops the run, cleanly, before the next call would cross the cap. |
 
@@ -245,12 +251,28 @@ output:
 | no code | the reply had no code block |
 | syntax | `syntax error`, `unclosed` |
 | unbound name | `unbound name X` (and X is recorded) |
-| redefinition | `is already defined`, `can't be redefined` |
+| redefinition | `is already defined`, `can't be redefined`; or the program defines a grant, datatype or record the interface defines (see below) |
 | type mismatch | `expected … but found …` |
 | unaskable / ownership / other check | any other checker error |
-| wrong site | `no reply left for ask site '…'` naming a site the task didn't specify |
+| own tests fail | the program checks, but a test it wrote itself fails |
 | run-time error | `run-time error` otherwise |
+| wrong site | `no reply left for ask site '…'` naming a site the task didn't specify |
 | hidden tests fail | the program checks and runs, but `tests.nrm` reports failures |
+| refused | the model refused (`stop_reason: refusal`) |
+| other | none of these. The summary lists each one's first line, so an unexpected kind of mistake, or a fault in the harness, is seen rather than counted. |
+
+**A checker gap the harness found.** 0.4.0's checker rejects a second
+`grant` of the same name, and a constructor already used by another type, but
+it **accepts a second `datatype` or `record` of an existing name**, which
+silently replaces the first. A solution that redefines an interface's
+`Triage` checks cleanly, and the hidden tests then fail with "unknown
+constructor Bug", far from the cause. The rule that a top-level name is
+defined once (`12`, Q-2) should cover type names too. Until it does, the
+harness looks for the redefinition itself. The fix belongs to `13` step 3.
+
+The harness also retries `norman` when it exits with a code `norman` never
+uses (anything but 0, 1 or 2). On Windows, `wsl -e` occasionally fails to
+start a process, and that must not be scored as the model's mistake.
 
 **Matching on message text is brittle on purpose.** It's acceptable for one
 baseline, and it's the argument for JSON diagnostics (`13` §1.2). When those
@@ -318,11 +340,56 @@ what shows the tests can tell a right program from a nearly right one. When
 the corpus test was checked by swapping one task's naive solution for its
 reference, it failed as it should.
 
-**Stage 1: the harness and a baseline.**
-Write `eval/run.mjs`. Run it on both models (E6), under both conditions,
-with 3 trials and 3 rounds. Commit the summaries. Read every failure of the
-Sonnet-class `ref` run by hand and write up the five most common causes. That
-write-up, not the numbers alone, is the input to `13` steps 3 and 4.
+**Stage 1: the harness and a baseline. (Done, 2026-11-25.)**
+`eval/run.mjs` runs the loop of §3 and writes `summary.md` with §4's
+tables. Before each API call it reserves that call's worst case (the input
+at the cache-write price, plus `max_tokens` of output) against
+`--max-spend`, and a call that doesn't fit isn't made: the same rule µNorman
+uses for budgets. It stops the whole run at the first error that would
+repeat (bad credentials, a bad request, an unknown model) instead of
+recording it sixty times.
+
+It was checked without spending anything:
+
+- `--replay reference` answers every task with its reference solution:
+  20 of 20 pass on the first round.
+- `--replay naive` answers with the naive solutions: 20 of 20 check, and
+  20 of 20 fail the hidden tests.
+- `eval/test.mjs` drives the real loop with a mock client. It covers
+  every category in §3, the repair conversation (including thinking blocks
+  passed back unchanged), the round limit, the spend cap and the summary. It
+  runs in CI.
+
+The baseline covers both models (E6), under both conditions, with 3 trials
+and 3 rounds, for about $1.64 in all. It's in
+[`../eval/results/`](../eval/results/README.md). The plan was to write up the
+five most common failure causes of the Sonnet `ref` run. That run had only
+one cause (a site passed as an argument, three times, all in `E01`), so the
+write-up pools all four runs: 14 failing first programs out of 240, in four
+causes.
+
+- **The numbers:** pass@1 is 93–100% and pass@R is 100% for every model
+  and condition. The only §5 gate that fires is "Haiku close to Sonnet".
+- **The causes** all point at cheap fixes in `13` step 3:
+  - two gaps in the reference: a site is written literally, and a scripted
+    `reply` is read as JSON;
+  - one unhelpful parser message, with a knock-on error;
+  - two missing checks: a test `under` an undefined script, and a redefined
+    datatype or record.
+- **The ceiling:** the corpus can't measure what steps 3 and 4 promise.
+  Their success criteria start at 0.05 repair rounds and 100% pass@R.
+
+**Stage 1b: a corpus that can fail.** Before Stage 2 can steer anything, add
+tasks the baseline models don't all pass. The candidates:
+
+- a tier G of whole agents of 50–150 lines that combine the other tiers;
+- tasks with no interface, where the model writes the grants and datatypes
+  from prose;
+- stricter first-round metrics, such as counting a program's own failing
+  tests, or running at effort `low`.
+
+Re-take the baseline on the grown corpus. `13` steps 3 and 4 then measure
+against that baseline, not this one.
 
 **Stage 2: use it.** Re-run after each step, as §5 says.
 
@@ -336,6 +403,9 @@ breaks its own limits**: a µNorman program can't, and a Python one can, but
 whether it does in practice is what makes the guarantee worth a language.
 This is real work, about as much as Stage 0 again. Decide after the
 baseline, when it's clear whether µNorman's pass rates are even in range.
+**They are** (2026-11-25), so the question now is whether writing µNorman
+changes how often a program breaks its own limits, and this stage is what
+answers it.
 
 ---
 

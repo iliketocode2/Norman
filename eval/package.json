@@ -1,0 +1,12 @@
+{
+  "name": "munorman-eval",
+  "private": true,
+  "type": "module",
+  "description": "The authoring eval harness (design/14)",
+  "scripts": {
+    "eval": "node run.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.14.0"
+  }
+}
